@@ -1,0 +1,2 @@
+# Os .bat precisam de CRLF em qualquer computador: o cmd se perde em rótulos e goto com arquivos só LF.
+*.bat text eol=crlf

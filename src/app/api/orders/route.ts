@@ -1,6 +1,6 @@
 import { autenticarApi, comTratamento, erro, lerCorpo, origemInvalida, registrarErro } from "@/lib/api";
 import { dentroDoLimite } from "@/lib/auth/limitador";
-import { obterGateway } from "@/lib/pagamentos";
+import { obterGateway, pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { criarPedido } from "@/lib/pedidos";
 import { pedidoSchema } from "@/lib/validacao";
 
@@ -24,6 +24,11 @@ export const POST = comTratamento("api/orders", async (request: Request) => {
   if (bloqueio) return bloqueio;
   const auth = await autenticarApi();
   if (!auth.ok) return auth.resposta;
+
+  // Sem como cobrar, não grava o pedido (ficaria pendente para sempre).
+  if (!pagamentoOnlineDisponivel()) {
+    return erro(503, "Os pedidos pelo site ainda não estão abertos. Em breve você poderá comprar por aqui.");
+  }
 
   // Por usuário (não depende de IP): contém quem automatiza pedidos em série.
   if (!dentroDoLimite(`pedidos|${auth.usuario.id}`, 30, 60 * 60_000)) {

@@ -32,6 +32,37 @@ Para usar outro Postgres (Neon, Supabase, RDS…), basta trocar `DATABASE_URL` e
 
 > **Página recarregando sem parar no `npm run dev`:** no Next 16.4.0 os logs do navegador (como o "Download the React DevTools", que sai em toda página) iam para `.next/dev/logs` e disparavam recompilação e recarga em laço. O `next.config.ts` desliga isso (`logging.browserToTerminal: false` e `experimental.mcpServer: false`). Ao atualizar o Next, dá para testar religar.
 
+## Git e cópia dos dados
+
+- **Este repositório** guarda o código. Pode ir para um GitHub **privado** (é de lá que a Netlify publica).
+- **Os dados** (clientes, pedidos, despesas, produção) ficam no banco, fora da pasta, e o Git só guarda arquivos. Por isso `scripts/dados.mjs` tira um retrato do banco em `dados/local.json` (banco deste computador) ou `dados/producao.json` (site no ar, pela `DATABASE_URL` do `.env.producao`), com uma linha por registro e sem data de gravação: sem mudança nos dados, não há commit.
+- **A pasta `dados/` é outro repositório Git, só deste computador**, e o `.gitignore` deste a deixa de fora. Tem dados pessoais (LGPD): **nunca a envie para o GitHub** nem para outro lugar.
+- **Salvar:** `salvar-dados.bat` (local e, se houver `.env.producao`, o site no ar), ou `npm run dados:salvar` / `npm run dados:salvar:producao`. O `parar.bat` salva o banco local antes de desligá-lo. Histórico: `git -C dados log --oneline`.
+- **Restaurar o banco local:** `restaurar-dados.bat` (pede SIM; antes guarda os dados atuais em `dados/copias-de-seguranca/`). Uma cópia mais antiga: `git -C dados show <commit>:local.json > dados/antiga.json` e `node scripts/dados.mjs restaurar dados/antiga.json --confirmar`. O site no ar só com `--producao`, e com cuidado: troca **todos** os dados.
+- A restauração exige o banco na mesma versão (as mesmas migrações) da cópia. A ida e volta foi conferida tabela por tabela num banco de teste.
+
+## Publicar na Netlify
+
+O site roda na Netlify (o Next.js 16 é suportado pelo adaptador OpenNext, sem plugin) com o banco no **Neon** (Postgres na nuvem). O `netlify.toml` fixa o build (`npm run build`, que roda `prisma generate`) e o Node 24.
+
+1. **GitHub:** repositório **privado**; envie este repositório (`git push`). A pasta `dados/` não vai junto.
+2. **Neon** (neon.com, plano grátis): crie um projeto na região **AWS São Paulo**. Ele mostra duas URLs de conexão:
+   - a **com pooler** (o endereço tem `-pooler`) vai na Netlify como `DATABASE_URL`;
+   - a **direta** (sem `-pooler`) vai no arquivo `.env.producao` deste computador (fora do Git), como `DATABASE_URL="..."`. Ela é usada para as migrações e as cópias dos dados.
+3. **Criar as tabelas no Neon** (daqui): `node --env-file=.env.producao node_modules/prisma/build/index.js migrate deploy`. Repita a cada migração nova, **antes** de publicar o código que depende dela.
+4. **Netlify:** "Add new site" → "Import from Git" → o repositório. Em *Site configuration → Environment variables*:
+   - `DATABASE_URL`: a URL **com pooler** do Neon;
+   - `SESSION_SECRET`: uma nova, gerada como no `.env.example` (nunca a deste computador);
+   - `APP_URL`: o endereço do site (ex.: `https://geleio.netlify.app`);
+   - `IP_HEADER_CONFIAVEL`: `x-nf-client-connection-ip`;
+   - `DATABASE_POOL_MAX`: `3`.
+   
+   Não defina `PAGAMENTOS_SIMULADOS`.
+5. **Admin do site no ar:** um e-mail seu e uma senha forte, nunca o admin de teste deste computador.
+6. **Pagamento:** até o PIX real ser integrado, o checkout mostra "Pedidos pelo site em breve" e a API recusa pedidos (503) sem gravá-los (`pagamentoOnlineDisponivel` em `src/lib/pagamentos.ts`).
+
+No plano grátis, cada publicação gasta créditos: junte as mudanças antes de enviar ao GitHub.
+
 ## Estrutura
 
 | Caminho | O que é |

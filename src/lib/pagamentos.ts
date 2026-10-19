@@ -42,6 +42,15 @@ export function pagamentosSimuladosAtivos(): boolean {
   return pagamentosSimuladosPermitidos();
 }
 
+/**
+ * Dá para cobrar um pedido pelo site? Sem gateway (o site no ar antes do PIX real), a loja não
+ * aceita pedidos online: o checkout avisa "em breve" e a API recusa ANTES de gravar o pedido
+ * (antes, o pedido ficava PENDENTE e o cliente via um erro). Ao integrar o gateway real, inclua-o aqui.
+ */
+export function pagamentoOnlineDisponivel(): boolean {
+  return pagamentosSimuladosAtivos();
+}
+
 export function obterGateway(): GatewayPagamento {
   if (pagamentosSimuladosAtivos()) return gatewaySimulado;
   throw new Error("Nenhum gateway de pagamento configurado (defina PAGAMENTOS_SIMULADOS=true em dev).");

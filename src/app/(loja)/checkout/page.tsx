@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { AuthForm } from "@/components/AuthForm";
 import { CheckoutClient } from "@/components/checkout/CheckoutClient";
 import { getUsuarioAtual } from "@/lib/auth/dal";
 import { listarEnderecos } from "@/lib/enderecos";
+import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 
 export const metadata: Metadata = { title: "Finalizar pedido" };
 
@@ -20,6 +22,24 @@ export default function PaginaCheckout() {
 }
 
 async function ConteudoDoCheckout() {
+  // Site no ar antes do PIX real: avisa em vez de deixar montar um pedido que não tem como ser pago.
+  // Fica dentro do Suspense (hora da requisição), então vale a configuração do servidor no ar.
+  if (!pagamentoOnlineDisponivel()) {
+    return (
+      <section aria-labelledby="titulo-em-breve" className="cartao p-6 text-center">
+        <h2 id="titulo-em-breve" className="mb-2 font-titulos text-2xl font-bold">
+          Pedidos pelo site em breve
+        </h2>
+        <p className="mx-auto mb-6 max-w-md text-primaria/80">
+          Estamos preparando o pagamento por PIX. Enquanto isso, conheça os sabores; seu carrinho fica guardado neste navegador.
+        </p>
+        <Link href="/products" className="btn-primario">
+          Ver os sabores
+        </Link>
+      </section>
+    );
+  }
+
   const usuario = await getUsuarioAtual();
 
   // Sem login: entrar ou criar conta rápida aqui mesmo, e voltar ao checkout.
