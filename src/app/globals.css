@@ -1,0 +1,88 @@
+/* O @import de fontes precisa vir antes de qualquer outra regra. */
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600;700;800&family=Parisienne&display=swap");
+@import "tailwindcss";
+
+/* Tokens (cores, fontes, utilitários gingham) vêm do design system. */
+@config "../../tailwind.config.ts";
+
+@layer base {
+  :root {
+    color-scheme: light;
+    /* Fundo "areia" em volta do painel da tela de login. */
+    --cor-areia: #f1e7dd;
+  }
+
+  html {
+    @apply bg-destaque;
+    /* Reserva o espaço da barra de rolagem: abrir o carrinho (que trava a rolagem do fundo)
+       não faz mais o cabeçalho "pular" ~15px. */
+    scrollbar-gutter: stable;
+  }
+
+  /* Na tela de login a faixa reservada da barra de rolagem acompanha o fundo areia. A rota
+     visitada continua montada e escondida com display: none (Cache Components), daí o :not(). */
+  html:has(main[data-fundo="areia"]:not([style*="display: none"])) {
+    background-color: var(--cor-areia);
+  }
+
+  body {
+    @apply bg-destaque font-textos text-primaria antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-titulos;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-secundaria;
+  }
+}
+
+@layer components {
+  /* Ação principal: Carmesim com texto Creme (contraste ≈ 5,9:1). A borda transparente vira
+     contorno visível em cores forçadas (Alto Contraste do Windows), onde o fundo some. */
+  .btn-primario {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-transparent bg-secundaria px-5 py-2.5 text-sm font-semibold text-destaque transition-colors hover:bg-primaria disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-secundario {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full border-2 border-secundaria bg-transparent px-5 py-2 text-sm font-semibold text-secundaria transition-colors hover:bg-secundaria hover:text-destaque disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  /* Campo de formulário. Borda vinho/60 sobre branco = 3,76:1 (o mínimo de WCAG 1.4.11 é 3:1) e
+     placeholder vinho/70 = 4,96:1 (mínimo 4,5:1). */
+  .campo {
+    @apply min-h-11 w-full rounded-lg border border-primaria/60 bg-white px-3 py-2 text-base text-primaria placeholder:text-primaria/70 focus:border-secundaria aria-invalid:border-2 aria-invalid:border-secundaria;
+  }
+
+  /* Cartão = etiqueta do rótulo Geleiô: papel claro, filete dourado e um filete interno fino
+     (o "duplo filete" do rótulo real). Cantos quase retos, como papel cortado. */
+  .cartao {
+    @apply rounded-md border border-accent2/80 bg-white;
+    box-shadow:
+      inset 0 0 0 4px #fff,
+      inset 0 0 0 5px rgb(212 175 55 / 0.35);
+  }
+
+  /* Assinatura caligráfica da marca ("Feito com amor, para você."). */
+  .assinatura {
+    @apply font-assinatura font-normal leading-tight tracking-normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    /* Sem isto o animate-pulse seguia em laço a 0,01ms (piscando) em vez de parar. */
+    animation-iteration-count: 1 !important;
+  }
+}

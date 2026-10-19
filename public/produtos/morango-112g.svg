@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" role="img" aria-label="Pote de geleia Morango Geleiô">
+  <!-- Ilustração no formato do rótulo real. Substitua pela foto do produto quando houver. -->
+  <defs>
+    <linearGradient id="ouro" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#e2c25c"/><stop offset=".55" stop-color="#c9a23a"/><stop offset="1" stop-color="#a8842a"/>
+    </linearGradient>
+    <linearGradient id="vidro" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#86182d"/><stop offset=".35" stop-color="#b3243f"/><stop offset=".8" stop-color="#b3243f"/><stop offset="1" stop-color="#86182d"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="480" fill="#f3ece3"/>
+  <ellipse cx="240" cy="430" rx="128" ry="14" fill="#6B1D2A" opacity=".12"/>
+  <!-- corpo de vidro com geleia -->
+  <rect x="122" y="156" width="236" height="268" rx="38" fill="url(#vidro)"/>
+  <rect x="140" y="170" width="12" height="208" rx="6" fill="#fff" opacity=".22"/>
+  
+  <!-- gargalo e tampa dourada -->
+  <rect x="146" y="146" width="188" height="20" rx="6" fill="#86182d"/>
+  <rect x="132" y="110" width="216" height="44" rx="10" fill="url(#ouro)"/>
+  <line x1="140" y1="116" x2="140" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="148" y1="116" x2="148" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="156" y1="116" x2="156" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="164" y1="116" x2="164" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="172" y1="116" x2="172" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="180" y1="116" x2="180" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="188" y1="116" x2="188" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="196" y1="116" x2="196" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="204" y1="116" x2="204" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="212" y1="116" x2="212" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="220" y1="116" x2="220" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="228" y1="116" x2="228" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="236" y1="116" x2="236" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="244" y1="116" x2="244" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="252" y1="116" x2="252" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="260" y1="116" x2="260" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="268" y1="116" x2="268" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="276" y1="116" x2="276" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="284" y1="116" x2="284" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="292" y1="116" x2="292" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="300" y1="116" x2="300" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="308" y1="116" x2="308" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="316" y1="116" x2="316" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="324" y1="116" x2="324" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="332" y1="116" x2="332" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/><line x1="340" y1="116" x2="340" y2="148" stroke="#8f7022" stroke-opacity=".25" stroke-width="1"/>
+  <!-- lacre vinho sobre a tampa -->
+  <rect x="226" y="106" width="28" height="112" fill="#6B1D2A"/>
+  <rect x="226" y="106" width="28" height="6" fill="#5a1522"/>
+  <!-- etiqueta -->
+  <rect x="140" y="210" width="200" height="172" rx="3" fill="#fbf8f2"/>
+  <rect x="147" y="217" width="186" height="158" rx="2" fill="none" stroke="#D4AF37" stroke-width="1.2"/>
+  <!-- potinho dourado com coração (ícone do rótulo) -->
+  <g transform="translate(225 226)">
+    <rect x="2" y="9" width="26" height="22" rx="5" fill="#D4AF37"/>
+    <path d="M0 9.5h30l-3-6h-24z" fill="#c29c2f"/>
+    <path d="M10 3.5c1.5-3 3.5-3 5 0 1.5-3 3.5-3 5 0" fill="none" stroke="#c29c2f" stroke-width="1.4"/>
+    <path transform="translate(9.5 13) scale(0.46)" fill="#fbf8f2" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+  </g>
+  <text x="240" y="296" text-anchor="middle" font-family="'Playfair Display', Georgia, 'Times New Roman', serif" font-size="30" font-weight="700" letter-spacing="1.5" fill="#6B1D2A">GELEIÔ</text>
+  <text x="240" y="313" text-anchor="middle" font-family="Montserrat, Arial, sans-serif" font-size="8.5" font-weight="600" letter-spacing="2.4" fill="#b8962c">GELEIAS ARTESANAIS</text>
+  <text x="240" y="342" text-anchor="middle" font-family="'Playfair Display', Georgia, serif" font-size="18" font-weight="700" fill="#6B1D2A">Morango</text>
+  <text x="240" y="364" text-anchor="middle" font-family="Montserrat, Arial, sans-serif" font-size="11" fill="#6B1D2A">112g</text>
+</svg>

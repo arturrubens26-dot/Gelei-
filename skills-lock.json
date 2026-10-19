@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "arquitetura-nextjs": {
+      "source": "jhtn-paschoal/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/arquitetura-nextjs/SKILL.md",
+      "computedHash": "594f5aa1d7aaaf8144df797d42b78ae0ff56f29189a7003d1a7e08c8aab4c7fa"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "106acf230014cbb43ca34e6410371321b56ca742f9ee0442e8ec05bf02eb0384"
+    },
+    "hyperframes-animation": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": "skills/hyperframes-animation/SKILL.md",
+      "computedHash": "3d6678f0e325d69026678982b8616e181f8e92a4e7075f1f51a9b9696a265aba"
+    },
+    "improve-codebase-architecture": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "computedHash": "f74b0bf1be26220dd615523fc1c0562567f9c463d9e9b255d4031345ffb37cd3"
+    }
+  }
+}

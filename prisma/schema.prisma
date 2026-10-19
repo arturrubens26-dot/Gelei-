@@ -1,0 +1,307 @@
+// Schema do banco da Geleiô (PostgreSQL).
+// Colunas no banco seguem snake_case (password_hash, is_admin, ...); no código
+// usamos camelCase via @map. A URL de conexão fica em prisma.config.ts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDENTE
+  PAGO
+  ENVIADO
+  ENTREGUE
+  CANCELADO
+}
+
+/// Onde a venda aconteceu: no site (ONLINE) ou lançada pelo admin (PRESENCIAL: feira, balcão).
+enum OrderChannel {
+  ONLINE
+  PRESENCIAL
+}
+
+/// Forma de pagamento informada na venda presencial (rótulos em src/lib/vendas.ts).
+enum PaymentMethod {
+  PIX
+  DINHEIRO
+  CARTAO_DEBITO
+  CARTAO_CREDITO
+  OUTRO
+}
+
+/// Clientes e administradores. `isAdmin` nunca deve ser definido a partir de entrada do usuário.
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  nome         String
+  isAdmin      Boolean   @default(false) @map("is_admin")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  addresses    Address[]
+  orders       Order[]   @relation("PedidosDoCliente")
+  /// Vendas presenciais que este admin lançou (auditoria).
+  vendasRegistradas Order[] @relation("VendasRegistradas")
+  /// Pedidos/vendas que este admin cancelou ou estornou (auditoria).
+  pedidosCancelados Order[] @relation("PedidosCancelados")
+  expenses     Expense[]
+  /// Produções e ajustes de estoque que este admin lançou (auditoria).
+  producoesRegistradas Producao[]      @relation("ProducoesRegistradas")
+  ajustesRegistrados   AjusteEstoque[] @relation("AjustesRegistrados")
+
+  @@map("users")
+}
+
+model Product {
+  id         String      @id @default(cuid())
+  nome       String
+  descricao  String
+  /// Preço em reais (ex.: 24.90).
+  preco      Decimal     @db.Decimal(10, 2)
+  imagemUrl  String      @map("imagem_url")
+  /// Peso de cada unidade, em gramas (ex.: 250). Usado no cálculo de frete.
+  pesoGramas Int         @map("peso_gramas")
+  orderItems OrderItem[]
+  producoes  Producao[]
+
+  @@map("products")
+}
+
+model Address {
+  id          String  @id @default(cuid())
+  userId      String  @map("user_id")
+  cep         String  @db.VarChar(8)
+  rua         String
+  numero      String
+  complemento String?
+  bairro      String
+  cidade      String
+  estado      String  @db.Char(2)
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders      Order[]
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  /// Cliente. Obrigatório no pedido ONLINE (CHECK no banco); na venda PRESENCIAL pode faltar.
+  userId      String?     @map("user_id")
+  /// Endereço de entrega. Obrigatório no ONLINE (CHECK no banco); a venda presencial não tem entrega.
+  /// `Restrict` impede apagar um endereço que já tem pedidos.
+  addressId   String?     @map("address_id")
+  status      OrderStatus @default(PENDENTE)
+  canal       OrderChannel @default(ONLINE)
+  /// Total cobrado = soma dos itens + deliveryFee (0 na venda presencial).
+  total       Decimal     @db.Decimal(10, 2)
+  deliveryFee Decimal     @db.Decimal(10, 2) @map("delivery_fee")
+  /// Data da venda. Na presencial lançada depois, é o dia informado (meio-dia de Brasília).
+  createdAt   DateTime    @default(now()) @map("created_at")
+  /// Chave enviada pelo cliente (cabeçalho Idempotency-Key): reenviar a mesma chave devolve este pedido
+  /// em vez de criar outro (duplo clique, retry de rede). NULL é permitido várias vezes.
+  idempotencyKey String?  @map("idempotency_key")
+  /// Venda presencial: forma de pagamento, nome digitado pelo admin e observação (ex.: "Feira do bairro").
+  formaPagamento PaymentMethod? @map("forma_pagamento")
+  clienteNome    String?        @map("cliente_nome") @db.VarChar(100)
+  observacao     String?        @db.VarChar(300)
+  /// Admin que lançou a venda presencial. SetNull: a venda continua no histórico se a conta sair.
+  registradoPorId String?       @map("registrado_por_id")
+  /// Quando a venda presencial foi lançada no painel (o createdAt pode ser de outro dia: venda retroativa).
+  lancadoEm      DateTime?      @map("lancado_em")
+  /// Quem cancelou/estornou e quando (qualquer canal). SetNull: o registro fica se a conta sair.
+  canceladoEm    DateTime?      @map("cancelado_em")
+  canceladoPorId String?        @map("cancelado_por_id")
+  user        User?       @relation("PedidosDoCliente", fields: [userId], references: [id], onDelete: Restrict)
+  address     Address?    @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  registradoPor User?     @relation("VendasRegistradas", fields: [registradoPorId], references: [id], onDelete: SetNull)
+  canceladoPor  User?     @relation("PedidosCancelados", fields: [canceladoPorId], references: [id], onDelete: SetNull)
+  items       OrderItem[]
+
+  @@unique([userId, idempotencyKey])
+  // Idempotência da venda presencial (por admin). Pedidos online têm registradoPorId nulo e não colidem.
+  @@unique([registradoPorId, idempotencyKey])
+  @@index([userId])
+  @@index([addressId])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([canal, createdAt])
+  @@index([canceladoPorId])
+  @@map("orders")
+}
+
+/// Categorias de despesa (rótulos em português em src/lib/despesas.ts).
+enum ExpenseCategory {
+  INGREDIENTES
+  EMBALAGENS
+  ROTULOS
+  ENTREGA
+  MARKETING
+  EQUIPAMENTOS
+  TAXAS
+  OUTROS
+}
+
+/// Unidade da quantidade comprada (un, kg, g, L, mL, pacote, caixa, metro).
+enum ExpenseUnit {
+  UN
+  KG
+  G
+  L
+  ML
+  PACOTE
+  CAIXA
+  METRO
+}
+
+/// Tudo o que a loja gasta (frutas, potes, adesivos, frete…), lançado pelo admin em /admin/expenses.
+model Expense {
+  id          String          @id @default(cuid())
+  descricao   String          @db.VarChar(120)
+  categoria   ExpenseCategory
+  /// Quantidade comprada (ex.: 50 adesivos, 2,5 kg de açúcar). Até 3 casas decimais.
+  quantidade  Decimal         @db.Decimal(12, 3)
+  unidade     ExpenseUnit
+  /// Quanto foi pago no total, em reais (ex.: 20.00). Custo unitário = valorTotal / quantidade.
+  valorTotal  Decimal         @db.Decimal(10, 2) @map("valor_total")
+  /// Dia da compra (sem hora).
+  data        DateTime        @db.Date
+  fornecedor  String?         @db.VarChar(80)
+  observacao  String?         @db.VarChar(300)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  /// Admin que lançou. SetNull: a despesa continua no histórico se a conta for removida.
+  criadoPorId String?         @map("criado_por_id")
+  criadoPor   User?           @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+  /// Compra de insumo: liga a despesa ao estoque da produção (opcional).
+  insumoId       String?  @map("insumo_id")
+  /// Quanto entrou no estoque, na unidade do insumo (2,155 kg de maçã → 2155 g).
+  quantidadeBase Decimal? @db.Decimal(14, 3) @map("quantidade_base")
+  /// Restrict: insumo com compra não se apaga (desativa).
+  insumo         Insumo?  @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+
+  @@index([data])
+  @@index([criadoPorId])
+  @@index([insumoId])
+  @@map("expenses")
+}
+
+/// Unidade em que o estoque e o custo de um insumo são contados.
+enum InsumoUnit {
+  G
+  ML
+  UN
+}
+
+/// O que vai dentro do pote (ingrediente) ou o que o embala (pote, tampa, rótulo, lacre).
+enum InsumoTipo {
+  INGREDIENTE
+  EMBALAGEM
+}
+
+/// Ingredientes e embalagens da produção (/admin/production). Estoque = compras − usos + ajustes.
+model Insumo {
+  id              String          @id @default(cuid())
+  nome            String          @unique @db.VarChar(80)
+  tipo            InsumoTipo
+  unidade         InsumoUnit
+  /// Avisar quando a sobra ficar abaixo disto (na unidade do insumo).
+  estoqueMinimo   Decimal?        @db.Decimal(14, 3) @map("estoque_minimo")
+  /// false: não controla estoque (limão do quintal, água): entra na produção com custo informado.
+  controlaEstoque Boolean         @default(true) @map("controla_estoque")
+  ativo           Boolean         @default(true)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  compras         Expense[]
+  usos            ProducaoItem[]
+  ajustes         AjusteEstoque[]
+
+  @@map("insumos")
+}
+
+/// Um lote de geleia: o que entrou, quanto custou e quantos potes rendeu.
+model Producao {
+  id          String          @id @default(cuid())
+  /// Dia da produção (sem hora).
+  data        DateTime        @db.Date
+  /// Sabor do catálogo (opcional: receita de teste). Restrict: sabor com produção não se apaga.
+  productId   String?         @map("product_id")
+  /// Nome da receita/lote (ex.: "Receita 1").
+  nome        String          @db.VarChar(80)
+  /// Quantos potes renderam.
+  potes       Int
+  observacao  String?         @db.VarChar(500)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  criadoPorId String?         @map("criado_por_id")
+  product     Product?        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  criadoPor   User?           @relation("ProducoesRegistradas", fields: [criadoPorId], references: [id], onDelete: SetNull)
+  itens       ProducaoItem[]
+  custos      ProducaoCusto[]
+
+  @@index([data])
+  @@index([productId])
+  @@index([criadoPorId])
+  @@map("producoes")
+}
+
+/// Ingrediente ou embalagem usado num lote.
+model ProducaoItem {
+  id            String   @id @default(cuid())
+  producaoId    String   @map("producao_id")
+  insumoId      String   @map("insumo_id")
+  /// Quantidade usada, na unidade do insumo.
+  quantidade    Decimal  @db.Decimal(14, 3)
+  /// R$ por unidade do insumo no dia da produção (custo médio ou o informado): compras depois não mudam o lote.
+  custoUnitario Decimal  @db.Decimal(16, 6) @map("custo_unitario")
+  producao      Producao @relation(fields: [producaoId], references: [id], onDelete: Cascade)
+  insumo        Insumo   @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+
+  @@index([producaoId])
+  @@index([insumoId])
+  @@map("producao_itens")
+}
+
+/// Custo do lote que não é insumo de estoque: gás, energia, água, mão de obra.
+model ProducaoCusto {
+  id         String   @id @default(cuid())
+  producaoId String   @map("producao_id")
+  descricao  String   @db.VarChar(60)
+  valor      Decimal  @db.Decimal(10, 2)
+  producao   Producao @relation(fields: [producaoId], references: [id], onDelete: Cascade)
+
+  @@index([producaoId])
+  @@map("producao_custos")
+}
+
+/// Correção manual do estoque: perda, estragou, recontagem (positivo entra, negativo sai).
+model AjusteEstoque {
+  id          String   @id @default(cuid())
+  insumoId    String   @map("insumo_id")
+  quantidade  Decimal  @db.Decimal(14, 3)
+  motivo      String   @db.VarChar(120)
+  data        DateTime @db.Date
+  createdAt   DateTime @default(now()) @map("created_at")
+  criadoPorId String?  @map("criado_por_id")
+  insumo      Insumo   @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+  criadoPor   User?    @relation("AjustesRegistrados", fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([insumoId])
+  @@map("ajustes_estoque")
+}
+
+model OrderItem {
+  id            String  @id @default(cuid())
+  orderId       String  @map("order_id")
+  productId     String  @map("product_id")
+  quantidade    Int
+  /// Preço do produto no momento da compra (não muda se o preço do produto mudar depois).
+  precoUnitario Decimal @db.Decimal(10, 2) @map("preco_unitario")
+  order         Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
