@@ -63,7 +63,20 @@ O site roda na Netlify (o Next.js 16 é suportado pelo adaptador OpenNext, sem p
    
    Não defina `PAGAMENTOS_SIMULADOS`.
 5. **Admin do site no ar:** um e-mail seu e uma senha forte, nunca o admin de teste deste computador.
-6. **Pagamento:** até o PIX real ser integrado, o checkout mostra "Pedidos pelo site em breve" e a API recusa pedidos (503) sem gravá-los (`pagamentoOnlineDisponivel` em `src/lib/pagamentos.ts`).
+6. **Pagamento (PIX pelo Mercado Pago):** sem `MERCADOPAGO_ACCESS_TOKEN`, o checkout mostra "Pedidos pelo site em breve" e a API recusa pedidos (503) sem gravá-los. Para abrir a loja:
+   - No [painel de desenvolvedor](https://www.mercadopago.com.br/developers/panel/app), crie uma aplicação (Pagamentos online, Checkout Transparente). A conta precisa ter uma chave PIX cadastrada.
+   - `MERCADOPAGO_ACCESS_TOKEN`: o Access Token de **produção** (`APP_USR-...`). Para ensaiar sem cobrar, use o de teste (`TEST-...`).
+   - Em *Webhooks → Configurar notificações*: URL `https://SEU-SITE/api/webhooks/mercadopago`, evento **Pagamentos**. Salve e copie a **assinatura secreta** para `MERCADOPAGO_WEBHOOK_SECRET`.
+   - Teste final: um pedido de valor baixo pago com o seu próprio banco. O comprador não pode usar o mesmo e-mail da conta do Mercado Pago (ele recusa).
+
+### Como o PIX funciona (`src/lib/pagamentos.ts`)
+
+- O pedido abre uma cobrança no Mercado Pago (validade de 1 hora) e a página do pedido mostra o QR Code e o copia e cola. Tabela `pagamentos`: um pedido pode ter vários PIX (o vencido dá lugar a um novo, pelo botão "Gerar novo PIX").
+- **O pedido só vira PAGO quando o servidor consulta o Mercado Pago com o próprio token** e confere pedido (`external_reference`), valor, moeda e forma de pagamento. O aviso (webhook) e a tela do cliente só disparam essa consulta: um aviso forjado não paga nada. Com a assinatura secreta, avisos sem assinatura válida são recusados (401); avisos de pagamentos que não criamos são ignorados sem consulta.
+- A página do pedido pergunta a cada 5 s (o servidor consulta o Mercado Pago no máximo a cada 8 s), então o pedido é confirmado mesmo se o aviso atrasar.
+- Repetir o pedido (mesma Idempotency-Key) ou pedir o PIX de novo devolve o mesmo PIX; a `X-Idempotency-Key` enviada ao Mercado Pago (`geleio-<pedido>-<n>`) impede cobrança duplicada em nova tentativa.
+- Admin cancelou um pedido pendente: o PIX aberto é cancelado no Mercado Pago. Se ele já tinha sido pago, o painel avisa para devolver o valor pelo Mercado Pago (a devolução não é automática).
+- Teste ponta a ponta com um Mercado Pago falso: `MERCADOPAGO_API_URL` aceita só `127.0.0.1`/`localhost`.
 
 No plano grátis, cada publicação gasta créditos: junte as mudanças antes de enviar ao GitHub.
 
@@ -88,7 +101,10 @@ No plano grátis, cada publicação gasta créditos: junte as mudanças antes de
 | `POST /api/auth/register` · `login` · `logout` · `GET /api/auth/me` | — | conta e sessão (cookie httpOnly) |
 | `GET/POST /api/addresses` | logado | endereços salvos; o CEP é conferido (existência, cidade e UF); limite de 10 por conta |
 | `POST /api/orders` | logado | cria o pedido PENDENTE + itens. **Recalcula preço, peso e frete no servidor**. Aceita o cabeçalho `Idempotency-Key` (reenviar a mesma chave devolve o mesmo pedido, 200) e `totalEsperadoCentavos` (se o total calculado for outro, responde 409 com os valores atuais) |
-| `POST /api/orders/[id]/simular-pagamento` | logado | demonstração: marca o próprio pedido como PAGO (só com `PAGAMENTOS_SIMULADOS=true`) |
+| `GET /api/orders/[id]/pagamento` | logado | situação do pedido e do PIX (consulta o Mercado Pago se o PIX está aberto) |
+| `POST /api/orders/[id]/pagamento` | logado | gera o PIX do pedido (ou devolve o que ainda vale) |
+| `POST /api/webhooks/mercadopago` | Mercado Pago | aviso de pagamento: só dispara a consulta (assinatura conferida com `MERCADOPAGO_WEBHOOK_SECRET`) |
+| `POST /api/orders/[id]/simular-pagamento` | logado | demonstração: marca o próprio pedido como PAGO (só com `PAGAMENTOS_SIMULADOS=true` e sem Mercado Pago) |
 | `GET /api/admin/orders?status=&canal=` · `PATCH /api/admin/orders/[id]` | **admin** | lista/filtra pedidos (por status e canal `ONLINE`/`PRESENCIAL`) e muda o status (só transições válidas para o canal) |
 | `POST /api/admin/orders` | **admin** | lança uma **venda presencial** `{ itens: [{ productId, quantidade, precoUnitarioCentavos }], formaPagamento, status?: ENTREGUE \| PAGO, data?: "AAAA-MM-DD", clienteNome?, observacao? }`. Cabeçalho `Idempotency-Key` **obrigatório** (a mesma chave com o mesmo conteúdo devolve a venda já lançada, 200; com conteúdo diferente, 422). Limite de 200 por hora por admin |
 | `GET /api/admin/financial-stats` | **admin** | KPIs (faturamento, despesas, resultado), entradas e despesas por mês e transações recentes |
@@ -144,7 +160,7 @@ O caderno de produção com as contas feitas. Regras em `src/lib/producao.ts` (p
 
 ## O que ainda é simulado / pendente
 
-- **Pagamento:** só PIX simulado. A camada `src/lib/pagamentos.ts` (`GatewayPagamento`) já separa o gateway; falta uma implementação real, um webhook que marque `PAGO` (validando assinatura e valor) e tabelas para guardar a cobrança e o histórico de status. Hoje a cobrança criada não é persistida.
+- **Pagamento:** PIX real pelo Mercado Pago (ver "Como o PIX funciona"); falta o teste com dinheiro de verdade. Devolução de valor é feita no painel do Mercado Pago. Os pedidos pendentes com PIX vencido não são cancelados sozinhos (o admin cancela).
 - **Receita pela data de pagamento:** hoje usa a data de criação (como pedido). Para pagamento tardio/cancelamento retroativo, guardar `paidAt` e um histórico de status.
 - **Admin:** falta uma tela de detalhe do pedido (itens e endereço) para despachar, e edição de produtos (preço, estoque, fotos). A tela de produtos é só leitura.
 - **Estoque de potes à venda:** não existe (a Produção controla só os insumos); ao implementar, decrementar com `UPDATE … WHERE estoque >= qtd` dentro da transação do pedido.

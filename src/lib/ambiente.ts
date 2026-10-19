@@ -34,6 +34,22 @@ export function validarAmbiente(): void {
     );
   }
 
+  const tokenMercadoPago = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
+  if (tokenMercadoPago && !/^(APP_USR|TEST)-/.test(tokenMercadoPago)) {
+    problemas.push("MERCADOPAGO_ACCESS_TOKEN não parece um Access Token do Mercado Pago (começa com APP_USR- ou TEST-).");
+  }
+  if (tokenMercadoPago && process.env.NODE_ENV === "production") {
+    if (tokenMercadoPago.startsWith("TEST-")) {
+      console.warn("[ambiente] Mercado Pago com credencial de TESTE: os PIX gerados não cobram de verdade.");
+    }
+    if (!process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim() && !process.env.APP_URL?.startsWith("https://")) {
+      console.warn(
+        "[ambiente] Sem MERCADOPAGO_WEBHOOK_SECRET nem APP_URL com https: o Mercado Pago não tem para onde avisar, " +
+          "e o pagamento só é confirmado enquanto o cliente está na página do pedido.",
+      );
+    }
+  }
+
   if (problemas.length > 0) {
     throw new Error(`Ambiente mal configurado:\n- ${problemas.join("\n- ")}`);
   }

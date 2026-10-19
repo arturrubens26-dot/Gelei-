@@ -121,6 +121,7 @@ model Order {
   registradoPor User?     @relation("VendasRegistradas", fields: [registradoPorId], references: [id], onDelete: SetNull)
   canceladoPor  User?     @relation("PedidosCancelados", fields: [canceladoPorId], references: [id], onDelete: SetNull)
   items       OrderItem[]
+  pagamentos  Pagamento[]
 
   @@unique([userId, idempotencyKey])
   // Idempotência da venda presencial (por admin). Pedidos online têm registradoPorId nulo e não colidem.
@@ -132,6 +133,48 @@ model Order {
   @@index([canal, createdAt])
   @@index([canceladoPorId])
   @@map("orders")
+}
+
+/// Situação de uma cobrança PIX (traduzida do status do gateway em src/lib/mercadopago-regras.ts).
+enum PaymentStatus {
+  PENDENTE
+  APROVADO
+  /// Expirou sem pagamento ou foi cancelada (pedido cancelado, PIX substituído por outro).
+  CANCELADO
+  RECUSADO
+  /// Devolvida ao cliente (estorno ou contestação).
+  ESTORNADO
+}
+
+/// Cobrança PIX de um pedido online. Um pedido pode ter várias: o PIX expira e o cliente gera outro.
+/// O pedido só vira PAGO quando o servidor CONSULTA o gateway e o valor confere (o aviso do gateway
+/// é só o gatilho da consulta). Ver src/lib/pagamentos.ts.
+model Pagamento {
+  id                String        @id @default(cuid())
+  orderId           String        @map("order_id")
+  /// "mercadopago" ou "simulado" (demonstração local).
+  gateway           String        @db.VarChar(20)
+  /// Id da cobrança no gateway (no Mercado Pago, o id do pagamento).
+  referenciaExterna String        @map("referencia_externa") @db.VarChar(64)
+  status            PaymentStatus @default(PENDENTE)
+  /// Status cru do gateway na última consulta (ex.: "pending", "approved"), para conferência.
+  statusGateway     String?       @map("status_gateway") @db.VarChar(40)
+  /// Valor cobrado: o total do pedido quando a cobrança foi aberta.
+  valor             Decimal       @db.Decimal(10, 2)
+  /// Código "PIX copia e cola" e a imagem do QR Code (PNG em base64), como o gateway devolveu.
+  copiaECola        String        @map("copia_e_cola")
+  qrCodeBase64      String?       @map("qr_code_base64")
+  expiraEm          DateTime      @map("expira_em")
+  criadoEm          DateTime      @default(now()) @map("criado_em")
+  /// Última consulta ao gateway: limita quantas vezes a tela do cliente faz o servidor perguntar.
+  consultadoEm      DateTime?     @map("consultado_em")
+  aprovadoEm        DateTime?     @map("aprovado_em")
+  /// Restrict: pedido com cobrança não é apagado (o histórico do dinheiro fica).
+  order             Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@unique([gateway, referenciaExterna])
+  @@index([orderId])
+  @@map("pagamentos")
 }
 
 /// Categorias de despesa (rótulos em português em src/lib/despesas.ts).

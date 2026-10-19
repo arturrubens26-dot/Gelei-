@@ -6,6 +6,7 @@ import { StatusPagamento } from "@/components/checkout/StatusPagamento";
 import { exigirUsuario } from "@/lib/auth/dal";
 import { formatarBRL } from "@/lib/dinheiro";
 import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
+import { ultimaCobranca } from "@/lib/pagamentos";
 import { buscarPedidoDoUsuario } from "@/lib/pedidos";
 
 export const metadata: Metadata = { title: "Confirmação do pedido" };
@@ -45,7 +46,7 @@ async function DadosDoPedido({ params }: { params: PageProps<"/order-confirmatio
         </p>
       </header>
 
-      <StatusPagamento pedidoId={pedido.id} statusServidor={pedido.status} />
+      <StatusPagamento pedidoId={pedido.id} statusServidor={pedido.status} cobrancaInicial={await ultimaCobranca(pedido.id)} />
 
       <section aria-labelledby="titulo-itens" className="cartao p-5">
         <h2 id="titulo-itens" className="mb-3 text-2xl font-bold">

@@ -1,6 +1,7 @@
 import { autenticarApi, comTratamento, erro, lerCorpo, origemInvalida, registrarErro } from "@/lib/api";
 import { dentroDoLimite } from "@/lib/auth/limitador";
-import { obterGateway, pagamentoOnlineDisponivel } from "@/lib/pagamentos";
+import { ErroNegocio } from "@/lib/erros";
+import { abrirCobranca, pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { criarPedido } from "@/lib/pedidos";
 import { pedidoSchema } from "@/lib/validacao";
 
@@ -45,16 +46,13 @@ export const POST = comTratamento("api/orders", async (request: Request) => {
 
   const { pedido, repetido } = await criarPedido(auth.usuario.id, { ...corpo.dados, chaveIdempotencia: chave });
 
-  // Se o gateway falhar, o pedido continua PENDENTE e o cliente pode tentar de novo.
+  // Se o gateway falhar, o pedido continua PENDENTE e a tela do pedido oferece "Gerar PIX".
+  // Pedido repetido (mesma Idempotency-Key) reaproveita o PIX que ainda estiver valendo.
   let pagamento = null;
   try {
-    const gateway = obterGateway();
-    pagamento = {
-      gateway: gateway.nome,
-      ...(await gateway.criarCobrancaPix({ id: pedido.id, total: pedido.total })),
-    };
+    pagamento = await abrirCobranca(pedido.id, auth.usuario.id);
   } catch (e) {
-    registrarErro(`api/orders pedido ${pedido.id}: cobrança PIX falhou`, e);
+    if (!(e instanceof ErroNegocio)) registrarErro(`api/orders pedido ${pedido.id}: cobrança PIX falhou`, e);
   }
 
   return Response.json({ pedido, pagamento }, { status: repetido ? 200 : 201 });

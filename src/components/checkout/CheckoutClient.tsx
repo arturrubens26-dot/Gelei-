@@ -381,7 +381,8 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
       {/* 3. Pagamento */}
       <Secao numero={3} titulo="Pagamento">
         <p className="mb-4 text-sm text-primaria/85">
-          Pagamento via PIX. Neste MVP o pagamento é <strong>simulado</strong>: nenhuma cobrança real é feita.
+          Pagamento via PIX: ao finalizar, mostramos o QR Code e o código copia e cola. O pedido é confirmado assim
+          que o pagamento cair.
         </p>
         <p ref={alertaRef} tabIndex={-1} role="alert" className="mb-3 min-h-5 text-sm font-medium text-secundaria outline-offset-4">
           {erro}
@@ -394,7 +395,7 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
           aria-describedby={!podeFinalizar && !enviando ? "motivo-desabilitado" : undefined}
           onClick={finalizar}
         >
-          {enviando ? "Finalizando pedido…" : "Finalizar Pedido e Pagar via PIX (Simulado)"}
+          {enviando ? "Finalizando pedido…" : "Finalizar pedido e pagar com PIX"}
         </button>
         {!podeFinalizar && !enviando && (
           <p id="motivo-desabilitado" className="mt-2 text-center text-xs text-primaria/80">

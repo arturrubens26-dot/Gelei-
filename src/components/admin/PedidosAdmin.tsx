@@ -97,7 +97,10 @@ export function PedidosAdmin() {
       if (!resposta.ok) {
         setMensagem(json?.erro ?? "Não foi possível alterar o status.");
       } else {
-        setMensagem(`Pedido ${codigoPedido(pedido.id)} agora está como ${ROTULO_STATUS[novo]}.`);
+        // `aviso`: ao cancelar, o PIX do pedido já estava pago (ou não deu para cancelá-lo no Mercado Pago).
+        setMensagem(
+          `Pedido ${codigoPedido(pedido.id)} agora está como ${ROTULO_STATUS[novo]}.${json?.aviso ? ` Atenção: ${json.aviso}` : ""}`,
+        );
       }
       setVersao((v) => v + 1); // recarrega de qualquer forma: o status pode ter mudado em outro lugar
     } catch {
