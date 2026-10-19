@@ -50,3 +50,4 @@ ACESSO-LOCAL.txt
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.neon

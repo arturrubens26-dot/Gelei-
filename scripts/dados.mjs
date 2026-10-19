@@ -24,16 +24,22 @@ const q = (nome) => `"${nome.replace(/"/g, '""')}"`;
 
 /**
  * URL do banco. Local: DATABASE_URL do ambiente ou do .env. Produção: SÓ a do .env.producao (nunca
- * a do ambiente, para um engano não gravar no banco errado). No .env.producao vai a URL direta do
- * Neon (sem "-pooler"): a cópia usa uma transação longa só de leitura.
+ * a do ambiente, para um engano não gravar no banco errado), e a DIRETA (DATABASE_URL_UNPOOLED, que o
+ * `neon env pull` grava junto com a DATABASE_URL com pooler): a cópia usa uma transação longa só de
+ * leitura, que o pooler (PgBouncer em modo transação) não garante.
  */
 function urlDoBanco(producao) {
   if (producao) {
     const arquivo = path.join(RAIZ, ".env.producao");
-    if (!existsSync(arquivo)) throw new Error("Falta o arquivo .env.producao com a DATABASE_URL do banco do site no ar.");
-    const url = parseEnv(readFileSync(arquivo, "utf8")).DATABASE_URL;
-    if (!url) throw new Error("O .env.producao não tem DATABASE_URL.");
-    return url;
+    if (!existsSync(arquivo)) throw new Error("Falta o arquivo .env.producao (rode: neon env pull --file .env.producao).");
+    const vars = parseEnv(readFileSync(arquivo, "utf8"));
+    const url = vars.DATABASE_URL_UNPOOLED ?? vars.DATABASE_URL;
+    if (!url) throw new Error("O .env.producao não tem DATABASE_URL_UNPOOLED.");
+    // O Neon entrega sslmode=require, que o pg 8 trata como verify-full (confere o certificado) e o
+    // pg 9 vai afrouxar (só cifra). Pede verify-full explicitamente: continua conferindo o certificado.
+    const u = new URL(url);
+    if (["require", "prefer", "verify-ca"].includes(u.searchParams.get("sslmode") ?? "")) u.searchParams.set("sslmode", "verify-full");
+    return u.toString();
   }
   if (!process.env.DATABASE_URL && existsSync(path.join(RAIZ, ".env"))) process.loadEnvFile(path.join(RAIZ, ".env"));
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL não está definida (veja o .env).");

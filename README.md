@@ -46,10 +46,14 @@ Para usar outro Postgres (Neon, Supabase, RDS…), basta trocar `DATABASE_URL` e
 O site roda na Netlify (o Next.js 16 é suportado pelo adaptador OpenNext, sem plugin) com o banco no **Neon** (Postgres na nuvem). O `netlify.toml` fixa o build (`npm run build`, que roda `prisma generate`) e o Node 24.
 
 1. **GitHub:** repositório **privado**; envie este repositório (`git push`). A pasta `dados/` não vai junto.
-2. **Neon** (neon.com, plano grátis): crie um projeto na região **AWS São Paulo**. Ele mostra duas URLs de conexão:
-   - a **com pooler** (o endereço tem `-pooler`) vai na Netlify como `DATABASE_URL`;
-   - a **direta** (sem `-pooler`) vai no arquivo `.env.producao` deste computador (fora do Git), como `DATABASE_URL="..."`. Ela é usada para as migrações e as cópias dos dados.
-3. **Criar as tabelas no Neon** (daqui): `node --env-file=.env.producao node_modules/prisma/build/index.js migrate deploy`. Repita a cada migração nova, **antes** de publicar o código que depende dela.
+2. **Neon** (projeto "Geleiô", `silent-frog-81081560`, ramo `production`; ligado a esta pasta pelo arquivo `.neon` e descrito no `neon.ts`). Com o CLI (`npm i -g neon`, depois `neon login`), `neon env pull --file .env.producao` grava neste computador, fora do Git:
+   - `DATABASE_URL`: a **com pooler** (`-pooler`), a mesma que vai na Netlify;
+   - `DATABASE_URL_UNPOOLED`: a **direta**, usada só para as migrações e as cópias dos dados (pelo pooler o Prisma Migrate falha).
+   
+   **Não rode `neon env pull` nem `neon deploy` sem `--file .env.producao` / `--no-env-pull`:** sem isso, o CLI troca o `DATABASE_URL` do `.env` pelo do Neon, e o site local passa a gravar na produção.
+3. **Criar as tabelas no Neon** (daqui): `npm run db:deploy:producao` (`... status` só mostra). Repita a cada migração nova, **antes** de publicar o código que depende dela.
+   - **Driver:** com uma URL do Neon, `src/lib/db.ts` usa o driver serverless do Neon (`@prisma/adapter-neon`): consultas avulsas por HTTP e transações por WebSocket, como a Neon recomenda para a Netlify. Com qualquer outra URL (o banco local), usa o `pg`.
+   - **Testar sem mexer na produção:** crie um branch no Neon (`neon branches create --name teste --parent production`), rode o site com a `DATABASE_URL` dele e apague-o no fim (`neon branches delete teste`).
 4. **Netlify:** "Add new site" → "Import from Git" → o repositório. Em *Site configuration → Environment variables*:
    - `DATABASE_URL`: a URL **com pooler** do Neon;
    - `SESSION_SECRET`: uma nova, gerada como no `.env.example` (nunca a deste computador);
