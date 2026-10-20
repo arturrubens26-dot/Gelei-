@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { CATEGORIAS_DESPESA, UNIDADES_DESPESA, hojeNaLoja } from "@/lib/despesas";
-import { MAX_BYTES_SENHA, MAX_POR_PRODUTO } from "@/lib/limites";
+import {
+  MAX_BYTES_SENHA,
+  MAX_KITS_POR_PEDIDO,
+  MAX_LINHAS_DE_KIT,
+  MAX_POR_PRODUTO,
+  MAX_POTES_POR_KIT,
+} from "@/lib/limites";
 import { TODOS_STATUS } from "@/lib/status";
 import {
   DIAS_RETROATIVOS,
@@ -70,22 +76,62 @@ export const itemPedidoSchema = z.object({
     .max(MAX_POR_PRODUTO, `Quantidade máxima: ${MAX_POR_PRODUTO}.`),
 });
 
+/** Potes de um sabor em UMA caixa do kit. */
+const saborDoKitSchema = z.object({
+  productId: z.string().min(1).max(100),
+  quantidade: z
+    .number()
+    .int()
+    .min(1, "Quantidade mínima: 1 pote.")
+    .max(MAX_POTES_POR_KIT, `No máximo ${MAX_POTES_POR_KIT} potes por caixa.`),
+});
+
 /**
- * Pedido: itens + (endereço salvo OU endereço novo). Preços vêm sempre do banco.
+ * Uma linha de kit: N caixas com a mesma composição. Aqui só o formato e os tetos; quantos potes a
+ * caixa leva (soma exata) depende do kit no banco e é conferido em criarPedido (400 em `kits.N.sabores`).
+ */
+export const kitPedidoSchema = z.object({
+  kitId: z.string().min(1).max(100),
+  quantidade: z
+    .number()
+    .int()
+    .min(1, "Quantidade mínima: 1 caixa.")
+    .max(MAX_KITS_POR_PEDIDO, `No máximo ${MAX_KITS_POR_PEDIDO} caixas por pedido.`),
+  sabores: z
+    .array(saborDoKitSchema)
+    .min(1, "Escolha os sabores do kit.")
+    .max(MAX_POTES_POR_KIT, `No máximo ${MAX_POTES_POR_KIT} potes por caixa.`)
+    .refine((sabores) => sabores.reduce((soma, s) => soma + s.quantidade, 0) <= MAX_POTES_POR_KIT, {
+      message: `No máximo ${MAX_POTES_POR_KIT} potes por caixa.`,
+    }),
+});
+
+/**
+ * Pedido: potes avulsos (`itens`) e/ou caixas de kit (`kits`) + (endereço salvo OU endereço novo).
+ * Preços e composição válida vêm sempre do banco. O payload antigo, sem `kits`, continua válido.
  * `totalEsperadoCentavos` (opcional) é o total que o cliente viu na tela: se o
  * servidor calcular outro valor, o pedido NÃO é criado e responde 409.
  */
 export const pedidoSchema = z
   .object({
-    itens: z.array(itemPedidoSchema).min(1, "O carrinho está vazio.").max(50),
+    itens: z.array(itemPedidoSchema).max(50).default([]),
+    kits: z.array(kitPedidoSchema).max(MAX_LINHAS_DE_KIT, `No máximo ${MAX_LINHAS_DE_KIT} kits diferentes por pedido.`).default([]),
     addressId: z.string().min(1).max(100).optional(),
     endereco: enderecoSchema.optional(),
     totalEsperadoCentavos: z.number().int().min(0).max(100_000_000).optional(),
+  })
+  .refine((v) => v.itens.length + v.kits.length >= 1, { message: "O carrinho está vazio.", path: ["itens"] })
+  // O teto vale para a soma das caixas: 20 linhas de 20 caixas seriam 400 caixas.
+  .refine((v) => v.kits.reduce((soma, k) => soma + k.quantidade, 0) <= MAX_KITS_POR_PEDIDO, {
+    message: `No máximo ${MAX_KITS_POR_PEDIDO} caixas de kit por pedido.`,
+    path: ["kits"],
   })
   .refine((v) => Boolean(v.addressId) !== Boolean(v.endereco), {
     message: "Informe um endereço salvo (addressId) ou os dados de um novo endereço.",
     path: ["endereco"],
   });
+
+export type PedidoEntrada = z.output<typeof pedidoSchema>;
 
 export const registroSchema = z.object({
   nome: z.string().trim().min(2, "Informe seu nome.").max(100),

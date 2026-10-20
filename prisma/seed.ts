@@ -84,6 +84,30 @@ async function semearProdutos() {
   console.log(`✔ ${produtos.length} produtos`);
 }
 
+/**
+ * Kit de presente (a migração 20261021120000_kits já o cria, oculto). Em produção nasce e fica
+ * OCULTO: a dona confere preço e peso da caixa no painel e ativa. Em desenvolvimento fica visível,
+ * para dar para testar a página /kits. Rodar de novo não mexe em nome, preço nem peso já ajustados.
+ */
+async function semearKit() {
+  const emProducao = process.env.NODE_ENV === "production";
+  await db.kit.upsert({
+    where: { id: "kit-presente" },
+    update: emProducao ? {} : { ativo: true },
+    create: {
+      id: "kit-presente",
+      nome: "Kit Presente",
+      descricao: "Três geleias à sua escolha numa caixa de presente.",
+      preco: "40.00",
+      potes: 3,
+      // Peso da caixa vazia provisório: troque pelo real no painel.
+      pesoCaixaGramas: 150,
+      ativo: !emProducao,
+    },
+  });
+  console.log(`✔ kit-presente (${emProducao ? "oculto" : "visível, só em desenvolvimento"})`);
+}
+
 async function semearAdmin() {
   const emProducao = process.env.NODE_ENV === "production";
   const email = (process.env.SEED_ADMIN_EMAIL ?? "admin@geleio.local").toLowerCase();
@@ -135,6 +159,7 @@ async function semearAdmin() {
 
 async function principal() {
   await semearProdutos();
+  await semearKit();
   await semearAdmin();
 }
 

@@ -8,17 +8,25 @@ import { pedidoSchema } from "@/lib/validacao";
 const FORMATO_CHAVE = /^[A-Za-z0-9_-]{8,100}$/;
 
 /**
- * POST /api/orders — finaliza a compra: cria o pedido (status PENDENTE) e seus
- * itens e abre a cobrança PIX no gateway.
+ * POST /api/orders — finaliza a compra: cria o pedido (status PENDENTE), seus
+ * potes avulsos e caixas de kit, e abre a cobrança PIX no gateway.
  *
- * Entrada: { itens: [{ productId, quantidade }], addressId | endereco: {...},
- *            totalEsperadoCentavos? }
- * Cabeçalho opcional `Idempotency-Key`: reenviar a mesma chave devolve o pedido
- * já criado (200) em vez de criar outro (201).
+ * Entrada: { itens?: [{ productId, quantidade }],
+ *            kits?: [{ kitId, quantidade, sabores: [{ productId, quantidade }] }],
+ *            addressId | endereco: {...}, totalEsperadoCentavos? }
+ * `itens` e `kits` podem faltar (viram []), mas não os dois vazios. `sabores` é a
+ * composição de UMA caixa; `quantidade` do kit é o número de caixas.
+ * Cabeçalho opcional `Idempotency-Key`: reenviar a mesma chave com o mesmo conteúdo
+ * devolve o pedido já criado (200) em vez de criar outro (201); com outro conteúdo, 422.
  *
- * O endereço é validado por completo e conferido com o CEP. Preços, peso e frete
- * são recalculados aqui; o cliente não os informa. Se `totalEsperadoCentavos`
- * não bater com o total calculado, responde 409 com os valores atuais.
+ * Respostas: 201/200 `{ pedido: PedidoDTO (com kits), pagamento }`;
+ * 400 dados inválidos (composição errada em `detalhes["kits.N.sabores"]`);
+ * 409 total mudou: `detalhes: { total, deliveryFee, itens: [{ productId, nome, preco, pesoGramas }],
+ *     kits: [{ kitId, nome, preco, pesoCaixaGramas, potes }] }`;
+ * 422 indisponível: `detalhes: { indisponiveis: productId[], kitsIndisponiveis: kitId[] }`.
+ *
+ * O endereço é validado por completo e conferido com o CEP. Preços, peso, frete e a
+ * composição válida do kit são recalculados aqui; o cliente não os informa.
  */
 export const POST = comTratamento("api/orders", async (request: Request) => {
   const bloqueio = origemInvalida(request);

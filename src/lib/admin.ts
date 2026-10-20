@@ -25,7 +25,10 @@ export type PedidoAdminDTO = {
   total: number;
   deliveryFee: number;
   status: StatusPedido;
+  /** Linhas de pote avulso. */
   qtdItens: number;
+  /** Linhas de kit (composições diferentes; cada uma pode ter várias caixas). */
+  qtdKits: number;
 };
 
 const POR_PAGINA = 50;
@@ -44,7 +47,7 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (pagina - 1) * POR_PAGINA,
       take: POR_PAGINA,
-      include: { user: { select: { nome: true, email: true } }, _count: { select: { items: true } } },
+      include: { user: { select: { nome: true, email: true } }, _count: { select: { items: true, kits: true } } },
     }),
     db.order.count({ where }),
   ]);
@@ -60,6 +63,7 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
     deliveryFee: p.deliveryFee.toNumber(),
     status: p.status,
     qtdItens: p._count.items,
+    qtdKits: p._count.kits,
   }));
 
   return { pedidos: dados, total, pagina, porPagina: POR_PAGINA };
@@ -150,8 +154,17 @@ export type FinanceiroDoMes = {
     presencial: { total: number; vendas: number };
     /** Entradas ÷ vendas (site e presencial juntos). */
     ticketMedio: number;
-    /** Potes e valor por sabor (sem o frete), do que mais vendeu para o que menos vendeu. */
-    porSabor: { productId: string; nome: string; potes: number; valor: number }[];
+    /**
+     * Potes e valor por sabor (sem o frete), do que mais vendeu para o que menos vendeu. `potes` é o
+     * total (avulsos + em kits); `potesEmKits` é a parte que saiu dentro de caixas. O valor de um pote
+     * em kit é a parte rateada do preço da caixa, então a soma de `valor` = entradas − frete.
+     */
+    porSabor: { productId: string; nome: string; potes: number; potesEmKits: number; valor: number }[];
+    /**
+     * Caixas de kit vendidas no mês, o que entrou com elas (já incluído em site/presencial e no por
+     * sabor) e o desconto dado: quanto os mesmos potes custariam avulsos, menos o preço da caixa.
+     */
+    kits: { caixas: number; valor: number; desconto: number };
   };
   saidas: { categoria: CategoriaDespesa; total: number; lancamentos: number }[];
   /** 12 meses terminando no mês escolhido (meses sem movimento vêm com zero). */
@@ -193,17 +206,47 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
     data: { gte: new Date(`${mes}-01T00:00:00Z`), lt: new Date(`${proximo}-01T00:00:00Z`) },
   } satisfies Prisma.ExpenseWhereInput;
 
-  const [porCanal, porSabor, somaDespesas, porCategoria, vendasMensais, despesasMensais, pedidos, despesas] = await Promise.all([
+  // Pedidos pagos do mês, para as consultas cruas por sabor e de kits (filtra antes de juntar as linhas).
+  const pedidosPagosDoMesSql = Prisma.sql`
+    SELECT id FROM orders
+    WHERE status IN (${SQL_STATUS_PAGOS})
+      AND created_at >= ${inicioDoMesSql(mes)} AND created_at < ${inicioDoMesSql(proximo)}`;
+
+  const [porCanal, porSabor, somaKits, somaDespesas, porCategoria, vendasMensais, despesasMensais, pedidos, despesas] = await Promise.all([
     db.order.groupBy({ by: ["canal"], where: vendasDoMes, _sum: { total: true, deliveryFee: true }, _count: { _all: true } }),
-    db.$queryRaw<{ productId: string; nome: string; potes: number; valor: unknown }[]>`
-      SELECT oi.product_id AS "productId", p.nome, SUM(oi.quantidade)::int AS potes, SUM(oi.preco_unitario * oi.quantidade) AS valor
-      FROM order_items oi
-      JOIN orders o ON o.id = oi.order_id
-      JOIN products p ON p.id = oi.product_id
-      WHERE o.status IN (${SQL_STATUS_PAGOS})
-        AND o.created_at >= ${inicioDoMesSql(mes)} AND o.created_at < ${inicioDoMesSql(proximo)}
-      GROUP BY oi.product_id, p.nome
+    // Potes avulsos + potes dentro de caixas. O pote em kit vale a parte rateada do preço da caixa
+    // (valor_rateado é de TODOS os potes daquele sabor numa caixa; × caixas).
+    db.$queryRaw<{ productId: string; nome: string; potes: number; potesEmKits: number; valor: unknown }[]>`
+      WITH pagos AS (${pedidosPagosDoMesSql})
+      SELECT v.product_id AS "productId", p.nome,
+             SUM(v.potes)::int AS potes, SUM(v.em_kits)::int AS "potesEmKits", SUM(v.valor) AS valor
+      FROM (
+        SELECT oi.product_id, oi.quantidade AS potes, 0 AS em_kits, oi.preco_unitario * oi.quantidade AS valor
+        FROM order_items oi
+        JOIN pagos ON pagos.id = oi.order_id
+        UNION ALL
+        SELECT oks.product_id, oks.quantidade * ok.quantidade, oks.quantidade * ok.quantidade, oks.valor_rateado * ok.quantidade
+        FROM order_kits ok
+        JOIN pagos ON pagos.id = ok.order_id
+        JOIN order_kit_sabores oks ON oks.order_kit_id = ok.id
+      ) v
+      JOIN products p ON p.id = v.product_id
+      GROUP BY v.product_id, p.nome
       ORDER BY valor DESC, p.nome`,
+    // Desconto de cada caixa = potes avulsos no preço do dia − preço da caixa (nunca negativo: kit
+    // mais caro que os avulsos não "deu" desconto).
+    db.$queryRaw<{ caixas: number; valor: unknown; desconto: unknown }[]>`
+      WITH pagos AS (${pedidosPagosDoMesSql})
+      SELECT COALESCE(SUM(ok.quantidade), 0)::int AS caixas,
+             COALESCE(SUM(ok.preco_unitario * ok.quantidade), 0) AS valor,
+             COALESCE(SUM(GREATEST(av.avulsos - ok.preco_unitario, 0) * ok.quantidade), 0) AS desconto
+      FROM order_kits ok
+      JOIN pagos ON pagos.id = ok.order_id
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(SUM(oks.preco_avulso * oks.quantidade), 0) AS avulsos
+        FROM order_kit_sabores oks
+        WHERE oks.order_kit_id = ok.id
+      ) av`,
     db.expense.aggregate({ where: despesasDoMes, _sum: { valorTotal: true }, _count: { _all: true } }),
     db.expense.groupBy({ by: ["categoria"], where: despesasDoMes, _sum: { valorTotal: true }, _count: { _all: true } }),
     // created_at é guardado em UTC; converte para o horário de Brasília antes de agrupar por mês.
@@ -293,7 +336,18 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       },
       presencial: { total: presencial?._sum.total?.toNumber() ?? 0, vendas: presencial?._count._all ?? 0 },
       ticketMedio: vendas > 0 ? entradas.div(vendas).toDecimalPlaces(2).toNumber() : 0,
-      porSabor: porSabor.map((l) => ({ productId: l.productId, nome: l.nome, potes: Number(l.potes), valor: Number(String(l.valor)) })),
+      porSabor: porSabor.map((l) => ({
+        productId: l.productId,
+        nome: l.nome,
+        potes: Number(l.potes),
+        potesEmKits: Number(l.potesEmKits),
+        valor: Number(String(l.valor)),
+      })),
+      kits: {
+        caixas: Number(somaKits[0]?.caixas ?? 0),
+        valor: Number(String(somaKits[0]?.valor ?? 0)),
+        desconto: Number(String(somaKits[0]?.desconto ?? 0)),
+      },
     },
     saidas: porCategoria
       .map((c) => ({ categoria: c.categoria, total: c._sum.valorTotal?.toNumber() ?? 0, lancamentos: c._count._all }))

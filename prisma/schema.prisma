@@ -71,6 +71,8 @@ model Product {
   orderItems OrderItem[]
   producoes  Producao[]
   fotos      ProdutoFoto[]
+  /// Potes deste sabor vendidos dentro de kits (a venda avulsa fica em orderItems).
+  kitSabores OrderKitSabor[]
 
   @@map("products")
 }
@@ -140,6 +142,8 @@ model Order {
   registradoPor User?     @relation("VendasRegistradas", fields: [registradoPorId], references: [id], onDelete: SetNull)
   canceladoPor  User?     @relation("PedidosCancelados", fields: [canceladoPorId], references: [id], onDelete: SetNull)
   items       OrderItem[]
+  /// Caixas de kit do pedido (os potes avulsos continuam em `items`).
+  kits        OrderKit[]
   pagamentos  Pagamento[]
 
   @@unique([userId, idempotencyKey])
@@ -366,4 +370,62 @@ model OrderItem {
   @@index([orderId])
   @@index([productId])
   @@map("order_items")
+}
+
+/// Kit de presente (caixa com N potes à escolha). Não tem foto: a loja desenha a caixa com as fotos
+/// REAIS dos sabores escolhidos (os mockups recebidos têm erros de marca, peso e sabor).
+model Kit {
+  id              String     @id
+  nome            String     @db.VarChar(80)
+  descricao       String     @db.VarChar(300)
+  /// Preço de UMA caixa, em reais (padrão 40.00). Configurado no painel.
+  preco           Decimal    @db.Decimal(10, 2)
+  /// Quantos potes vão na caixa (3). Não editável no painel na v1.
+  potes           Int        @default(3)
+  /// Peso da caixa vazia, somado ao dos potes no frete.
+  pesoCaixaGramas Int        @map("peso_caixa_gramas")
+  /// Aparece na loja? Nasce oculto: a dona confere o preço e ativa no painel.
+  ativo           Boolean    @default(false)
+  pedidos         OrderKit[]
+
+  @@map("kits")
+}
+
+/// Caixas de um pedido. Mesma composição = uma linha com quantidade > 1.
+model OrderKit {
+  id            String          @id @default(cuid())
+  orderId       String          @map("order_id")
+  kitId         String          @map("kit_id")
+  /// Quantas caixas com esta composição.
+  quantidade    Int
+  /// Preço de UMA caixa no momento da compra (congelado: mudar o preço do kit não muda pedidos antigos).
+  precoUnitario Decimal         @db.Decimal(10, 2) @map("preco_unitario")
+  order         Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Restrict: kit com vendas não se apaga (oculta-se).
+  kit           Kit             @relation(fields: [kitId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sabores       OrderKitSabor[]
+
+  @@index([orderId])
+  @@index([kitId])
+  @@map("order_kits")
+}
+
+/// Composição: potes de cada sabor em CADA caixa. Total de potes = quantidade × orderKit.quantidade.
+model OrderKitSabor {
+  id           String   @id @default(cuid())
+  orderKitId   String   @map("order_kit_id")
+  productId    String   @map("product_id")
+  /// Potes deste sabor em UMA caixa.
+  quantidade   Int
+  /// Preço avulso do sabor no dia (congelado): base do rateio e do "desconto dado".
+  precoAvulso  Decimal  @db.Decimal(10, 2) @map("preco_avulso")
+  /// Parte do preço de UMA caixa atribuída a este sabor (todos os potes dele). Soma = precoUnitario.
+  valorRateado Decimal  @db.Decimal(10, 2) @map("valor_rateado")
+  orderKit     OrderKit @relation(fields: [orderKitId], references: [id], onDelete: Cascade)
+  /// Restrict: sabor vendido em kit não se apaga (oculta-se), como na venda avulsa.
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([orderKitId, productId])
+  @@index([productId])
+  @@map("order_kit_sabores")
 }

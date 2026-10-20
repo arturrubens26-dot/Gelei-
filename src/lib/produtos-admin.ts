@@ -27,16 +27,27 @@ export type ProdutoAdminDTO = {
   pesoGramas: number;
   imagemUrl: string;
   ativo: boolean;
-  /** Itens de pedido e produções que apontam para o produto: com algum, ele só pode ser ocultado. */
+  /**
+   * Vendas (itens avulsos de pedido + caixas de kit com este sabor) e produções que apontam para o
+   * produto: com alguma, ele só pode ser ocultado.
+   */
   vendas: number;
   producoes: number;
 };
 
 type Foto = { tipo: TipoFoto; dados: Uint8Array<ArrayBuffer> };
 
-const comContagens = { _count: { select: { orderItems: true, producoes: true } } } satisfies Prisma.ProductInclude;
+// `kitSabores`: um sabor vendido só dentro de kits também tem histórico (a composição aponta para ele).
+const comContagens = {
+  _count: { select: { orderItems: true, kitSabores: true, producoes: true } },
+} satisfies Prisma.ProductInclude;
 
-function paraDTO(p: Prisma.ProductGetPayload<{ include: typeof comContagens }>): ProdutoAdminDTO {
+type ProdutoComContagens = Prisma.ProductGetPayload<{ include: typeof comContagens }>;
+
+/** Linhas de venda que citam o produto: avulso ou dentro de uma caixa de kit. */
+const vendasDo = (p: ProdutoComContagens) => p._count.orderItems + p._count.kitSabores;
+
+function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
   return {
     id: p.id,
     nome: p.nome,
@@ -46,7 +57,7 @@ function paraDTO(p: Prisma.ProductGetPayload<{ include: typeof comContagens }>):
     pesoGramas: p.pesoGramas,
     imagemUrl: p.imagemUrl,
     ativo: p.ativo,
-    vendas: p._count.orderItems,
+    vendas: vendasDo(p),
     producoes: p._count.producoes,
   };
 }
@@ -181,16 +192,17 @@ export async function definirVisibilidade(id: string, ativo: boolean): Promise<P
 }
 
 /**
- * Exclui de vez um produto sem histórico. Com vendas ou produções, recusa (409): os pedidos e as
- * fichas de produção apontam para ele, então o caminho é ocultá-lo da loja.
+ * Exclui de vez um produto sem histórico. Com vendas (avulsas ou em kits) ou produções, recusa (409):
+ * os pedidos e as fichas de produção apontam para ele, então o caminho é ocultá-lo da loja.
  */
 export async function excluirProduto(id: string): Promise<void> {
   const produto = await db.product.findUnique({ where: { id }, include: comContagens });
   if (!produto) throw new ErroNegocio(404, "Produto não encontrado.");
-  const { orderItems, producoes } = produto._count;
-  if (orderItems > 0 || producoes > 0) {
+  const vendas = vendasDo(produto);
+  const { producoes } = produto._count;
+  if (vendas > 0 || producoes > 0) {
     const partes = [
-      orderItems > 0 ? `${orderItems} ${orderItems === 1 ? "venda" : "vendas"}` : null,
+      vendas > 0 ? `${vendas} ${vendas === 1 ? "venda" : "vendas"}` : null,
       producoes > 0 ? `${producoes} ${producoes === 1 ? "produção" : "produções"}` : null,
     ].filter(Boolean);
     throw new ErroNegocio(

@@ -2,9 +2,27 @@ import { z } from "zod";
 import { autenticarApi, comTratamento, erro, lerCorpo, origemInvalida, registrarErro } from "@/lib/api";
 import { alterarStatusPedido } from "@/lib/admin";
 import { encerrarCobrancasDoPedido } from "@/lib/pagamentos";
+import { detalhePedidoAdmin } from "@/lib/pedidos-admin";
 import { statusPedidoSchema } from "@/lib/validacao";
 
 const corpoSchema = z.object({ status: statusPedidoSchema });
+
+/**
+ * GET /api/admin/orders/[id] — ficha do pedido (admin): cliente, endereço, potes avulsos, caixas de
+ * kit com a composição e o bloco "Separar…". Resposta: `{ pedido: PedidoAdminDetalheDTO }`; 404 se
+ * não existir. Valida is_admin no banco a cada chamada.
+ */
+export const GET = comTratamento(
+  "api/admin/orders GET [id]",
+  async (_request: Request, ctx: RouteContext<"/api/admin/orders/[id]">) => {
+    const auth = await autenticarApi({ admin: true });
+    if (!auth.ok) return auth.resposta;
+    const { id } = await ctx.params;
+    const pedido = await detalhePedidoAdmin(id);
+    if (!pedido) return erro(404, "Pedido não encontrado.");
+    return Response.json({ pedido });
+  },
+);
 
 /**
  * PATCH /api/admin/orders/[id]  { status } — muda o status de um pedido (admin).

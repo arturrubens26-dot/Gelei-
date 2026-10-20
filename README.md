@@ -26,7 +26,7 @@ Para usar outro Postgres (Neon, Supabase, RDS…), basta trocar `DATABASE_URL` e
 > **Criando migrações novas:** o `prisma migrate dev` precisa de um banco-sombra e o Postgres embutido (PGlite) não lida bem com ele. Gere o SQL com
 > `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`, salve em `prisma/migrations/<data>_<nome>/migration.sql` e aplique com `npm run db:deploy`.
 
-> **Testes:** `npm run test:unit` roda os testes das regras puras (leitura de valores digitados, meses, validação das despesas, contas da produção) com `node:test`.
+> **Testes:** `npm run test:unit` roda os testes das regras puras (leitura de valores digitados, meses, validação das despesas, contas da produção, composição e rateio dos kits) com `node:test`.
 
 > **Banco local "sem vagas" ("Connection terminated unexpectedly", `ConnectionClosed`, `ECONNRESET`):** o Postgres embutido do `prisma dev` aceita 10 conexões, mas tem um defeito (no `@electric-sql/pglite-socket` 0.1.3, que vem com o Prisma; a 0.2.13 ainda tem): cada conexão que cai sem se despedir (processo morto com a conexão aberta: o site fechado no X no meio de uma consulta, um worker no fim do build, um script interrompido) ocupa uma vaga até o banco reiniciar. Sem vagas, o site mostra "This page couldn't load" e o terminal mostra esse erro. Para quase não acontecer, `src/lib/db.ts` usa um único pool por processo e, com `DATABASE_POOL_MAX="1"`, fecha a conexão ociosa em 500 ms; o `iniciar.bat` reinicia o banco a cada início. Se acontecer, reinicie só o banco: `npx prisma dev stop geleio` e depois `npm run db:dev` (ou `parar.bat` e `iniciar.bat`). Os dados ficam.
 
@@ -89,7 +89,7 @@ No plano grátis, cada publicação gasta créditos: junte as mudanças antes de
 | `src/app/(acesso)/login` | Tela de login, fora do layout da loja: painel com o formulário em "vidro" e, à direita, o pote real de Maracujá que abre sozinho (`src/components/AnimatedJamJar.tsx`, framer-motion): a tampa desenrosca e sobe, a colher de pau tira geleia e uma gota pinga. Repete ao focar um campo (no máximo a cada 8 s). Tem botão "Pausar animação"; com "reduzir movimento" no sistema fica parada no quadro final. As camadas da foto ficam em `public/login/` e saem de `scripts/recortar-pote-login.mjs`. |
 | `src/app/(admin)/admin/` | Painel: `/admin/dashboard`, `/orders` (e `/orders/nova`, venda presencial), `/financial`, `/expenses` (despesas), `/production` (lotes e estoque de insumos; `/production/[id]` é a ficha do lote), `/products`. |
 | `src/app/api/` | Rotas da API (produtos, entrega, auth, endereços, pedidos, admin). |
-| `src/lib/` | Regras de negócio sem framework: `frete`, `pedidos`, `admin`, `pagamentos`, `status`, `limites`, validação (zod). |
+| `src/lib/` | Regras de negócio sem framework: `frete`, `pedidos`, `kits-regras`, `admin`, `pagamentos`, `status`, `limites`, validação (zod). |
 | `prisma/` | `schema.prisma`, migrações e `seed.ts`. |
 
 ## API
@@ -100,15 +100,17 @@ No plano grátis, cada publicação gasta créditos: junte as mudanças antes de
 | `POST /api/delivery/calculate` | público | `{ cep, pesoTotalGramas }` → valida o CEP (cep-promise) e calcula o frete simulado |
 | `POST /api/auth/register` · `login` · `logout` · `GET /api/auth/me` | — | conta e sessão (cookie httpOnly) |
 | `GET/POST /api/addresses` | logado | endereços salvos; o CEP é conferido (existência, cidade e UF); limite de 10 por conta |
-| `POST /api/orders` | logado | cria o pedido PENDENTE + itens. **Recalcula preço, peso e frete no servidor**. Aceita o cabeçalho `Idempotency-Key` (reenviar a mesma chave devolve o mesmo pedido, 200) e `totalEsperadoCentavos` (se o total calculado for outro, responde 409 com os valores atuais) |
+| `POST /api/orders` | logado | cria o pedido PENDENTE com potes avulsos (`itens`) e/ou caixas de kit (`kits: [{ kitId, quantidade, sabores: [{ productId, quantidade }] }]`; os dois podem faltar, mas não ambos vazios). **Recalcula preço, peso, frete e a composição do kit no servidor**. Aceita o cabeçalho `Idempotency-Key` (reenviar a mesma chave com o mesmo conteúdo devolve o mesmo pedido, 200; com outro conteúdo, 422) e `totalEsperadoCentavos` (se o total calculado for outro, responde 409 com os preços e pesos atuais dos produtos e dos kits). Produto ou kit oculto: 422 com `indisponiveis` e `kitsIndisponiveis`; caixa com potes a mais ou a menos: 400 em `kits.N.sabores` |
 | `GET /api/orders/[id]/pagamento` | logado | situação do pedido e do PIX (consulta o Mercado Pago se o PIX está aberto) |
 | `POST /api/orders/[id]/pagamento` | logado | gera o PIX do pedido (ou devolve o que ainda vale) |
 | `POST /api/webhooks/mercadopago` | Mercado Pago | aviso de pagamento: só dispara a consulta (assinatura conferida com `MERCADOPAGO_WEBHOOK_SECRET`) |
 | `POST /api/orders/[id]/simular-pagamento` | logado | demonstração: marca o próprio pedido como PAGO (só com `PAGAMENTOS_SIMULADOS=true` e sem Mercado Pago) |
 | `GET /api/admin/orders?status=&canal=` · `PATCH /api/admin/orders/[id]` | **admin** | lista/filtra pedidos (por status e canal `ONLINE`/`PRESENCIAL`) e muda o status (só transições válidas para o canal) |
+| `GET /api/admin/orders/[id]` | **admin** | ficha do pedido: cliente, endereço, potes avulsos, caixas de kit com a composição e as fotos dos sabores, e o bloco "Separar…" (caixas a montar e potes por sabor) |
+| `GET /api/admin/kits` · `PATCH /api/admin/kits/[id]` | **admin** | kits com caixas vendidas, faixa de economia e aviso de preço · edita (JSON `{ nome, descricao, precoCentavos, pesoCaixaGramas, ativo }`) ou mostra/oculta na loja (JSON `{ ativo }`). Sem criar nem excluir na v1 |
 | `POST /api/admin/orders` | **admin** | lança uma **venda presencial** `{ itens: [{ productId, quantidade, precoUnitarioCentavos }], formaPagamento, status?: ENTREGUE \| PAGO, data?: "AAAA-MM-DD", clienteNome?, observacao? }`. Cabeçalho `Idempotency-Key` **obrigatório** (a mesma chave com o mesmo conteúdo devolve a venda já lançada, 200; com conteúdo diferente, 422). Limite de 200 por hora por admin |
-| `GET /api/admin/financial-stats?mes=AAAA-MM` | **admin** | o Financeiro de um mês: resumo, entradas por canal e por sabor, saídas por categoria, 12 meses até ele e movimentações |
-| `GET /api/admin/products` | **admin** | todos os produtos, inclusive os ocultos, com o histórico de vendas e produções |
+| `GET /api/admin/financial-stats?mes=AAAA-MM` | **admin** | o Financeiro de um mês: resumo, entradas por canal e por sabor (com os potes vendidos em kit, `potesEmKits`), caixas de kit (`entradas.kits`: caixas, valor e desconto dado), saídas por categoria, 12 meses até ele e movimentações |
+| `GET /api/admin/products` | **admin** | todos os produtos, inclusive os ocultos, com o histórico de vendas (avulsas e dentro de kits) e produções |
 | `POST /api/admin/products` | **admin** | cria produto (multipart: sabor, pesoGramas, precoCentavos, descricao, ativo, foto) |
 | `PATCH /api/admin/products/[id]` | **admin** | edita (multipart; foto opcional) ou mostra/oculta na loja (JSON `{ ativo }`) |
 | `DELETE /api/admin/products/[id]` | **admin** | exclui produto sem vendas nem produções (com histórico: 409, oculte) |
@@ -159,6 +161,22 @@ As rotas `/api/admin/*` conferem `is_admin` **no banco a cada chamada** (não co
 - **Excluir x ocultar:** produto com vendas ou produções não pode ser excluído (pedidos e fichas apontam para ele): oculte. Oculto, ele some da vitrine e não pode ser comprado (o pedido responde 422 "indisponível"), mas o histórico continua certo.
 - A vitrine usa o catálogo em cache (tag `produtos`): toda mudança no painel o expira na hora (`revalidateTag("produtos", { expire: 0 })`).
 
+### Kits de presente ("Monte seu kit")
+
+A cliente monta uma caixa de **3 potes** escolhendo os sabores (pode repetir: 3× Pimenta). Regras puras em `src/lib/kits-regras.ts` (servidor e navegador, testadas em `testes/kits.test.ts`); catálogo da loja em `src/lib/kits.ts`; painel em `src/lib/kits-admin.ts`.
+
+- **Preço com desconto**, configurável no painel (padrão R$ 40,00 contra 3 avulsos de R$ 15,00). Se o kit não sair mais barato que os avulsos, o painel avisa, sem bloquear, e a loja esconde o "Economize".
+- **Nasce oculto** (`ativo = false`): a dona confere preço e peso da caixa e ativa em `/admin/products`. Nome padrão "Kit Presente", editável. O `npm run db:seed` deixa o kit **ativo só em desenvolvimento**.
+- **Peso da caixa vazia: 150 g (provisório)**, somado ao dos potes no frete. Troque pelo real no painel.
+- **Limites:** 20 caixas por pedido (somando as linhas), 20 composições diferentes, até 6 potes por caixa na validação (o kit leva exatamente `potes`, conferido no servidor). Constantes em `src/lib/limites.ts`.
+- **O servidor nunca confia no cliente:** lê do banco o preço do kit e o preço/peso de cada sabor; kit e sabores precisam estar ativos; a caixa precisa ter exatamente os potes do kit. Carrinho e servidor usam a mesma conta (`somarConteudo`, em centavos inteiros).
+- **Pedido:** `order_items` continua só com os avulsos. Cada caixa vai em `order_kits` (mesma composição = uma linha com quantidade > 1; preço da caixa congelado) e a composição em `order_kit_sabores` (potes de cada sabor em UMA caixa, preço avulso do dia e a parte rateada do preço da caixa).
+- **Rateio:** o preço da caixa é dividido entre os sabores proporcionalmente ao preço avulso × potes (maiores restos, em centavos; empate pelo id). A soma é sempre o preço da caixa, então no Financeiro a soma **por sabor** = entradas − frete. `entradas.kits` mostra caixas, valor e o desconto dado (avulsos do dia − preço da caixa).
+- **Idempotência:** a mesma `Idempotency-Key` com os mesmos avulsos e as mesmas caixas (em qualquer ordem) devolve o pedido já criado; o mesmo sabor avulso de um lado e dentro de uma caixa do outro é outro conteúdo (422).
+- **Sabor vendido só em kit** também tem histórico: o painel não oferece "Excluir" (oculte).
+- **Fotos:** o kit não tem foto. A loja desenha a caixa e põe nas vagas as fotos REAIS dos sabores escolhidos. **Os mockups `fotos-originais/Kit-*.png` não são foto do kit** (logo errado "Gelêiô", 250 g e sabores que não existem) e **nunca vão para `public/`**.
+- **Migração `20261021120000_kits`:** só cria tabelas (`kits`, `order_kits`, `order_kit_sabores`) e insere o kit padrão oculto; o código antigo continua funcionando com ela. **Na produção ainda não foi aplicada:** ensaie num branch do Neon e depois rode `npm run db:deploy:producao`, antes de publicar o código. Como desfazer está no topo do `migration.sql` (só enquanto nenhum pedido tiver kit).
+
 ### Financeiro (`/admin/financial`)
 
 - Um mês por vez (setas para navegar): frase-resumo ("entraram X e saíram Y: sobraram Z"), **De onde veio o dinheiro** (site, feira/balcão, frete, valor médio, por sabor), **Para onde foi** (despesas por categoria), **Últimos 12 meses** até o mês escolhido (gráfico ou tabela; clicar no mês abre ele) e **Movimentações do mês** (vendas e despesas na mesma lista).
@@ -179,7 +197,8 @@ O caderno de produção com as contas feitas. Regras em `src/lib/producao.ts` (p
 
 - **Pagamento:** PIX real pelo Mercado Pago (ver "Como o PIX funciona"); falta o teste com dinheiro de verdade. Devolução de valor é feita no painel do Mercado Pago. Os pedidos pendentes com PIX vencido não são cancelados sozinhos (o admin cancela).
 - **Receita pela data de pagamento:** hoje usa a data de criação (como pedido). Para pagamento tardio/cancelamento retroativo, guardar `paidAt` e um histórico de status.
-- **Admin:** falta uma tela de detalhe do pedido (itens e endereço) para despachar, e edição de produtos (preço, estoque, fotos). A tela de produtos é só leitura.
+- **Admin:** a ficha do pedido já tem API (`GET /api/admin/orders/[id]`); falta a tela (`/admin/orders/[id]`).
+- **Kits, etapa 2:** venda presencial com kit; editar o kit pelo carrinho; foto real da caixa; banner; baixa da caixa como insumo da Produção; mensagem de presente; vários tipos de kit (criar/excluir no painel). Peso da caixa (150 g) ainda provisório. A migração dos kits ainda não foi aplicada na produção.
 - **Estoque de potes à venda:** não existe (a Produção controla só os insumos); ao implementar, decrementar com `UPDATE … WHERE estoque >= qtd` dentro da transação do pedido.
 - **Despesas, o que falta (pede migração):** histórico de quem editou/excluiu (hoje só `criado_por_id`, e a exclusão apaga a linha); controle de edição simultânea (`atualizado_em` + 409, como no status do pedido); `Idempotency-Key` no lançamento (rede caiu depois de gravar → reenvio duplica); despesas planejadas/recorrentes; anexar nota fiscal; categorias editáveis com uma "natureza" fixa (insumo, embalagem, imposto…) para custo por pote e relatório do MEI.
 - **Sessão e conta:** revogação de sessão no servidor (versão de sessão por usuário), MFA/CAPTCHA no login do admin, e verificação de e-mail no cadastro (hoje a mensagem "e-mail já cadastrado" permite descobrir quem tem conta).
