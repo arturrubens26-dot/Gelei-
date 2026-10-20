@@ -1,10 +1,64 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { flushSync } from "react-dom";
+import { avisarResultadoLogin, movimentoReduzido } from "@/components/login/eventos";
 
 type Modo = "entrar" | "criar";
+
+const SENHA_MINIMA = 8;
+
+/**
+ * Quanto do formulário já está pronto, de 0 a 1 (a altura da geleia no botão da tela /login):
+ * nome preenchido (ao criar conta), e-mail com cara de e-mail e senha digitada (ao criar, com o
+ * mínimo de caracteres). É só um indicador: a validação de verdade continua no servidor.
+ */
+function medirPreenchimento(formulario: HTMLFormElement, criando: boolean) {
+  const dados = new FormData(formulario);
+  const texto = (campo: string) => String(dados.get(campo) ?? "");
+  const senha = texto("senha");
+  const passos = [
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(texto("email").trim()),
+    criando ? senha.length >= SENHA_MINIMA : senha.length > 0,
+  ];
+  if (criando) passos.push(texto("nome").trim().length > 0);
+  return { nivel: passos.filter(Boolean).length / passos.length, tamanhoSenha: senha.length };
+}
+
+/**
+ * Altura da geleia no botão (0 a 1) para um nível de preenchimento. Pela metade, ela sobe só no
+ * fundo, abaixo do texto (a linha da onda não corta as letras); completo, inunda o botão de uma vez.
+ */
+const alturaDaGeleia = (nivel: number) => (nivel === 0 ? 0 : nivel === 1 ? 1 : 0.06 + nivel * 0.27);
+
+// Movimentos do botão de geleia e do cartão (Web Animations; só sem "reduzir movimento").
+/** A geleia acabou de subir ou descer: a onda marulha e assenta baixinha. */
+const MARULHO: Keyframe[] = [
+  { transform: "translateX(-50%) scaleY(1.5)" },
+  { transform: "translateX(-25%) scaleY(0.9)", offset: 0.45 },
+  { transform: "translateX(0%) scaleY(0.35)" },
+];
+/** Enviando: a geleia fica mexendo até a resposta chegar. */
+const MEXENDO: Keyframe[] = [{ transform: "translateX(-50%) scaleY(0.9)" }, { transform: "translateX(0%) scaleY(0.9)" }];
+/** Formulário completo: o botão treme uma vez, como gelatina saindo da forma. */
+const BALANCO: Keyframe[] = [
+  { transform: "none" },
+  { transform: "scale(1.04, 0.92)" },
+  { transform: "scale(0.97, 1.06)" },
+  { transform: "scale(1.02, 0.97)" },
+  { transform: "scale(0.995, 1.01)" },
+  { transform: "none" },
+];
+/** Erro: o cartão sacode de um lado para o outro, amortecendo. */
+const TREMOR: Keyframe[] = [
+  { transform: "none" },
+  { transform: "translateX(-10px) skewX(3deg)" },
+  { transform: "translateX(8px) skewX(-2.5deg)" },
+  { transform: "translateX(-5px) skewX(1.5deg)" },
+  { transform: "translateX(2px) skewX(-0.5deg)" },
+  { transform: "none" },
+];
 
 /** Título e chamada da versão "vidro" (tela /login), que tem cabeçalho próprio. */
 const CABECALHO: Record<Modo, { titulo: string; subtitulo: string }> = {
@@ -24,6 +78,9 @@ const CABECALHO: Record<Modo, { titulo: string; subtitulo: string }> = {
  *
  * - `variante="cartao"` (padrão): embutido no checkout, com o seletor "Já tenho conta / Criar conta" no topo.
  * - `variante="vidro"`: a tela /login, com título (h1) e a troca de modo abaixo do botão principal.
+ *   Nela o botão "Entrar" enche de geleia conforme os campos ficam prontos, cada campo focado
+ *   pinga uma gota, a senha nova tem um potinho que enche até o mínimo, e o resultado do envio
+ *   é avisado ao pote animado ao lado (login/eventos.ts).
  */
 export function AuthForm({
   destino,
@@ -43,22 +100,56 @@ export function AuthForm({
   const [errosCampo, setErrosCampo] = useState<Record<string, string[]>>({});
   const [enviando, setEnviando] = useState(false);
   const [senhaVisivel, setSenhaVisivel] = useState(false);
+  const [nivel, setNivel] = useState(0);
+  const [tamanhoSenha, setTamanhoSenha] = useState(0);
   const enviandoRef = useRef(false);
   const alertaRef = useRef<HTMLParagraphElement>(null);
   const tituloRef = useRef<HTMLHeadingElement>(null);
   const senhaRef = useRef<HTMLInputElement>(null);
+  const cartaoRef = useRef<HTMLDivElement>(null);
+  const formularioRef = useRef<HTMLFormElement>(null);
+  const botaoRef = useRef<HTMLButtonElement>(null);
+  const ondaRef = useRef<HTMLSpanElement>(null);
 
   const criando = modo === "criar";
   const vidro = variante === "vidro";
 
   // A rota escondida (Cache Components) continua no DOM: ao esconder, os Effects são desmontados,
-  // e aproveitamos para não deixar a senha digitada guardada lá.
+  // e aproveitamos para não deixar a senha digitada guardada lá (nem a geleia que ela enchia).
   useEffect(() => {
     const campoSenha = senhaRef.current;
     return () => {
       if (campoSenha) campoSenha.value = "";
+      setNivel(0);
+      setTamanhoSenha(0);
     };
   }, []);
+
+  // A geleia do botão mudou de altura: a onda marulha; se encheu, o botão treme uma vez.
+  useEffect(() => {
+    if (!vidro || nivel === 0 || movimentoReduzido()) return;
+    const marulho = ondaRef.current?.animate(MARULHO, { duration: 1400, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
+    const balanco = nivel === 1 ? botaoRef.current?.animate(BALANCO, { duration: 800, easing: "ease-out" }) : undefined;
+    return () => {
+      marulho?.cancel();
+      balanco?.cancel();
+    };
+  }, [nivel, vidro]);
+
+  // Enviando: a geleia fica mexendo (o texto "Aguarde…" continua sendo o aviso).
+  useEffect(() => {
+    if (!vidro || !enviando || movimentoReduzido()) return;
+    const mexendo = ondaRef.current?.animate(MEXENDO, { duration: 1000, iterations: Infinity });
+    return () => mexendo?.cancel();
+  }, [enviando, vidro]);
+
+  /** Recalcula a geleia do botão e o potinho da senha a partir do que está nos campos. */
+  function medir(criandoAgora = criando) {
+    if (!vidro || !formularioRef.current) return;
+    const medida = medirPreenchimento(formularioRef.current, criandoAgora);
+    setNivel(medida.nivel);
+    setTamanhoSenha(medida.tamanhoSenha);
+  }
 
   function trocarModo(novo: Modo) {
     flushSync(() => {
@@ -67,6 +158,8 @@ export function AuthForm({
       setErrosCampo({});
       setSenhaVisivel(false);
     });
+    // O campo Nome entrou (ou saiu): a geleia do botão se ajusta ao novo total de passos.
+    medir(novo === "criar");
     // Na tela de login o título muda ("Crie sua conta"): levar o foco até ele faz o leitor de tela
     // anunciar a troca, e o campo Nome que surgiu fica logo à frente na ordem do Tab.
     if (vidro) tituloRef.current?.focus();
@@ -79,6 +172,10 @@ export function AuthForm({
       setErrosCampo(detalhes);
     });
     alertaRef.current?.focus();
+    if (vidro) {
+      if (alertaRef.current) avisarResultadoLogin(alertaRef.current, "erro");
+      if (!movimentoReduzido()) cartaoRef.current?.animate(TREMOR, { duration: 600, easing: "ease-out" });
+    }
   }
 
   async function enviar(evento: FormEvent<HTMLFormElement>) {
@@ -107,6 +204,7 @@ export function AuthForm({
         mostrarErro(json?.erro ?? "Não foi possível continuar.", json?.detalhes && typeof json.detalhes === "object" ? json.detalhes : {});
         return;
       }
+      if (vidro) avisarResultadoLogin(formulario, "sucesso");
       formulario.reset();
       router.replace(destino);
       router.refresh();
@@ -123,9 +221,12 @@ export function AuthForm({
   const idEmail = `${uid}-email`;
   const idSenha = `${uid}-senha`;
   const classeCampo = vidro ? "campo min-h-12 rounded-xl" : "campo";
+  // Na tela de login, cada campo pinga uma gota de geleia ao receber o foco (globals.css).
+  const classeCaixaCampo = vidro ? "gota-foco" : undefined;
 
   return (
     <div
+      ref={cartaoRef}
       className={
         vidro
           ? "w-full max-w-md rounded-[1.75rem] border border-white/70 bg-white/60 p-6 shadow-[0_24px_60px_-40px_rgb(107_29_42/0.35)] backdrop-blur-xl sm:p-9"
@@ -163,22 +264,25 @@ export function AuthForm({
         </div>
       )}
 
-      <form onSubmit={enviar} className="flex flex-col gap-4" noValidate>
+      {/* onInput/onFocus medem o preenchimento (o foco pega também o que o navegador preencheu sozinho). */}
+      <form ref={formularioRef} onSubmit={enviar} onInput={() => medir()} onFocus={() => medir()} className="flex flex-col gap-4" noValidate>
         {criando && (
-          <div>
+          <div className={vidro ? "surgir-geleia" : undefined}>
             <label htmlFor={idNome} className="mb-1 block text-sm font-semibold">
               Nome
             </label>
-            <input
-              id={idNome}
-              name="nome"
-              autoComplete="name"
-              required
-              placeholder="Seu nome"
-              className={classeCampo}
-              aria-invalid={erroDe("nome") ? true : undefined}
-              aria-describedby={erroDe("nome") ? `${idNome}-erro` : undefined}
-            />
+            <div className={classeCaixaCampo}>
+              <input
+                id={idNome}
+                name="nome"
+                autoComplete="name"
+                required
+                placeholder="Seu nome"
+                className={classeCampo}
+                aria-invalid={erroDe("nome") ? true : undefined}
+                aria-describedby={erroDe("nome") ? `${idNome}-erro` : undefined}
+              />
+            </div>
             {erroDe("nome") && (
               <p id={`${idNome}-erro`} className="mt-1 text-sm font-medium text-secundaria">
                 {erroDe("nome")}
@@ -190,17 +294,19 @@ export function AuthForm({
           <label htmlFor={idEmail} className="mb-1 block text-sm font-semibold">
             E-mail
           </label>
-          <input
-            id={idEmail}
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            placeholder="voce@exemplo.com"
-            className={classeCampo}
-            aria-invalid={erroDe("email") ? true : undefined}
-            aria-describedby={erroDe("email") ? `${idEmail}-erro` : undefined}
-          />
+          <div className={classeCaixaCampo}>
+            <input
+              id={idEmail}
+              name="email"
+              type="email"
+              autoComplete="email"
+              required
+              placeholder="voce@exemplo.com"
+              className={classeCampo}
+              aria-invalid={erroDe("email") ? true : undefined}
+              aria-describedby={erroDe("email") ? `${idEmail}-erro` : undefined}
+            />
+          </div>
           {erroDe("email") && (
             <p id={`${idEmail}-erro`} className="mt-1 text-sm font-medium text-secundaria">
               {erroDe("email")}
@@ -211,7 +317,7 @@ export function AuthForm({
           <label htmlFor={idSenha} className="mb-1 block text-sm font-semibold">
             Senha
           </label>
-          <div className="relative">
+          <div className={`relative ${classeCaixaCampo ?? ""}`}>
             <input
               ref={senhaRef}
               id={idSenha}
@@ -236,11 +342,18 @@ export function AuthForm({
               <IconeOlho riscado={!senhaVisivel} />
             </button>
           </div>
-          {criando && !erroDe("senha") && (
-            <p id={`${idSenha}-dica`} className="mt-1 text-xs text-primaria/80">
-              Pelo menos 8 caracteres.
-            </p>
-          )}
+          {criando &&
+            !erroDe("senha") &&
+            (vidro ? (
+              <p id={`${idSenha}-dica`} className="mt-1.5 flex items-center gap-2 text-xs text-primaria/80">
+                <PotinhoDaSenha nivel={Math.min(tamanhoSenha / SENHA_MINIMA, 1)} />
+                {dicaDaSenha(tamanhoSenha)}
+              </p>
+            ) : (
+              <p id={`${idSenha}-dica`} className="mt-1 text-xs text-primaria/80">
+                Pelo menos {SENHA_MINIMA} caracteres.
+              </p>
+            ))}
           {erroDe("senha") && (
             <p id={`${idSenha}-erro`} className="mt-1 text-sm font-medium text-secundaria">
               {erroDe("senha")}
@@ -255,12 +368,22 @@ export function AuthForm({
 
         {/* aria-disabled (e não disabled) durante o envio: um botão desabilitado perde o foco para o <body>. */}
         <button
+          ref={botaoRef}
           type="submit"
           aria-disabled={enviando || undefined}
           className={`${
-            vidro ? "btn-primario min-h-12 w-full rounded-xl bg-primaria text-base hover:bg-secundaria" : "btn-primario w-full"
+            vidro ? "btn-primario botao-geleia min-h-12 w-full rounded-xl bg-primaria text-base hover:bg-primaria" : "btn-primario w-full"
           } aria-disabled:cursor-not-allowed aria-disabled:opacity-60`}
         >
+          {vidro && (
+            <span aria-hidden="true" className="geleia-nivel" data-vazio={nivel === 0 || undefined} style={{ "--geleia": alturaDaGeleia(nivel) } as CSSProperties}>
+              <span ref={ondaRef} className="geleia-onda">
+                <svg viewBox="0 0 200 10" preserveAspectRatio="none" className="block size-full" fill="currentColor">
+                  <path d="M0 5Q12.5 0 25 5T50 5T75 5T100 5T125 5T150 5T175 5T200 5V10H0Z" />
+                </svg>
+              </span>
+            </span>
+          )}
           {enviando ? "Aguarde…" : criando ? "Criar conta e continuar" : "Entrar"}
         </button>
       </form>
@@ -283,6 +406,42 @@ export function AuthForm({
         </>
       )}
     </div>
+  );
+}
+
+/** Dica da senha nova: quantos caracteres faltam até "dar o ponto", como a geleia no fogo. */
+function dicaDaSenha(tamanho: number) {
+  if (tamanho === 0) return `Pelo menos ${SENHA_MINIMA} caracteres.`;
+  const faltam = SENHA_MINIMA - tamanho;
+  if (faltam <= 0) return "Senha no ponto.";
+  return faltam === 1 ? "Falta 1 caractere." : `Faltam ${faltam} caracteres.`;
+}
+
+/** Potinho que enche de geleia até a senha ter o mínimo de caracteres (decorativo: a dica ao lado diz o mesmo). */
+function PotinhoDaSenha({ nivel }: { nivel: number }) {
+  const recorte = `${useId()}-potinho`;
+  const interior = "M3.5 7.5h9v8a3 3 0 0 1-3 3h-3a3 3 0 0 1-3-3Z";
+  return (
+    <svg viewBox="0 0 16 20" className="h-6 w-[1.2rem] shrink-0 overflow-visible" aria-hidden="true">
+      <defs>
+        <clipPath id={recorte}>
+          <path d={interior} />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${recorte})`}>
+        {/* 11 = altura do interior do pote (de y 7,5 a 18,5); a geleia sobe com um leve passar do ponto. */}
+        <rect
+          x="2"
+          y="7.5"
+          width="12"
+          height="12"
+          className="fill-secundaria transition-transform duration-500 ease-[cubic-bezier(0.34,1.4,0.64,1)]"
+          style={{ transform: `translateY(${(1 - nivel) * 11}px)` }}
+        />
+      </g>
+      <path d={interior} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <rect x="2.5" y="3.5" width="11" height="3.2" rx="1" className={`fill-accent2 transition-transform duration-300 ${nivel === 1 ? "-translate-y-0.5 -rotate-6" : ""}`} style={{ transformBox: "fill-box", transformOrigin: "center" }} />
+    </svg>
   );
 }
 

@@ -1,17 +1,37 @@
 "use client";
 
 import Image from "next/image";
-import { useAnimate, useInView, useReducedMotion, type AnimationPlaybackControls, type AnimationSequence } from "framer-motion";
+import {
+  useAnimate,
+  useInView,
+  useMotionValue,
+  useMotionValueEvent,
+  useReducedMotion,
+  useSpring,
+  type AnimationPlaybackControls,
+  type AnimationSequence,
+} from "framer-motion";
 import { useCallback, useEffect, useId, useRef } from "react";
+import { EVENTO_RESULTADO_LOGIN, type ResultadoLogin } from "@/components/login/eventos";
 
 /*
  * Cena do card da direita do login: o pote real de Maracujá (foto recortada em camadas) abre
  * sozinho. A tampa desenrosca e sobe inclinada, uma colher de pau entra, tira geleia e uma gota
  * pinga de volta. Repete quando a pessoa foca um campo do formulário.
  *
+ * Depois de aberto, o pote responde a quem está na tela:
+ *   - o mouse sobre o card move as camadas em profundidades diferentes (colher mais, brilho
+ *     menos), numa mola frouxa que passa do ponto e volta, como gelatina;
+ *   - um clique/toque no pote (o cursor vira uma colher) faz ele chacoalhar e a geleia ondular;
+ *   - o formulário avisa o resultado (login/eventos.ts): num erro o pote balança "não", num
+ *     acerto dá um pulinho.
+ * O "balanço" é feito nas camadas do corpo do pote (data-corpo), com origem no fundo dele. A
+ * colher fica de fora (está "na mão"); a tampa só vai junto quando está no pote (data-acompanha).
+ *
  * Camadas (de trás para a frente), todas no MESMO sistema de coordenadas da foto original
  * (fotos-originais/maracuja-125g.png, 768 px de largura), com a cena de x 0–768 e y −80–880:
- *   boca (superfície da geleia) → onda → colher → gota → pote + gargalo → borda da frente → tampa
+ *   brilho, sombra → [corpo: boca (superfície da geleia), ondas] → colher → gota →
+ *   [corpo: pote, gargalo, borda da frente] → tampa → área de toque (transparente)
  * A colher passa ATRÁS do pote: ao descer, some atrás da borda da frente, como se entrasse nele.
  * As camadas animadas ocupam a cena inteira, então deslocamentos em % valem em qualquer tamanho.
  *
@@ -34,9 +54,21 @@ const caixa = (x: number, y: number, largura: number) => ({
 });
 /** Ponto da cena como transform-origin de uma camada. */
 const origem = (x: number, y: number) => `${(x / VW) * 100}% ${((y - Y0) / VH) * 100}%`;
+/**
+ * Paralaxe de uma camada: `--px`/`--py` (−1 a 1, posição do mouse no card) vezes a profundidade,
+ * em % da camada. Usa a propriedade `translate`, que se soma ao `transform` das animações.
+ */
+const paralaxe = (profundidade: number) =>
+  `calc(var(--px, 0) * ${-profundidade}%) calc(var(--py, 0) * ${-profundidade * 0.7}%)`;
 
 // Boca do pote (elipse da superfície da geleia) e pontos da coreografia, medidos na foto.
 const BOCA = { cx: 383, cy: 258, rx: 198, ry: 21 };
+/** Centro do fundo do pote: origem do balanço do corpo (achata e estica a partir da mesa). */
+const BASE_POTE = { x: 383, y: 786 };
+/** Área do pote que responde ao clique/toque: do topo da tampa fechada até o fundo. */
+const AREA_TOQUE = { x: 136, y: 188, largura: 494, altura: 598 };
+/** Camadas do corpo do pote: balançam a partir do fundo e ficam no plano do meio do paralaxe. */
+const ESTILO_CORPO = { transformOrigin: origem(BASE_POTE.x, BASE_POTE.y), translate: paralaxe(2) };
 const CENTRO_TAMPA = { x: 383, y: 240 };
 const CONCHA = { x: 452, y: 196 }; // centro da concha da colher em repouso
 /** Escala da colher: a concha fica com ~1/3 da largura do pote, como uma colher de pau de verdade. */
@@ -97,6 +129,42 @@ const QUADRO_PARADO: AnimationSequence = [
   ["[data-gota]", { opacity: 1, scale: 1, y: uy(0) }, { duration: 0, at: 0 }],
 ];
 
+/*
+ * Reações do pote (clique, erro, acerto). Podem vir em qualquer fase da coreografia, então o
+ * alvo muda: com o pote aberto, só o corpo balança (a tampa flutua à parte); com a tampa no pote
+ * (ou a caminho), ela vai junto pelo invólucro data-acompanha — senão abriria uma fresta entre os dois.
+ */
+const CORPO = "[data-corpo]";
+const CORPO_E_TAMPA = "[data-corpo], [data-acompanha]";
+const alvoDoBalanco = (estado: Estado) => (estado === "aberto" ? CORPO : CORPO_E_TAMPA);
+
+/** Clique/toque no pote: ele achata, estica e assenta como gelatina, e a superfície ondula. */
+const chacoalhar = (alvo: string): AnimationSequence => [
+  [alvo, { scaleX: [1, 1.06, 0.96, 1.025, 0.99, 1], scaleY: [1, 0.93, 1.05, 0.98, 1.01, 1] }, { duration: 0.85, ease: "easeInOut" }],
+  ["[data-sombra]", { scaleX: [1, 1.07, 0.96, 1.02, 1] }, { duration: 0.85, ease: "easeInOut", at: 0 }],
+  ["[data-onda-toque]", { opacity: [0.9, 0], scale: [0.3, 1.2] }, { duration: 0.8, ease: "easeOut", at: 0.1 }],
+];
+
+/** Erro no login: o pote balança "não" (gira um pouco para cada lado, a partir do fundo). */
+const negar = (alvo: string): AnimationSequence => [
+  [alvo, { rotate: [0, -4, 3.5, -2.5, 1.2, 0] }, { duration: 0.75, ease: "easeInOut" }],
+  ["[data-sombra]", { scaleX: [1, 0.97, 1.02, 0.99, 1] }, { duration: 0.75, ease: "easeInOut", at: 0 }],
+];
+
+/** Login certo: o pote agacha, pula e assenta (a sombra encolhe enquanto ele está no ar). */
+const MOMENTOS_PULO = [0, 0.18, 0.5, 0.78, 1];
+const comemorar = (alvo: string): AnimationSequence => [
+  [
+    alvo,
+    { y: [uy(0), uy(6), uy(-46), uy(0), uy(0)], scaleX: [1, 1.05, 0.96, 1.06, 1], scaleY: [1, 0.94, 1.05, 0.92, 1] },
+    { duration: 0.8, times: MOMENTOS_PULO, ease: "easeInOut" },
+  ],
+  ["[data-sombra]", { scaleX: [1, 1.04, 0.78, 1.06, 1], opacity: [1, 1, 0.55, 1, 1] }, { duration: 0.8, times: MOMENTOS_PULO, ease: "easeInOut", at: 0 }],
+];
+
+/** Mola do paralaxe: frouxa de propósito (passa do ponto e volta), para o pote "tremelicar". */
+const MOLA_PARALAXE = { stiffness: 140, damping: 11, mass: 0.7 };
+
 /** Intervalo mínimo entre uma repetição pelo foco e outra (passar do e-mail para a senha não repete). */
 const INTERVALO_REPETICAO_MS = 8000;
 
@@ -109,12 +177,22 @@ type Estado = "fechado" | "tocando" | "aberto";
  * Como há movimento contínuo (tampa flutuando, gotas), existe o controle "Pausar animação"
  * (WCAG 2.2.2), fora da área aria-hidden. Com "reduzir movimento" no sistema a cena fica parada
  * no quadro final e o controle some. Fora da tela (rota escondida, que continua montada), pausa.
+ * Pausado ou com menos movimento, o pote também deixa de reagir ao mouse, ao toque e ao formulário.
  */
 export function AnimatedJamJar() {
   const [escopo, animar] = useAnimate<HTMLDivElement>();
   const reduzir = useReducedMotion();
   const visivel = useInView(escopo);
   const id = useId();
+  const raiz = useRef<HTMLDivElement>(null);
+
+  // Paralaxe: o alvo segue o mouse; a mola leva até lá e escreve --px/--py na cena.
+  const alvoX = useMotionValue(0);
+  const alvoY = useMotionValue(0);
+  const molaX = useSpring(alvoX, MOLA_PARALAXE);
+  const molaY = useSpring(alvoY, MOLA_PARALAXE);
+  useMotionValueEvent(molaX, "change", (v) => escopo.current?.style.setProperty("--px", v.toFixed(3)));
+  useMotionValueEvent(molaY, "change", (v) => escopo.current?.style.setProperty("--py", v.toFixed(3)));
 
   const estado = useRef<Estado>("fechado");
   const geracao = useRef(0); // muda ao desmontar: coreografias em andamento param no próximo passo
@@ -219,20 +297,63 @@ export function AnimatedJamJar() {
     };
   }, [reduzir, abrir, animar, pararLacos, pararTudo]);
 
-  // Foco num campo do formulário (no mesmo <main>) repete a cena, no máximo a cada 8 s.
+  // Formulário no mesmo <main>: o foco num campo repete a cena (no máximo a cada 8 s) e o
+  // resultado do envio faz o pote reagir (balança "não" no erro, pula no acerto).
   useEffect(() => {
     if (reduzir !== false) return;
     const pagina = escopo.current?.closest("main");
     if (!pagina) return;
+    const podeReagir = () => !pausadoPelaPessoa.current && visivelRef.current;
     const aoFocar = (e: FocusEvent) => {
       if (!(e.target instanceof HTMLInputElement) || e.target.type === "checkbox") return;
-      if (pausadoPelaPessoa.current || !visivelRef.current || estado.current !== "aberto") return;
+      if (!podeReagir() || estado.current !== "aberto") return;
       if (performance.now() - fimUltima.current < INTERVALO_REPETICAO_MS) return;
       void repetir();
     };
+    // Reage mesmo no meio da repetição (quem digita rápido envia antes de o pote reabrir).
+    const aoResultado = (e: Event) => {
+      if (!podeReagir()) return;
+      const resultado = (e as CustomEvent<ResultadoLogin>).detail;
+      void rodar((resultado === "erro" ? negar : comemorar)(alvoDoBalanco(estado.current)));
+    };
     pagina.addEventListener("focusin", aoFocar);
-    return () => pagina.removeEventListener("focusin", aoFocar);
-  }, [reduzir, repetir, escopo]);
+    pagina.addEventListener(EVENTO_RESULTADO_LOGIN, aoResultado);
+    return () => {
+      pagina.removeEventListener("focusin", aoFocar);
+      pagina.removeEventListener(EVENTO_RESULTADO_LOGIN, aoResultado);
+    };
+  }, [reduzir, repetir, rodar, escopo]);
+
+  // Paralaxe pelo mouse sobre o card inteiro (no toque não há "passar por cima": fica parado).
+  useEffect(() => {
+    if (reduzir !== false) return;
+    const cartao = raiz.current?.parentElement;
+    if (!cartao) return;
+    const limitar = (v: number) => Math.max(-1, Math.min(1, v));
+    const aoMover = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || pausadoPelaPessoa.current) return;
+      const r = cartao.getBoundingClientRect();
+      alvoX.set(limitar(((e.clientX - r.left) / r.width) * 2 - 1));
+      alvoY.set(limitar(((e.clientY - r.top) / r.height) * 2 - 1));
+    };
+    const aoSair = () => {
+      alvoX.set(0);
+      alvoY.set(0);
+    };
+    cartao.addEventListener("pointermove", aoMover);
+    cartao.addEventListener("pointerleave", aoSair);
+    return () => {
+      cartao.removeEventListener("pointermove", aoMover);
+      cartao.removeEventListener("pointerleave", aoSair);
+      aoSair();
+    };
+  }, [reduzir, alvoX, alvoY]);
+
+  /** Clique/toque no pote: chacoalha como gelatina. */
+  function cutucar() {
+    if (reduzir !== false || pausadoPelaPessoa.current) return;
+    void rodar(chacoalhar(alvoDoBalanco(estado.current)));
+  }
 
   // Fora da tela (rota escondida com display:none, aba de outra página): pausa tudo.
   useEffect(() => {
@@ -245,8 +366,16 @@ export function AnimatedJamJar() {
   function alternarPausa(pausar: boolean) {
     pausadoPelaPessoa.current = pausar;
     const todos = [...ativos.current, ...lacos.current];
-    if (pausar) todos.forEach((c) => c.pause());
-    else if (visivelRef.current) todos.forEach((c) => c.play());
+    // Pausado, o pote não responde ao clique: o cursor de colher some (globals.css).
+    raiz.current?.toggleAttribute("data-pausado", pausar);
+    if (pausar) {
+      todos.forEach((c) => c.pause());
+      // Pausar é parar tudo, inclusive o paralaxe: volta ao centro sem a mola.
+      alvoX.set(0);
+      alvoY.set(0);
+      molaX.jump(0);
+      molaY.jump(0);
+    } else if (visivelRef.current) todos.forEach((c) => c.play());
   }
 
   const recorteBoca = `${id}-boca`;
@@ -259,10 +388,14 @@ export function AnimatedJamJar() {
   return (
     <>
       {/* No desktop a assinatura "Feito com amor, para você." fica embaixo do card: a cena para acima dela. */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 bottom-0 grid place-items-center [container-type:size] lg:bottom-16">
+      <div
+        ref={raiz}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 bottom-0 grid place-items-center [container-type:size] lg:bottom-16"
+      >
         <div ref={escopo} className="relative aspect-[4/5] w-[min(100cqw,80cqh)] select-none">
-          {/* Fundo: brilho, sombra no chão e a boca do pote (superfície da geleia, vista de cima). */}
-          <svg viewBox={VIEWBOX} className="absolute inset-0 size-full" focusable="false">
+          {/* Fundo: brilho atrás do pote e sombra no chão (a sombra encolhe quando o pote pula). */}
+          <svg viewBox={VIEWBOX} className="absolute inset-0 size-full" style={{ translate: paralaxe(1) }} focusable="false">
             <defs>
               <radialGradient id={`${id}-brilho`}>
                 <stop offset="0" stopColor="#E7B7B7" stopOpacity="0.45" />
@@ -272,35 +405,55 @@ export function AnimatedJamJar() {
                 <stop offset="0" stopColor="#6B1D2A" stopOpacity="0.32" />
                 <stop offset="1" stopColor="#6B1D2A" stopOpacity="0" />
               </radialGradient>
-              <clipPath id={recorteBoca}>
-                <ellipse cx={BOCA.cx} cy={BOCA.cy} rx={BOCA.rx} ry={BOCA.ry} />
-              </clipPath>
-              <radialGradient id={sombreadoBoca} cx="0.5" cy="0.62" r="0.62">
-                <stop offset="0.55" stopColor="#5a2e00" stopOpacity="0" />
-                <stop offset="1" stopColor="#5a2e00" stopOpacity="0.55" />
-              </radialGradient>
             </defs>
             <circle cx="383" cy="470" r="400" fill={`url(#${id}-brilho)`} />
-            <ellipse cx="383" cy="786" rx="240" ry="20" fill={`url(#${id}-sombra)`} />
-            <g clipPath={`url(#${recorteBoca})`}>
-              {/* Polpa real (faixa da própria foto, achatada na perspectiva da boca). */}
-              <image href="/login/superficie.webp" x={BOCA.cx - 200} y={BOCA.cy - 21} width="400" height="44" preserveAspectRatio="none" />
-              <ellipse cx={BOCA.cx} cy={BOCA.cy} rx={BOCA.rx} ry={BOCA.ry} fill={`url(#${sombreadoBoca})`} />
-              <ellipse cx="330" cy="252" rx="70" ry="4" fill="#fff" fillOpacity="0.3" />
-            </g>
-            {/* Aro de trás do vidro */}
-            <path d={`M${BOCA.cx - 200} ${BOCA.cy}A200 22 0 0 1 ${BOCA.cx + 200} ${BOCA.cy}`} fill="none" stroke="#fff" strokeOpacity="0.7" strokeWidth="3" />
           </svg>
-
-          {/* Onda que a gota faz ao cair na geleia */}
-          <div data-onda className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(PONTA_GOTA.x, BOCA.cy + 3) }}>
+          <div data-sombra className="absolute inset-0" style={{ transformOrigin: origem(BASE_POTE.x, BASE_POTE.y), translate: paralaxe(2) }}>
             <svg viewBox={VIEWBOX} className="size-full" focusable="false">
-              <ellipse cx={PONTA_GOTA.x} cy={BOCA.cy + 3} rx="40" ry="5" fill="none" stroke="#FFE2A8" strokeWidth="3" />
+              <ellipse cx={BASE_POTE.x} cy={BASE_POTE.y} rx="240" ry="20" fill={`url(#${id}-sombra)`} />
             </svg>
           </div>
 
+          {/* Corpo, parte de trás: a boca do pote (superfície da geleia, vista de cima) e as ondas nela. */}
+          <div data-corpo className="absolute inset-0" style={ESTILO_CORPO}>
+            <svg viewBox={VIEWBOX} className="absolute inset-0 size-full" focusable="false">
+              <defs>
+                <clipPath id={recorteBoca}>
+                  <ellipse cx={BOCA.cx} cy={BOCA.cy} rx={BOCA.rx} ry={BOCA.ry} />
+                </clipPath>
+                <radialGradient id={sombreadoBoca} cx="0.5" cy="0.62" r="0.62">
+                  <stop offset="0.55" stopColor="#5a2e00" stopOpacity="0" />
+                  <stop offset="1" stopColor="#5a2e00" stopOpacity="0.55" />
+                </radialGradient>
+              </defs>
+              <g clipPath={`url(#${recorteBoca})`}>
+                {/* Polpa real (faixa da própria foto, achatada na perspectiva da boca). */}
+                <image href="/login/superficie.webp" x={BOCA.cx - 200} y={BOCA.cy - 21} width="400" height="44" preserveAspectRatio="none" />
+                <ellipse cx={BOCA.cx} cy={BOCA.cy} rx={BOCA.rx} ry={BOCA.ry} fill={`url(#${sombreadoBoca})`} />
+                <ellipse cx="330" cy="252" rx="70" ry="4" fill="#fff" fillOpacity="0.3" />
+              </g>
+              {/* Aro de trás do vidro */}
+              <path d={`M${BOCA.cx - 200} ${BOCA.cy}A200 22 0 0 1 ${BOCA.cx + 200} ${BOCA.cy}`} fill="none" stroke="#fff" strokeOpacity="0.7" strokeWidth="3" />
+            </svg>
+
+            {/* Onda que a gota faz ao cair na geleia */}
+            <div data-onda className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(PONTA_GOTA.x, BOCA.cy + 3) }}>
+              <svg viewBox={VIEWBOX} className="size-full" focusable="false">
+                <ellipse cx={PONTA_GOTA.x} cy={BOCA.cy + 3} rx="40" ry="5" fill="none" stroke="#FFE2A8" strokeWidth="3" />
+              </svg>
+            </div>
+
+            {/* Ondulação do toque: dois anéis concêntricos que se abrem na superfície inteira */}
+            <div data-onda-toque className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(BOCA.cx, BOCA.cy) }}>
+              <svg viewBox={VIEWBOX} className="size-full" focusable="false">
+                <ellipse cx={BOCA.cx} cy={BOCA.cy} rx="150" ry="14" fill="none" stroke="#FFE2A8" strokeWidth="3" />
+                <ellipse cx={BOCA.cx} cy={BOCA.cy} rx="88" ry="8" fill="none" stroke="#FFE2A8" strokeWidth="2.5" />
+              </svg>
+            </div>
+          </div>
+
           {/* Colher de pau (com a porção de geleia na concha, que aparece ao sair do pote) */}
-          <div data-colher className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(CONCHA.x, CONCHA.y) }}>
+          <div data-colher className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(CONCHA.x, CONCHA.y), translate: paralaxe(3) }}>
             <svg viewBox={VIEWBOX} className="size-full" focusable="false">
               <defs>
                 {/* Sombreado cilíndrico da madeira: claro no alto, escuro na borda de baixo. */}
@@ -345,7 +498,7 @@ export function AnimatedJamJar() {
           </div>
 
           {/* Gota que se forma na ponta da concha e cai de volta no pote */}
-          <div data-gota className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(PONTA_GOTA.x, PONTA_GOTA.y) }}>
+          <div data-gota className="absolute inset-0 opacity-0" style={{ transformOrigin: origem(PONTA_GOTA.x, PONTA_GOTA.y), translate: paralaxe(3) }}>
             <svg viewBox={VIEWBOX} className="size-full" focusable="false">
               <defs>
                 <radialGradient id={geleiaGota} cx="0.38" cy="0.6" r="0.7">
@@ -361,54 +514,66 @@ export function AnimatedJamJar() {
             </svg>
           </div>
 
-          {/* Pote (foto) e o gargalo que a tampa escondia (clonado da rosca da própria foto) */}
-          <Image
-            ref={(el) => {
-              imagens.current[0] = el;
-            }}
-            src="/login/pote.webp"
-            alt=""
-            width={494}
-            height={500}
-            loading="eager"
-            draggable={false}
-            sizes="(min-width: 1024px) 340px, 60vw"
-            className="absolute h-auto max-w-none"
-            style={caixa(136, 281, 494)}
-          />
-          <Image
-            src="/login/gargalo.webp"
-            alt=""
-            width={416}
-            height={43}
-            loading="eager"
-            draggable={false}
-            sizes="(min-width: 1024px) 290px, 50vw"
-            className="absolute h-auto max-w-none"
-            style={caixa(176, 250, 416)}
-          />
-          {/* Borda da frente da boca, por cima da colher (é ela que "esconde" a concha ao entrar) */}
-          <svg viewBox={VIEWBOX} className="absolute inset-0 size-full" focusable="false">
-            <path d={`M${BOCA.cx - 200} ${BOCA.cy}A200 22 0 0 0 ${BOCA.cx + 200} ${BOCA.cy}`} fill="none" stroke="#fff" strokeOpacity="0.85" strokeWidth="3" />
-          </svg>
-
-          {/* Tampa (foto) */}
-          <div data-tampa className="absolute inset-0" style={{ transformOrigin: origem(CENTRO_TAMPA.x, CENTRO_TAMPA.y) }}>
+          {/* Corpo, parte da frente: o pote (foto) e o gargalo que a tampa escondia (clonado da rosca da própria foto) */}
+          <div data-corpo className="absolute inset-0" style={ESTILO_CORPO}>
             <Image
               ref={(el) => {
-                imagens.current[1] = el;
+                imagens.current[0] = el;
               }}
-              src="/login/tampa.webp"
+              src="/login/pote.webp"
               alt=""
-              width={486}
-              height={100}
+              width={494}
+              height={500}
               loading="eager"
               draggable={false}
               sizes="(min-width: 1024px) 340px, 60vw"
               className="absolute h-auto max-w-none"
-              style={caixa(140, 188, 486)}
+              style={caixa(136, 281, 494)}
             />
+            <Image
+              src="/login/gargalo.webp"
+              alt=""
+              width={416}
+              height={43}
+              loading="eager"
+              draggable={false}
+              sizes="(min-width: 1024px) 290px, 50vw"
+              className="absolute h-auto max-w-none"
+              style={caixa(176, 250, 416)}
+            />
+            {/* Borda da frente da boca, por cima da colher (é ela que "esconde" a concha ao entrar) */}
+            <svg viewBox={VIEWBOX} className="absolute inset-0 size-full" focusable="false">
+              <path d={`M${BOCA.cx - 200} ${BOCA.cy}A200 22 0 0 0 ${BOCA.cx + 200} ${BOCA.cy}`} fill="none" stroke="#fff" strokeOpacity="0.85" strokeWidth="3" />
+            </svg>
           </div>
+
+          {/* Tampa (foto). O invólucro acompanha o balanço do corpo quando ela está no pote e fica no
+              mesmo plano do paralaxe (fechada, não pode desencaixar do gargalo). */}
+          <div data-acompanha className="absolute inset-0" style={ESTILO_CORPO}>
+            <div data-tampa className="absolute inset-0" style={{ transformOrigin: origem(CENTRO_TAMPA.x, CENTRO_TAMPA.y) }}>
+              <Image
+                ref={(el) => {
+                  imagens.current[1] = el;
+                }}
+                src="/login/tampa.webp"
+                alt=""
+                width={486}
+                height={100}
+                loading="eager"
+                draggable={false}
+                sizes="(min-width: 1024px) 340px, 60vw"
+                className="absolute h-auto max-w-none"
+                style={caixa(140, 188, 486)}
+              />
+            </div>
+          </div>
+
+          {/* Onde o pote responde ao clique/toque; no mouse, o cursor vira uma colher de pau. */}
+          <div
+            className="cursor-colher pointer-events-auto absolute touch-manipulation"
+            style={{ ...caixa(AREA_TOQUE.x, AREA_TOQUE.y, AREA_TOQUE.largura), height: `${(AREA_TOQUE.altura / VH) * 100}%` }}
+            onPointerDown={cutucar}
+          />
         </div>
       </div>
 
