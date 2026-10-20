@@ -1,29 +1,40 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { avisarResultadoLogin, movimentoReduzido } from "@/components/login/eventos";
+import { MAX_BYTES_SENHA } from "@/lib/limites";
 
 type Modo = "entrar" | "criar";
 
 const SENHA_MINIMA = 8;
+/** Parecido com o z.email() do servidor: precisa de domínio com ponto e final de 2+ letras. */
+const EMAIL_PROVAVEL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
+
+type MedidaSenha = { tamanho: number; longa: boolean };
 
 /**
- * Quanto do formulário já está pronto, de 0 a 1 (a altura da geleia no botão da tela /login):
- * nome preenchido (ao criar conta), e-mail com cara de e-mail e senha digitada (ao criar, com o
- * mínimo de caracteres). É só um indicador: a validação de verdade continua no servidor.
+ * Quanto do formulário já está pronto, de 0 a 1 (a altura da geleia no botão da tela /login).
+ * Segue as regras do servidor (registroSchema/loginSchema em lib/validacao.ts) para o botão não
+ * "encher" com algo que vai ser recusado: nome com 2+ letras (ao criar conta), e-mail plausível e
+ * senha digitada (ao criar, de 8 caracteres a 72 bytes). A validação de verdade continua no servidor.
  */
 function medirPreenchimento(formulario: HTMLFormElement, criando: boolean) {
   const dados = new FormData(formulario);
   const texto = (campo: string) => String(dados.get(campo) ?? "");
-  const senha = texto("senha");
+  const email = texto("email").trim();
+  const senhaDigitada = texto("senha");
+  const senha: MedidaSenha = {
+    tamanho: senhaDigitada.length,
+    longa: new TextEncoder().encode(senhaDigitada).length > MAX_BYTES_SENHA,
+  };
   const passos = [
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(texto("email").trim()),
-    criando ? senha.length >= SENHA_MINIMA : senha.length > 0,
+    EMAIL_PROVAVEL.test(email) && email.length <= 160,
+    criando ? senha.tamanho >= SENHA_MINIMA && !senha.longa : senha.tamanho > 0,
   ];
-  if (criando) passos.push(texto("nome").trim().length > 0);
-  return { nivel: passos.filter(Boolean).length / passos.length, tamanhoSenha: senha.length };
+  if (criando) passos.push(texto("nome").trim().length >= 2);
+  return { nivel: passos.filter(Boolean).length / passos.length, senha };
 }
 
 /**
@@ -37,7 +48,8 @@ const alturaDaGeleia = (nivel: number) => (nivel === 0 ? 0 : nivel === 1 ? 1 : 0
 const MARULHO: Keyframe[] = [
   { transform: "translateX(-50%) scaleY(1.5)" },
   { transform: "translateX(-25%) scaleY(0.9)", offset: 0.45 },
-  { transform: "translateX(0%) scaleY(0.35)" },
+  // Termina na altura de repouso da crista (.geleia-onda no globals.css), sem pulinho no fim.
+  { transform: "translateX(0%) scaleY(0.5)" },
 ];
 /** Enviando: a geleia fica mexendo até a resposta chegar. */
 const MEXENDO: Keyframe[] = [{ transform: "translateX(-50%) scaleY(0.9)" }, { transform: "translateX(0%) scaleY(0.9)" }];
@@ -101,7 +113,7 @@ export function AuthForm({
   const [enviando, setEnviando] = useState(false);
   const [senhaVisivel, setSenhaVisivel] = useState(false);
   const [nivel, setNivel] = useState(0);
-  const [tamanhoSenha, setTamanhoSenha] = useState(0);
+  const [medidaSenha, setMedidaSenha] = useState<MedidaSenha>({ tamanho: 0, longa: false });
   const enviandoRef = useRef(false);
   const alertaRef = useRef<HTMLParagraphElement>(null);
   const tituloRef = useRef<HTMLHeadingElement>(null);
@@ -116,12 +128,15 @@ export function AuthForm({
 
   // A rota escondida (Cache Components) continua no DOM: ao esconder, os Effects são desmontados,
   // e aproveitamos para não deixar a senha digitada guardada lá (nem a geleia que ela enchia).
+  // Ao mostrar de novo, a geleia é medida outra vez (o e-mail pode ter ficado preenchido).
+  const medirAoMostrar = useEffectEvent(() => medir());
   useEffect(() => {
     const campoSenha = senhaRef.current;
+    medirAoMostrar();
     return () => {
       if (campoSenha) campoSenha.value = "";
       setNivel(0);
-      setTamanhoSenha(0);
+      setMedidaSenha({ tamanho: 0, longa: false });
     };
   }, []);
 
@@ -148,7 +163,7 @@ export function AuthForm({
     if (!vidro || !formularioRef.current) return;
     const medida = medirPreenchimento(formularioRef.current, criandoAgora);
     setNivel(medida.nivel);
-    setTamanhoSenha(medida.tamanhoSenha);
+    setMedidaSenha((atual) => (atual.tamanho === medida.senha.tamanho && atual.longa === medida.senha.longa ? atual : medida.senha));
   }
 
   function trocarModo(novo: Modo) {
@@ -345,9 +360,14 @@ export function AuthForm({
           {criando &&
             !erroDe("senha") &&
             (vidro ? (
-              <p id={`${idSenha}-dica`} className="mt-1.5 flex items-center gap-2 text-xs text-primaria/80">
-                <PotinhoDaSenha nivel={Math.min(tamanhoSenha / SENHA_MINIMA, 1)} />
-                {dicaDaSenha(tamanhoSenha)}
+              // A contagem muda a cada tecla: fica só para quem vê (aria-hidden). O campo é descrito
+              // por um texto fixo, para o leitor de tela não reler a dica a cada caractere.
+              <p className="mt-1.5 flex items-center gap-2 text-xs text-primaria/80">
+                <PotinhoDaSenha nivel={medidaSenha.longa ? 1 : Math.min(medidaSenha.tamanho / SENHA_MINIMA, 1)} />
+                <span aria-hidden="true">{dicaDaSenha(medidaSenha)}</span>
+                <span id={`${idSenha}-dica`} className="sr-only">
+                  Pelo menos {SENHA_MINIMA} caracteres.
+                </span>
               </p>
             ) : (
               <p id={`${idSenha}-dica`} className="mt-1 text-xs text-primaria/80">
@@ -410,7 +430,8 @@ export function AuthForm({
 }
 
 /** Dica da senha nova: quantos caracteres faltam até "dar o ponto", como a geleia no fogo. */
-function dicaDaSenha(tamanho: number) {
+function dicaDaSenha({ tamanho, longa }: MedidaSenha) {
+  if (longa) return "Longa demais (acentos e emojis contam mais).";
   if (tamanho === 0) return `Pelo menos ${SENHA_MINIMA} caracteres.`;
   const faltam = SENHA_MINIMA - tamanho;
   if (faltam <= 0) return "Senha no ponto.";

@@ -188,22 +188,25 @@
   }
 }
 
+/* Tremor do hover: alterna esticar na largura e na altura sem nunca encolher abaixo do tamanho
+   real (a área clicável acompanha o transform; se encolhesse, o cursor parado na borda sairia e
+   voltaria do hover, reiniciando a animação sem parar). */
 @keyframes balancar-geleia {
   0%,
   100% {
     transform: none;
   }
   20% {
-    transform: scale(1.04, 0.92);
+    transform: scale(1.05, 1);
   }
   40% {
-    transform: scale(0.97, 1.06);
+    transform: scale(1, 1.08);
   }
   60% {
-    transform: scale(1.02, 0.97);
+    transform: scale(1.02, 1);
   }
   80% {
-    transform: scale(0.995, 1.01);
+    transform: scale(1, 1.015);
   }
 }
 
