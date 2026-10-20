@@ -40,6 +40,16 @@ describe("validação do produto", () => {
     assert.equal(produtoSchema.parse({ ...valido, ativo: undefined }).ativo, false);
   });
 
+  it("\"Pode entrar no Kit Presente\": \"true\"/\"on\" liga, \"false\" desliga, sem o campo fica indefinido", () => {
+    assert.equal(produtoSchema.parse({ ...valido, permitidoEmKit: "true" }).permitidoEmKit, true);
+    assert.equal(produtoSchema.parse({ ...valido, permitidoEmKit: "on" }).permitidoEmKit, true);
+    assert.equal(produtoSchema.parse({ ...valido, permitidoEmKit: "false" }).permitidoEmKit, false);
+    assert.equal(produtoSchema.parse({ ...valido, permitidoEmKit: "qualquer" }).permitidoEmKit, false);
+    // Formulário antigo, sem o campo: a edição mantém o valor do banco e a criação usa o default (fora).
+    const semCampo = produtoSchema.parse(valido);
+    assert.equal("permitidoEmKit" in semCampo, false);
+  });
+
   it("recusa vírgula no sabor, preço zero ou acima do teto, peso quebrado e texto invisível", () => {
     assert.equal(produtoSchema.safeParse({ ...valido, sabor: "Morango, 112g" }).success, false);
     assert.equal(produtoSchema.safeParse({ ...valido, precoCentavos: "0" }).success, false);

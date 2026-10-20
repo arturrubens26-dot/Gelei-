@@ -68,6 +68,10 @@ model Product {
   /// Aparece na loja? Produto com vendas ou produções não pode ser excluído (o histórico aponta
   /// para ele): o admin o oculta da loja.
   ativo      Boolean     @default(true)
+  /// Pode entrar no Kit Presente? Só os potes do tamanho padrão: um pote maior ou mais caro dentro
+  /// da caixa sairia com desconto grande demais. Produto novo nasce FORA do kit (a dona marca no
+  /// painel); o servidor recusa (400) caixa com sabor desmarcado.
+  permitidoEmKit Boolean @default(false) @map("permitido_em_kit")
   orderItems OrderItem[]
   producoes  Producao[]
   fotos      ProdutoFoto[]

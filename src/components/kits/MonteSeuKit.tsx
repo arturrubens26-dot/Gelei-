@@ -42,7 +42,7 @@ const SELOS = [
  */
 export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoDTO[] }) {
   const { abrir } = useCarrinhoUI();
-  const [vagas, setVagas] = useState<(PoteNaVaga | null)[]>(() => Array.from({ length: kit.potes }, () => null));
+  const [vagasGuardadas, setVagas] = useState<(PoteNaVaga | null)[]>(() => Array.from({ length: kit.potes }, () => null));
   const [anuncio, setAnuncio] = useState("");
   // Aviso visível (caixa cheia, faltam sabores). Não é região viva: o anúncio acima já fala.
   const [aviso, setAviso] = useState<string | null>(null);
@@ -51,6 +51,11 @@ export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoD
   const secaoCaixa = useRef<HTMLElement>(null);
 
   const porId = new Map(produtos.map((p) => [p.id, p]));
+  // Um sabor escolhido pode sair da loja com a página aberta (a dona o oculta e a rota volta com
+  // dados novos, mas o estado das vagas fica): a vaga dele passa a contar como livre, e um aviso
+  // diz o que saiu. A próxima ação na caixa já parte das vagas válidas.
+  const vagas = vagasGuardadas.map((v) => (v && porId.has(v.productId) ? v : null));
+  const saiuDaLoja = [...new Set(vagasGuardadas.filter((v) => v && !porId.has(v.productId)).map((v) => separarNome(v!.nome).sabor))];
   const precoCentavos = emCentavos(kit.preco);
   const composicao = composicaoDasVagas(vagas.map((v) => v?.productId ?? null));
   const conferida = conferirComposicao(composicao, kit.potes);
@@ -145,6 +150,7 @@ export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoD
   function tirarUltimo(produto: ProdutoDTO) {
     const indice = vagas.findLastIndex((v) => v?.productId === produto.id);
     if (indice !== -1) tirarDaVaga(indice);
+    else anunciar(`Não há ${separarNome(produto.nome).sabor} na caixa.`);
   }
 
   function adicionar() {
@@ -153,10 +159,16 @@ export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoD
       irParaLista();
       return;
     }
-    const sabores = conferida.composicao.map((s) => {
-      const p = porId.get(s.productId)!;
-      return { productId: p.id, nome: p.nome, quantidade: s.quantidade, pesoGramas: p.pesoGramas, precoAvulso: p.preco, imagemUrl: p.imagemUrl };
-    });
+    // As vagas já são só de sabores à venda; a conferência é defesa, para nunca quebrar em silêncio.
+    const sabores = [];
+    for (const s of conferida.composicao) {
+      const p = porId.get(s.productId);
+      if (!p) {
+        anunciar("Um dos sabores saiu da loja. Escolha outro para completar a caixa.", true);
+        return;
+      }
+      sabores.push({ productId: p.id, nome: p.nome, quantidade: s.quantidade, pesoGramas: p.pesoGramas, precoAvulso: p.preco, imagemUrl: p.imagemUrl });
+    }
     const resultado = acoesCarrinho.adicionarKit({
       kitId: kit.id,
       nome: kit.nome,
@@ -260,11 +272,13 @@ export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoD
                   <span className="whitespace-nowrap">{formatarBRL(p.preco)}</span> avulso
                 </p>
                 <div className="col-start-3 row-start-2 inline-flex items-center rounded-full border border-accent2 bg-white @[26rem]:row-span-2 @[26rem]:row-start-1">
+                  {/* aria-disabled (não disabled): ao tirar o último pote, um botão desabilitado
+                      perderia o foco para o <body> e quem usa teclado perderia o lugar. */}
                   <button
                     type="button"
-                    className="inline-flex size-11 items-center justify-center rounded-full text-xl leading-none hover:bg-accent1/40 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+                    className="inline-flex size-11 items-center justify-center rounded-full text-xl leading-none hover:bg-accent1/40 aria-disabled:cursor-not-allowed aria-disabled:opacity-35 aria-disabled:hover:bg-transparent"
                     aria-label={`Tirar um pote de ${sabor}`}
-                    disabled={naCaixa === 0}
+                    aria-disabled={naCaixa === 0 || undefined}
                     onClick={() => tirarUltimo(p)}
                   >
                     −
@@ -306,6 +320,13 @@ export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoD
       {/* Barra de adicionar: presa ao pé da tela (sticky: some antes do rodapé, sem cobri-lo). No
           tablet/computador vira um cartão no fim da coluna da direita, preso ao pé se a lista for longa. */}
       <div className="@container sticky bottom-0 z-30 -mx-4 border-t-2 border-accent2/60 bg-destaque/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-10px_24px_-18px_rgb(107_29_42/0.6)] backdrop-blur-sm sm:-mx-6 sm:px-6 md:bottom-4 md:col-start-2 md:row-start-4 md:mx-0 md:rounded-md md:border-2 md:p-4 md:shadow-[0_10px_24px_-18px_rgb(107_29_42/0.6)]">
+        {saiuDaLoja.length > 0 && !aviso && (
+          <p className="mb-2 text-sm font-semibold text-primaria">
+            {saiuDaLoja.join(" e ")}{" "}
+            {saiuDaLoja.length > 1 ? "saíram da loja e foram tirados da caixa." : "saiu da loja e foi tirado da caixa."} Escolha outro
+            sabor.
+          </p>
+        )}
         {aviso && (
           <p className="mb-2 text-sm font-semibold text-primaria" id="aviso-kit">
             {aviso}

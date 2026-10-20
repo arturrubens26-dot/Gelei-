@@ -21,8 +21,11 @@ export default function PaginaProdutosAdmin() {
 /** Lido do banco a cada visita (não do cache da loja): mostra também os produtos e kits ocultos. */
 async function Catalogo() {
   const [produtos, kits] = await Promise.all([listarProdutosAdmin(), listarKitsAdmin()]);
-  // Prévia da caixa e conta da economia: só os sabores à venda (os que a cliente pode escolher).
-  const sabores = produtos.filter((p) => p.ativo).map((p) => ({ id: p.id, nome: p.nome, imagemUrl: p.imagemUrl, preco: p.preco }));
+  // Prévia da caixa e conta da economia: só os sabores que a cliente pode escolher (à venda e
+  // marcados "Pode entrar no Kit Presente"), como em listarKitsAdmin.
+  const sabores = produtos
+    .filter((p) => p.ativo && p.permitidoEmKit)
+    .map((p) => ({ id: p.id, nome: p.nome, imagemUrl: p.imagemUrl, preco: p.preco }));
   return (
     <div className="flex flex-col gap-12">
       <ProdutosAdmin produtos={produtos} />

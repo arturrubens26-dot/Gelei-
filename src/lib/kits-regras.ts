@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import { formatarBRL } from "@/lib/dinheiro";
-import { separarNome } from "@/lib/produtos-regras";
+import { ROTULO_PERMITIDO_EM_KIT, separarNome } from "@/lib/produtos-regras";
 import { MAX_PRECO_UNITARIO_CENTAVOS, textoLivreValido } from "@/lib/vendas";
 
 /** A cliente pode repetir sabor na caixa (ex.: 3× Pimenta). Decisão da dona. */
@@ -89,6 +89,34 @@ export function conferirComposicao<S extends SaborNoKit>(
     return { ok: false, motivo: "incompleta", mensagem: `${prefixo} leva ${potesNoPlural(potes)}; vieram ${total}.` };
   }
   return { ok: true, composicao };
+}
+
+/** "Morango, 250g" → "Morango 250g" (o nome do rótulo sem a vírgula, para caber numa frase). */
+const nomeNaFrase = (nome: string) => {
+  const { sabor, peso } = separarNome(nome);
+  return peso ? `${sabor} ${peso}` : sabor;
+};
+
+/**
+ * Sabores da caixa que não podem entrar no kit ("Pode entrar no Kit Presente" desligado no painel:
+ * um pote maior ou mais caro dentro da caixa sairia com desconto grande demais). Devolve a mensagem
+ * do 400 ("Kit Presente: Morango 250g não entra no kit."), ou `null` se todos podem. Cada sabor
+ * aparece uma vez, na ordem em que veio.
+ */
+export function conferirSaboresPermitidos(
+  sabores: readonly { productId: string; nome: string; permitidoEmKit: boolean }[],
+  nomeDoKit: string,
+): string | null {
+  const vistos = new Set<string>();
+  const fora: string[] = [];
+  for (const s of sabores) {
+    if (s.permitidoEmKit || vistos.has(s.productId)) continue;
+    vistos.add(s.productId);
+    fora.push(nomeNaFrase(s.nome));
+  }
+  if (fora.length === 0) return null;
+  const lista = fora.length === 1 ? fora[0] : `${fora.slice(0, -1).join(", ")} e ${fora[fora.length - 1]}`;
+  return `${nomeDoKit}: ${lista} ${fora.length === 1 ? "não entra" : "não entram"} no kit.`;
 }
 
 /**
@@ -185,7 +213,9 @@ function extremosDeEconomia(
 
 /**
  * Faixa de economia enquanto a caixa ainda não está completa ("Economize até R$ 14,00"), a partir
- * dos preços avulsos dos sabores à venda. `null` sem sabores. Os valores nunca são negativos.
+ * dos preços avulsos dos sabores que a cliente pode escolher: passe SÓ os que estão à venda e podem
+ * entrar no kit (`ativo` e `permitidoEmKit`); um pote grande desmarcado inflaria a "economia".
+ * `null` sem sabores. Os valores nunca são negativos.
  */
 export function faixaDeEconomia(
   precoKitCentavos: number,
@@ -210,6 +240,46 @@ export function avisoDePrecoDoKit(precoKitCentavos: number, potes: number, preco
   }
   const maisBaratos = formatarBRL((extremos.minima + precoKitCentavos) / 100);
   return `Com os sabores mais baratos, o kit (${preco}) não sai mais barato que ${potes} potes avulsos (${maisBaratos}). Nessas caixas a loja não mostra "Economize".`;
+}
+
+/** Economia máxima, em % do preço do kit, acima da qual o painel avisa (desconto grande demais). */
+export const DESCONTO_MAXIMO_SEM_AVISO_PERCENTUAL = 30;
+
+/**
+ * O aviso inverso: com os sabores mais caros, a cliente economiza mais de 30% do preço do kit.
+ * Sinal de pote grande ou caro marcado como "Pode entrar no Kit Presente", ou de preço do kit baixo
+ * demais: cada caixa assim pode dar prejuízo. Não bloqueia; `null` quando o desconto é razoável.
+ */
+export function avisoDeDescontoDoKit(precoKitCentavos: number, potes: number, precosAvulsosCentavos: readonly number[]): string | null {
+  const extremos = extremosDeEconomia(precoKitCentavos, potes, precosAvulsosCentavos, PERMITIR_SABOR_REPETIDO);
+  if (!extremos || precoKitCentavos <= 0) return null;
+  // Em inteiros: maxima / preco > 30% ⇔ maxima × 100 > 30 × preco.
+  if (extremos.maxima * 100 <= DESCONTO_MAXIMO_SEM_AVISO_PERCENTUAL * precoKitCentavos) return null;
+  const preco = formatarBRL(precoKitCentavos / 100);
+  const maisCaros = formatarBRL((extremos.maxima + precoKitCentavos) / 100);
+  const economia = formatarBRL(extremos.maxima / 100);
+  const percentual = Math.round((extremos.maxima * 100) / precoKitCentavos);
+  return (
+    `Com os sabores mais caros, ${potes} potes avulsos custam ${maisCaros} e no kit saem por ${preco}: a cliente economiza ${economia} ` +
+    `(${percentual}% do preço do kit). Um desconto tão grande pode dar prejuízo em cada caixa: confira o preço do kit e deixe ` +
+    `"${ROTULO_PERMITIDO_EM_KIT}" marcado só nos potes do tamanho padrão.`
+  );
+}
+
+/**
+ * Os avisos do painel para o kit num texto só, ou `null`: nenhum sabor pode entrar, o kit não sai
+ * mais barato que os avulsos (`avisoDePrecoDoKit`) ou sai barato demais (`avisoDeDescontoDoKit`).
+ * Nenhum bloqueia. `precosAvulsosCentavos`: só os sabores à venda que podem entrar no kit.
+ */
+export function avisosDoKit(precoKitCentavos: number, potes: number, precosAvulsosCentavos: readonly number[]): string | null {
+  if (precosAvulsosCentavos.length === 0) {
+    return `Nenhum sabor à venda está marcado como "${ROTULO_PERMITIDO_EM_KIT}": a cliente não tem o que escolher.`;
+  }
+  const avisos = [
+    avisoDePrecoDoKit(precoKitCentavos, potes, precosAvulsosCentavos),
+    avisoDeDescontoDoKit(precoKitCentavos, potes, precosAvulsosCentavos),
+  ].filter((aviso): aviso is string => aviso !== null);
+  return avisos.length > 0 ? avisos.join(" ") : null;
 }
 
 /** Peso da caixa montada: caixa vazia + potes (entra no frete). */
@@ -333,7 +403,8 @@ const textoDoKit = (campo: string, max: number) =>
 
 /** Edição do kit pelo painel (PATCH /api/admin/kits/[id]). O preço viaja em centavos inteiros. */
 export const kitSchema = z.object({
-  nome: textoDoKit("o nome do kit", 80),
+  // O nome vai em títulos, no carrinho e no pedido: uma linha só.
+  nome: textoDoKit("o nome do kit", 80).refine((v) => !/[\t\n\r]/.test(v), "O nome fica numa linha só: sem quebra de linha nem tabulação."),
   descricao: textoDoKit("a descrição", 300),
   precoCentavos: numeroDoCampo(
     z

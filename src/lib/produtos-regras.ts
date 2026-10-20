@@ -9,6 +9,9 @@ export const MAX_BYTES_FOTO = 2 * 1024 * 1024;
 /** Lado da foto quadrada que o navegador envia. */
 export const LADO_FOTO = 800;
 
+/** Rótulo da caixinha do painel (e citado nos avisos do kit): o mesmo texto nos dois lugares. */
+export const ROTULO_PERMITIDO_EM_KIT = "Pode entrar no Kit Presente";
+
 /** "Morango com Pedaços, 250g" → sabor "Morango com Pedaços" e peso "250g" (como no rótulo). */
 export function separarNome(nome: string): { sabor: string; peso: string | null } {
   const i = nome.lastIndexOf(",");
@@ -73,6 +76,14 @@ export const produtoSchema = z.object({
     .max(MAX_PRECO_UNITARIO_CENTAVOS, "Preço máximo: R$ 999,99."),
   descricao: textoDoProduto("a descrição", 2, 300),
   ativo: z.preprocess((v) => v === true || v === "true" || v === "on", z.boolean()),
+  /**
+   * "Pode entrar no Kit Presente". Sem o campo (formulário de antes desta versão), `undefined`: ao
+   * editar, fica como estava; ao criar, nasce fora do kit (default do banco).
+   */
+  permitidoEmKit: z.preprocess(
+    (v) => (v === undefined || v === null ? undefined : v === true || v === "true" || v === "on"),
+    z.boolean().optional(),
+  ),
 });
 
 export type ProdutoEntrada = z.output<typeof produtoSchema>;

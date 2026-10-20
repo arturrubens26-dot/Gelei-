@@ -3,12 +3,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  DESCONTO_MAXIMO_SEM_AVISO_PERCENTUAL,
   PERMITIR_SABOR_REPETIDO,
   agruparKits,
+  avisoDeDescontoDoKit,
   avisoDePrecoDoKit,
+  avisosDoKit,
   chaveDoKit,
   composicaoDasVagas,
   conferirComposicao,
+  conferirSaboresPermitidos,
   economiaDoKit,
   emCentavos,
   faixaDeEconomia,
@@ -202,6 +206,32 @@ describe("composição e chave", () => {
   });
 });
 
+describe("sabores permitidos no kit", () => {
+  const pimenta = { productId: P, nome: "Pimenta, 112g", permitidoEmKit: true };
+  const morango = { productId: M, nome: "Morango, 112g", permitidoEmKit: true };
+  const morango250 = { productId: "morango-250g", nome: "Morango, 250g", permitidoEmKit: false };
+  const pimenta500 = { productId: "pimenta-500g", nome: "Pimenta, 500g", permitidoEmKit: false };
+
+  it("todos permitidos: null", () => {
+    assert.equal(conferirSaboresPermitidos([pimenta, morango, pimenta], "Kit Presente"), null);
+    assert.equal(conferirSaboresPermitidos([], "Kit Presente"), null);
+  });
+
+  it("um sabor fora: mensagem com o nome do kit e o sabor sem a vírgula do rótulo", () => {
+    assert.equal(conferirSaboresPermitidos([pimenta, morango250, morango], "Kit Presente"), "Kit Presente: Morango 250g não entra no kit.");
+  });
+
+  it("repetido conta uma vez; vários entram juntos, no plural e na ordem em que vieram", () => {
+    assert.equal(conferirSaboresPermitidos([morango250, morango250, pimenta], "Kit Presente"), "Kit Presente: Morango 250g não entra no kit.");
+    assert.equal(
+      conferirSaboresPermitidos([pimenta500, pimenta, morango250], "Caixa"),
+      "Caixa: Pimenta 500g e Morango 250g não entram no kit.",
+    );
+    const tres = conferirSaboresPermitidos([morango250, pimenta500, { productId: "x", nome: "Abacaxi", permitidoEmKit: false }], "Kit Presente");
+    assert.equal(tres, "Kit Presente: Morango 250g, Pimenta 500g e Abacaxi não entram no kit.");
+  });
+});
+
 describe("rateio do preço do kit", () => {
   const sabor = (productId: string, quantidade: number, precoAvulsoCentavos: number) => ({ productId, quantidade, precoAvulsoCentavos });
 
@@ -295,6 +325,46 @@ describe("economia, peso e conteúdo", () => {
     assert.ok(parcial && parcial.includes("mais baratos"), String(parcial));
     const sempre = avisoDePrecoDoKit(6000, 3, [1500, 1800]);
     assert.ok(sempre && sempre.includes("nenhum sabor"), String(sempre));
+  });
+
+  it("avisoDeDescontoDoKit: avisa só acima de 30% do preço do kit (conta em inteiros, sem arredondar)", () => {
+    // 3 × R$ 15 contra R$ 40: economia R$ 5 (12,5%).
+    assert.equal(avisoDeDescontoDoKit(4000, 3, [1500]), null);
+    // Exatamente 30% não avisa; um centavo a mais avisa.
+    assert.equal(avisoDeDescontoDoKit(1000, 1, [1300]), null);
+    assert.ok(avisoDeDescontoDoKit(1000, 1, [1301]));
+    assert.equal(avisoDeDescontoDoKit(4000, 3, []), null);
+    assert.equal(DESCONTO_MAXIMO_SEM_AVISO_PERCENTUAL, 30);
+  });
+
+  it("avisoDeDescontoDoKit explica o risco: valores, percentual e o que conferir", () => {
+    // Com um sabor de R$ 18: 3 × R$ 18 = R$ 54 por R$ 40 → economia R$ 14 (35%).
+    // formatarBRL separa "R$" do valor com espaço inseparável (U+00A0).
+    const aviso = (avisoDeDescontoDoKit(4000, 3, [1500, 1500, 1800]) ?? "").replace(/ /g, " ");
+    for (const trecho of ["R$ 54,00", "R$ 40,00", "R$ 14,00", "35%", "prejuízo", "Pode entrar no Kit Presente"]) {
+      assert.ok(aviso.includes(trecho), `"${trecho}" em: ${aviso}`);
+    }
+  });
+
+  it("pote de 250 g a R$ 28 marcado por engano: a faixa dispara e o aviso aparece; desmarcado, volta ao normal", () => {
+    const padrao = [1500, 1500, 1500];
+    const comPoteGrande = [...padrao, 2800];
+    // Só os permitidos (o que o painel e o montador passam): economia de R$ 5, sem aviso.
+    assert.deepEqual(faixaDeEconomia(4000, 3, padrao), { minima: 500, maxima: 500 });
+    assert.equal(avisosDoKit(4000, 3, padrao), null);
+    // Com o pote grande na conta: 3 × R$ 28 = R$ 84 por R$ 40 (110% do preço do kit).
+    assert.deepEqual(faixaDeEconomia(4000, 3, comPoteGrande), { minima: 500, maxima: 4400 });
+    assert.ok(avisosDoKit(4000, 3, comPoteGrande)?.includes("110%"));
+  });
+
+  it("avisosDoKit: nenhum sabor permitido, os dois avisos juntos, ou null", () => {
+    assert.ok(avisosDoKit(4000, 3, [])?.includes("Nenhum sabor"));
+    assert.equal(avisosDoKit(4000, 3, [1500, 1800].slice(0, 1)), null);
+    // Preços muito diferentes: a caixa mais barata não compensa e a mais cara dá desconto demais.
+    const ambos = avisosDoKit(3500, 3, [1000, 3000]) ?? "";
+    assert.ok(ambos.includes("mais baratos") && ambos.includes("mais caros"), ambos);
+    // Só o aviso de preço (o mesmo texto de avisoDePrecoDoKit).
+    assert.equal(avisosDoKit(4500, 3, [1500, 1800]), avisoDePrecoDoKit(4500, 3, [1500, 1800]));
   });
 
   it("pesoDoKit(150, {P112×2, M125}) dá 499", () => {
@@ -456,6 +526,17 @@ describe("schemas", () => {
     ]) {
       assert.equal(kitSchema.safeParse({ ...kitValido, ...invalido }).success, false, JSON.stringify(invalido));
     }
+  });
+
+  it("kitSchema: o nome fica numa linha só (recusa \\n, \\r e \\t no meio); a descrição aceita quebra de linha", () => {
+    for (const nome of ["Kit\nPresente", "Kit\rPresente", "Kit\tPresente", "Kit\r\nPresente"]) {
+      const r = kitSchema.safeParse({ ...kitValido, nome });
+      assert.equal(r.success, false, JSON.stringify(nome));
+      assert.ok(!r.success && r.error.issues.some((i) => i.path[0] === "nome" && i.message.includes("uma linha só")), JSON.stringify(nome));
+    }
+    // Nas pontas, o trim tira antes de conferir: o nome salvo não tem quebra.
+    assert.equal(kitSchema.parse({ ...kitValido, nome: "\tKit Presente\n" }).nome, "Kit Presente");
+    assert.ok(kitSchema.safeParse({ ...kitValido, descricao: "Três geleias.\nNuma caixa de presente." }).success);
   });
 
   it("kitVisibilidadeSchema aceita só { ativo: boolean }", () => {

@@ -199,12 +199,13 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         const ids: string[] = json.detalhes.indisponiveis;
         const kitIds: string[] = Array.isArray(json.detalhes.kitsIndisponiveis) ? json.detalhes.kitsIndisponiveis : [];
         const avulsos = carrinho.itens.filter((i) => ids.includes(i.productId)).map((i) => i.nome);
-        const caixas = carrinho.kits
-          .filter((k) => kitIds.includes(k.kitId) || k.sabores.some((s) => ids.includes(s.productId)))
-          .map(nomeDaCaixa);
+        const caixasQueSaem = carrinho.kits.filter((k) => kitIds.includes(k.kitId) || k.sabores.some((s) => ids.includes(s.productId)));
+        const caixas = caixasQueSaem.map(nomeDaCaixa);
         const nomes = [...avulsos, ...caixas];
         acoesCarrinho.removerVarios(ids, kitIds);
-        setOfertaMontarKit(caixas.length > 0);
+        // "Montar outro kit" só quando o kit continua à venda (saiu um sabor): se foi o próprio kit
+        // que saiu, o link levaria a "Os kits voltam em breve".
+        setOfertaMontarKit(caixasQueSaem.some((k) => !kitIds.includes(k.kitId)));
         // Só com potes avulsos, a mesma frase de antes dos kits.
         const [um, varios] = caixas.length > 0 ? ["Este item", "Estes itens"] : ["Este produto", "Estes produtos"];
         setErro(

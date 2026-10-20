@@ -27,6 +27,8 @@ export type ProdutoAdminDTO = {
   pesoGramas: number;
   imagemUrl: string;
   ativo: boolean;
+  /** "Pode entrar no Kit Presente": só os potes do tamanho padrão (produto novo nasce fora). */
+  permitidoEmKit: boolean;
   /**
    * Vendas (itens avulsos de pedido + caixas de kit com este sabor) e produções que apontam para o
    * produto: com alguma, ele só pode ser ocultado.
@@ -57,14 +59,20 @@ function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
     pesoGramas: p.pesoGramas,
     imagemUrl: p.imagemUrl,
     ativo: p.ativo,
+    permitidoEmKit: p.permitidoEmKit,
     vendas: vendasDo(p),
     producoes: p._count.producoes,
   };
 }
 
-/** A loja (páginas e /api/products) lê o catálogo em cache: depois de mudar, expira na hora. */
+/**
+ * A loja (páginas e /api/products) lê o catálogo em cache: depois de mudar, expira na hora. Expira
+ * também os kits: os sabores do montador (/kits) e a economia dependem de preço, visibilidade e
+ * "Pode entrar no Kit Presente" de cada produto.
+ */
 function atualizarLoja(): void {
   revalidateTag("produtos", { expire: 0 });
+  revalidateTag("kits", { expire: 0 });
 }
 
 export async function listarProdutosAdmin(): Promise<ProdutoAdminDTO[]> {
@@ -86,6 +94,7 @@ export async function lerProdutoDoFormulario(form: FormData, opcoes: { fotoObrig
     precoCentavos: campo("precoCentavos"),
     descricao: campo("descricao"),
     ativo: campo("ativo"),
+    permitidoEmKit: campo("permitidoEmKit"),
   });
   if (!lido.success) return { ok: false, resposta: erroDeValidacao(lido.error) };
 
@@ -125,6 +134,8 @@ function camposDoProduto(entrada: ProdutoEntrada) {
     preco: new Prisma.Decimal(entrada.precoCentavos).div(100),
     pesoGramas: entrada.pesoGramas,
     ativo: entrada.ativo,
+    // Sem o campo (formulário antigo): ao editar fica como estava; ao criar, o default (fora do kit).
+    ...(entrada.permitidoEmKit === undefined ? {} : { permitidoEmKit: entrada.permitidoEmKit }),
   };
 }
 

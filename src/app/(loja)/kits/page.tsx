@@ -18,11 +18,13 @@ export default async function PaginaKits() {
   const [kits, produtos] = await Promise.all([listarKits(), listarProdutos()]);
   // Na v1 há um kit só (vários tipos de kit ficam para a etapa 2).
   const kit = kits[0];
+  // Só os potes que a dona marcou "Pode entrar no Kit Presente" (o servidor recusa os outros).
+  const sabores = produtos.filter((p) => p.permitidoEmKit);
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-8 sm:px-6 lg:pb-16 lg:pt-12">
-      {kit && produtos.length > 0 ? (
-        <MonteSeuKit kit={kit} produtos={produtos} />
+      {kit && sabores.length > 0 ? (
+        <MonteSeuKit kit={kit} produtos={sabores} />
       ) : (
         <section className="flex flex-col items-center gap-4 py-16 text-center" aria-labelledby="titulo-kits">
           <h1 id="titulo-kits" className="font-titulos text-4xl font-semibold text-primaria">

@@ -10,6 +10,8 @@ export type ProdutoDTO = {
   preco: number;
   imagemUrl: string;
   pesoGramas: number;
+  /** Pode entrar no Kit Presente (o montador lista só estes; o servidor recusa os outros com 400). */
+  permitidoEmKit: boolean;
 };
 
 /**
@@ -31,5 +33,6 @@ export async function listarProdutos(): Promise<ProdutoDTO[]> {
     preco: p.preco.toNumber(),
     imagemUrl: p.imagemUrl,
     pesoGramas: p.pesoGramas,
+    permitidoEmKit: p.permitidoEmKit,
   }));
 }

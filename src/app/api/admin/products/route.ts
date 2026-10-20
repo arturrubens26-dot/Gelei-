@@ -14,7 +14,8 @@ export const GET = comTratamento("api/admin/products GET", async () => {
 
 /**
  * POST /api/admin/products — cria um produto. multipart/form-data com sabor, pesoGramas,
- * precoCentavos, descricao, ativo e foto (obrigatória; JPG, PNG ou WebP, até 2 MB).
+ * precoCentavos, descricao, ativo, permitidoEmKit ("true"/"false"; sem o campo, nasce fora do
+ * Kit Presente) e foto (obrigatória; JPG, PNG ou WebP, até 2 MB). Expira as tags "produtos" e "kits".
  */
 export const POST = comTratamento("api/admin/products POST", async (request: Request) => {
   const bloqueio = origemInvalida(request);
@@ -28,6 +29,6 @@ export const POST = comTratamento("api/admin/products POST", async (request: Req
   if (!lido.ok) return lido.resposta;
 
   const produto = await criarProduto(lido.dados, lido.foto!);
-  console.info(`[admin] ${auth.usuario.id} criou o produto ${produto.id}`);
+  console.info(`[admin] ${auth.usuario.id} criou o produto ${produto.id} (${produto.permitidoEmKit ? "entra" : "não entra"} no kit)`);
   return Response.json({ produto }, { status: 201 });
 });

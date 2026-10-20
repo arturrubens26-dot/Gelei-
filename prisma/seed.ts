@@ -1,6 +1,10 @@
 /**
  * Seed: popula o banco com produtos de exemplo e o usuário admin inicial.
  * Pode rodar várias vezes (usa upsert). Execute com: npx prisma db seed
+ *
+ * Só roda no banco LOCAL (localhost/127.0.0.1): com a DATABASE_URL do Neon numa máquina de
+ * desenvolvimento, ele mexeria na loja no ar. Para um banco remoto de propósito (a primeira carga
+ * do Neon, por exemplo), defina SEED_PERMITIR_REMOTO=1; aí ele só CRIA o que falta.
  */
 import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
@@ -17,6 +21,36 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error("DATABASE_URL não está definida.");
 }
+
+/** Hosts do banco deste computador (o `prisma dev` usa localhost). */
+const HOSTS_LOCAIS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/** Host da DATABASE_URL, em minúsculas; `null` se a URL não der para ler. Nunca é impresso. */
+function hostDoBanco(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+const host = hostDoBanco(connectionString);
+const bancoRemoto = !(host && HOSTS_LOCAIS.has(host));
+// Trava ANTES de qualquer conexão: um engano de .env não pode sobrescrever preços nem mexer no kit
+// da loja no ar. O host não aparece na mensagem (nada do .env vai para o terminal ou para logs).
+if (bancoRemoto && process.env.SEED_PERMITIR_REMOTO !== "1") {
+  const motivo =
+    host === null ? "não deu para ler o endereço da DATABASE_URL" : "a DATABASE_URL não aponta para o banco local (localhost ou 127.0.0.1)";
+  console.error(
+    `✖ Seed recusado: ${motivo}.\n` +
+      "  O seed cria produtos, o kit e o admin, e no banco local ainda sobrescreve preços e descrições;\n" +
+      "  num banco no ar (Neon), isso mexeria na loja de verdade.\n" +
+      "  Se é isso mesmo (ex.: a primeira carga do Neon), rode de novo com SEED_PERMITIR_REMOTO=1\n" +
+      "  (PowerShell: $env:SEED_PERMITIR_REMOTO='1'; npm run db:seed). Num banco remoto ele só cria o que falta.",
+  );
+  process.exit(1);
+}
+if (bancoRemoto) console.log("! Banco remoto (SEED_PERMITIR_REMOTO=1): só cria o que falta, sem sobrescrever nada.");
 
 const db = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
@@ -76,24 +110,28 @@ async function semearProdutos() {
     };
     await db.product.upsert({
       where: { id: p.id },
-      // Em produção o seed não sobrescreve preços/descrições que o admin possa ter ajustado.
-      update: process.env.NODE_ENV === "production" ? {} : dados,
-      create: { id: p.id, ...dados },
+      // Em produção ou num banco remoto, o seed não sobrescreve preços/descrições que a dona possa
+      // ter ajustado. "Pode entrar no Kit Presente" é decisão dela no painel: o update não mexe.
+      update: process.env.NODE_ENV === "production" || bancoRemoto ? {} : dados,
+      // Os potes do catálogo são do tamanho padrão (112 g e 125 g): entram no kit.
+      create: { id: p.id, ...dados, permitidoEmKit: true },
     });
   }
   console.log(`✔ ${produtos.length} produtos`);
 }
 
 /**
- * Kit de presente (a migração 20261021120000_kits já o cria, oculto). Em produção nasce e fica
- * OCULTO: a dona confere preço e peso da caixa no painel e ativa. Em desenvolvimento fica visível,
- * para dar para testar a página /kits. Rodar de novo não mexe em nome, preço nem peso já ajustados.
+ * Kit de presente (a migração 20261021120000_kits já o cria, oculto). Rodar de novo NÃO mexe em
+ * nada dele, nem em `ativo`: mostrar ou ocultar é decisão da dona, no painel. Se o kit não existir,
+ * nasce OCULTO, a menos que SEED_KIT_VISIVEL=1 (para testar a página /kits num banco novo).
+ * Antes, a visibilidade dependia de NODE_ENV: o seed rodado de uma máquina de desenvolvimento com
+ * a DATABASE_URL do Neon ativaria o kit na loja no ar.
  */
 async function semearKit() {
-  const emProducao = process.env.NODE_ENV === "production";
-  await db.kit.upsert({
+  const visivel = process.env.SEED_KIT_VISIVEL === "1";
+  const kit = await db.kit.upsert({
     where: { id: "kit-presente" },
-    update: emProducao ? {} : { ativo: true },
+    update: {},
     create: {
       id: "kit-presente",
       nome: "Kit Presente",
@@ -102,10 +140,10 @@ async function semearKit() {
       potes: 3,
       // Peso da caixa vazia provisório: troque pelo real no painel.
       pesoCaixaGramas: 150,
-      ativo: !emProducao,
+      ativo: visivel,
     },
   });
-  console.log(`✔ kit-presente (${emProducao ? "oculto" : "visível, só em desenvolvimento"})`);
+  console.log(`✔ kit-presente (${kit.ativo ? "visível" : "oculto"} na loja; mostre ou oculte em /admin/products)`);
 }
 
 async function semearAdmin() {

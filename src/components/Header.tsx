@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 import { Suspense } from "react";
 import { BotaoCarrinho } from "@/components/carrinho/BotaoCarrinho";
 import { MenuUsuario, MenuUsuarioCarregando } from "@/components/MenuUsuario";
@@ -14,7 +15,25 @@ const estiloLink =
  * O link "Kits" só aparece com um kit à venda (lista em cache, expirada pelo painel ao mudar).
  */
 export async function Header() {
-  const temKit = (await listarKits()).length > 0;
+  return <CabecalhoDaLoja temKit={await haKitAVenda()} />;
+}
+
+/**
+ * O cabeçalho está em toda página da loja: se o banco falhar ao consultar os kits, a loja segue no
+ * ar sem o link "Kits" (em vez de cair inteira por causa de um link). Sinais internos do Next
+ * (renderização dinâmica, redirecionamento) passam adiante pelo unstable_rethrow.
+ */
+async function haKitAVenda() {
+  try {
+    return (await listarKits()).length > 0;
+  } catch (erro) {
+    unstable_rethrow(erro);
+    console.error("Cabeçalho: não foi possível consultar os kits; o link 'Kits' fica oculto.", erro);
+    return false;
+  }
+}
+
+function CabecalhoDaLoja({ temKit }: { temKit: boolean }) {
 
   return (
     <header className="border-b border-accent2/50 bg-destaque">

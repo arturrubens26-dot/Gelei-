@@ -20,9 +20,11 @@ export default async function PaginaProdutos() {
   // `listarProdutos` e `listarKits` usam `use cache`: a página é prerenderizada e revalidada.
   const [produtos, kits] = await Promise.all([listarProdutos(), listarKits()]);
   const kit = kits[0];
+  // A miniatura da chamada só mostra potes que podem ir na caixa (sem nenhum, a chamada some, como o montador).
+  const doKit = produtos.filter((p) => p.permitidoEmKit);
   const amostra = [
-    ...SABORES_DA_CHAMADA.flatMap((id) => produtos.filter((p) => p.id === id)),
-    ...produtos.filter((p) => !SABORES_DA_CHAMADA.includes(p.id)),
+    ...SABORES_DA_CHAMADA.flatMap((id) => doKit.filter((p) => p.id === id)),
+    ...doKit.filter((p) => !SABORES_DA_CHAMADA.includes(p.id)),
   ]
     .slice(0, kit?.potes ?? 3)
     .map((p) => ({ productId: p.id, imagemUrl: p.imagemUrl, quantidade: 1 }));

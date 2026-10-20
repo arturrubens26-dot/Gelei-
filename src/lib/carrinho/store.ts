@@ -67,8 +67,11 @@ const VAZIO: EstadoCarrinho = { itens: [], kits: [], cep: "", cotacao: null };
 
 // --- persistência -----------------------------------------------------------
 
-/** Caminho interno do próprio site: "/produtos/x.svg" sim; "https://..." e "//host/..." não. */
-const caminhoInterno = (valor: string) => valor.startsWith("/") && !valor.startsWith("//") && !valor.includes("\\");
+/**
+ * Foto do próprio site, por lista positiva: "/produtos/x.svg" ou "/fotos/<id>" sim; "https://...",
+ * "//host/..." e "/<TAB>/host/..." (o navegador ignora TAB/CR/LF e lê "//host") não.
+ */
+const caminhoInterno = (valor: string) => /^\/(?:produtos|fotos)\/[A-Za-z0-9._-]+$/.test(valor);
 
 function sanitizarEndereco(dado: unknown): CotacaoEntrega["endereco"] {
   if (!dado || typeof dado !== "object") return undefined;
@@ -130,9 +133,16 @@ function sanitizarKits(dado: unknown): KitCarrinho[] {
     if (validos.reduce((soma, s) => soma + s.quantidade, 0) > MAX_POTES_POR_KIT) return [];
     return [{ kitId: x.kitId, nome: x.nome, preco, pesoCaixaGramas, sabores: validos, quantidade }];
   });
+  // O teto de caixas vale para o pedido inteiro (soma das linhas), como no servidor: cada linha fica
+  // com o que ainda cabe, e a que não cabe nada sai.
+  let restantes = MAX_KITS_POR_PEDIDO;
   return agruparKits(linhas)
     .slice(0, MAX_LINHAS_DE_KIT)
-    .map((k) => ({ ...k, quantidade: Math.min(k.quantidade, MAX_KITS_POR_PEDIDO) }));
+    .flatMap((k) => {
+      const quantidade = Math.min(k.quantidade, restantes);
+      restantes -= quantidade;
+      return quantidade > 0 ? [{ ...k, quantidade }] : [];
+    });
 }
 
 function sanitizar(dado: unknown): EstadoCarrinho {
@@ -348,8 +358,10 @@ export const acoesCarrinho = {
     if (!existente && atual.kits.length >= MAX_LINHAS_DE_KIT) {
       return { ok: false, mensagem: `O carrinho já tem ${MAX_LINHAS_DE_KIT} caixas diferentes, o máximo por pedido.` };
     }
+    // Ao somar na linha existente, os dados (preço, nome, pesos, fotos) vêm da caixa que acabou de ser
+    // montada, que é a da vitrine de agora: a linha antiga podia guardar um preço que já mudou.
     const kits = existente
-      ? atual.kits.map((k) => (k.chave === chave ? { ...k, quantidade: k.quantidade + 1 } : k))
+      ? atual.kits.map((k) => (k.chave === chave ? { ...k, ...kit, sabores, quantidade: k.quantidade + 1 } : k))
       : [...atual.kits, { ...kit, sabores, quantidade: 1, chave }];
     escrever({ ...atual, kits });
     return { ok: true };

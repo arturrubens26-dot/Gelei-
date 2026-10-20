@@ -153,12 +153,15 @@ export function CarrinhoLateral() {
                         −
                       </button>
                       <span className="min-w-8 text-center text-sm font-semibold">{item.quantidade}</span>
+                      {/* aria-disabled (não disabled): no limite, o botão desabilitado jogaria o foco no <body>. */}
                       <button
                         type="button"
-                        className="inline-flex size-11 items-center justify-center rounded-full text-lg hover:bg-accent1/40 disabled:opacity-40"
+                        className="inline-flex size-11 items-center justify-center rounded-full text-lg hover:bg-accent1/40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
                         aria-label={`Aumentar quantidade de ${item.nome}`}
-                        disabled={item.quantidade >= MAX_POR_PRODUTO}
-                        onClick={() => mudarQuantidade(item.productId, item.nome, item.quantidade + 1)}
+                        aria-disabled={item.quantidade >= MAX_POR_PRODUTO || undefined}
+                        onClick={() => {
+                          if (item.quantidade < MAX_POR_PRODUTO) mudarQuantidade(item.productId, item.nome, item.quantidade + 1);
+                        }}
                       >
                         +
                       </button>
@@ -313,10 +316,12 @@ function LinhaDoKit({
             <span className="min-w-8 text-center text-sm font-semibold">{kit.quantidade}</span>
             <button
               type="button"
-              className="inline-flex size-11 items-center justify-center rounded-full text-lg hover:bg-accent1/40 disabled:opacity-40"
+              className="inline-flex size-11 items-center justify-center rounded-full text-lg hover:bg-accent1/40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
               aria-label={`Aumentar caixas de ${nome}`}
-              disabled={!podeAumentar}
-              onClick={() => aoMudar(kit.quantidade + 1)}
+              aria-disabled={!podeAumentar || undefined}
+              onClick={() => {
+                if (podeAumentar) aoMudar(kit.quantidade + 1);
+              }}
             >
               +
             </button>

@@ -9,7 +9,9 @@ const visibilidadeSchema = z.object({ ativo: z.boolean() });
 /**
  * PATCH /api/admin/products/[id]
  * - JSON `{ ativo }`: mostra ou oculta o produto na loja;
- * - multipart/form-data: edição completa (os mesmos campos da criação; a foto é opcional).
+ * - multipart/form-data: edição completa (os mesmos campos da criação; a foto é opcional; sem o
+ *   campo permitidoEmKit, ele fica como estava).
+ * Expira as tags "produtos" e "kits" (os sabores e a economia do montador mudam junto).
  */
 export const PATCH = comTratamento("api/admin/products PATCH", async (request: Request, ctx: RouteContext<"/api/admin/products/[id]">) => {
   const bloqueio = origemInvalida(request);
@@ -31,7 +33,7 @@ export const PATCH = comTratamento("api/admin/products PATCH", async (request: R
   const lido = await lerProdutoDoFormulario(form, { fotoObrigatoria: false });
   if (!lido.ok) return lido.resposta;
   const produto = await atualizarProduto(id, lido.dados, lido.foto);
-  console.info(`[admin] ${auth.usuario.id} editou o produto ${id}`);
+  console.info(`[admin] ${auth.usuario.id} editou o produto ${id} (${produto.permitidoEmKit ? "entra" : "não entra"} no kit)`);
   return Response.json({ produto });
 });
 

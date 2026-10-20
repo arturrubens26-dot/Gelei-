@@ -3,7 +3,7 @@ import { revalidateTag } from "next/cache";
 import { Prisma, type Kit } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { ErroNegocio } from "@/lib/erros";
-import { avisoDePrecoDoKit, faixaDeEconomia, type KitEntrada } from "@/lib/kits-regras";
+import { avisosDoKit, faixaDeEconomia, type KitEntrada } from "@/lib/kits-regras";
 import { STATUS_PAGOS } from "@/lib/status";
 
 /** Kits no painel (/admin/products, seção Kits): editar e mostrar/ocultar. Sem criar nem excluir na v1. */
@@ -20,15 +20,22 @@ export type KitAdminDTO = {
   /** Caixas em pedidos pagos (Pago, Enviado, Entregue). */
   caixasVendidas: number;
   /**
-   * Economia, em reais, da caixa mais barata e da mais cara que dá para montar com os sabores à
-   * venda hoje (nunca negativa). `null` sem sabor à venda.
+   * Economia, em reais, da caixa mais barata e da mais cara que dá para montar com os sabores que a
+   * cliente pode escolher hoje (à venda e marcados "Pode entrar no Kit Presente"; nunca negativa).
+   * `null` sem nenhum desses sabores.
    */
   economia: { minima: number; maxima: number } | null;
-  /** Aviso quando alguma caixa não sai mais barata que os avulsos (não bloqueia); senão `null`. */
+  /**
+   * Avisos (não bloqueiam), num texto só, ou `null`: nenhum sabor pode entrar no kit; alguma caixa
+   * não sai mais barata que os avulsos; ou a economia máxima passa de 30% do preço do kit.
+   */
   aviso: string | null;
 };
 
-/** Monta os DTOs com as caixas vendidas e a economia (preços avulsos dos sabores à venda agora). */
+/**
+ * Monta os DTOs com as caixas vendidas e a economia (preços avulsos, agora, dos sabores que podem
+ * entrar no kit: à venda e com `permitidoEmKit`; os mesmos que o servidor aceita no pedido).
+ */
 async function paraDTOs(kits: Kit[]): Promise<KitAdminDTO[]> {
   if (kits.length === 0) return [];
   const [vendidas, produtos] = await Promise.all([
@@ -37,7 +44,7 @@ async function paraDTOs(kits: Kit[]): Promise<KitAdminDTO[]> {
       where: { kitId: { in: kits.map((k) => k.id) }, order: { status: { in: [...STATUS_PAGOS] } } },
       _sum: { quantidade: true },
     }),
-    db.product.findMany({ where: { ativo: true }, select: { preco: true } }),
+    db.product.findMany({ where: { ativo: true, permitidoEmKit: true }, select: { preco: true } }),
   ]);
   const caixasPorKit = new Map(vendidas.map((v) => [v.kitId, v._sum.quantidade ?? 0]));
   // Centavos inteiros, sem passar por float (Decimal × 100).
@@ -56,7 +63,7 @@ async function paraDTOs(kits: Kit[]): Promise<KitAdminDTO[]> {
       ativo: k.ativo,
       caixasVendidas: caixasPorKit.get(k.id) ?? 0,
       economia: faixa ? { minima: faixa.minima / 100, maxima: faixa.maxima / 100 } : null,
-      aviso: avisoDePrecoDoKit(precoCentavos, k.potes, precosAvulsos),
+      aviso: avisosDoKit(precoCentavos, k.potes, precosAvulsos),
     };
   });
 }

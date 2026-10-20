@@ -6,7 +6,7 @@ import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } 
 import { CampoForm } from "@/components/admin/CampoForm";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { ProdutoAdminDTO } from "@/lib/produtos-admin";
-import { LADO_FOTO, MAX_BYTES_FOTO, ehFotoEnviada, montarNome } from "@/lib/produtos-regras";
+import { LADO_FOTO, MAX_BYTES_FOTO, ROTULO_PERMITIDO_EM_KIT, ehFotoEnviada, montarNome } from "@/lib/produtos-regras";
 
 type Aviso = { tipo: "ok" | "erro"; texto: string };
 
@@ -113,6 +113,7 @@ export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
                         {p.ativo ? "Na loja" : "Oculto da loja"}
                       </span>
                     </p>
+                    <p className="mt-1 text-xs text-primaria/80">{p.permitidoEmKit ? "Entra no Kit Presente" : "Fora do Kit Presente"}</p>
                   </div>
                 </div>
                 <p className="line-clamp-2 text-sm text-primaria/85">{p.descricao}</p>
@@ -150,7 +151,7 @@ export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
   );
 }
 
-type Form = { sabor: string; peso: string; preco: string; descricao: string; ativo: boolean };
+type Form = { sabor: string; peso: string; preco: string; descricao: string; ativo: boolean; permitidoEmKit: boolean };
 
 /** Reduz a foto no navegador: recorte quadrado no centro, até 800×800, em JPEG (~100 KB). */
 async function prepararFoto(arquivo: File): Promise<Blob> {
@@ -182,8 +183,16 @@ function FormularioProduto({
   const tituloRef = useRef<HTMLHeadingElement>(null);
   const [form, setForm] = useState<Form>(() =>
     produto
-      ? { sabor: produto.sabor, peso: String(produto.pesoGramas), preco: valorParaCampo(produto.preco), descricao: produto.descricao, ativo: produto.ativo }
-      : { sabor: "", peso: "", preco: "", descricao: "", ativo: true },
+      ? {
+          sabor: produto.sabor,
+          peso: String(produto.pesoGramas),
+          preco: valorParaCampo(produto.preco),
+          descricao: produto.descricao,
+          ativo: produto.ativo,
+          permitidoEmKit: produto.permitidoEmKit,
+        }
+      : // Produto novo nasce fora do kit: a dona marca só os potes do tamanho padrão.
+        { sabor: "", peso: "", preco: "", descricao: "", ativo: true, permitidoEmKit: false },
   );
   const [foto, setFoto] = useState<{ blob: Blob; url: string } | null>(null);
   const [lendoFoto, setLendoFoto] = useState(false);
@@ -196,7 +205,7 @@ function FormularioProduto({
   useEffect(() => () => (foto ? URL.revokeObjectURL(foto.url) : undefined), [foto]);
 
   const mudar = (campo: keyof Form) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const valor = campo === "ativo" ? (e.target as HTMLInputElement).checked : e.target.value;
+    const valor = campo === "ativo" || campo === "permitidoEmKit" ? (e.target as HTMLInputElement).checked : e.target.value;
     setForm((f) => ({ ...f, [campo]: valor }));
   };
 
@@ -250,6 +259,7 @@ function FormularioProduto({
     dados.set("precoCentavos", String(centavos));
     dados.set("descricao", form.descricao.trim());
     dados.set("ativo", String(form.ativo));
+    dados.set("permitidoEmKit", String(form.permitidoEmKit));
     if (foto) dados.set("foto", foto.blob, "foto.jpg");
 
     setSalvando(true);
@@ -383,6 +393,22 @@ function FormularioProduto({
             <input type="checkbox" checked={form.ativo} onChange={mudar("ativo")} className="size-4" />
             Mostrar na loja
           </label>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={form.permitidoEmKit}
+                onChange={mudar("permitidoEmKit")}
+                aria-describedby={`${id}-permitidoEmKit-dica`}
+                className="size-4"
+              />
+              {ROTULO_PERMITIDO_EM_KIT}
+            </label>
+            <p id={`${id}-permitidoEmKit-dica`} className="mt-1 pl-6 text-xs text-primaria/75">
+              Potes do tamanho padrão; um pote maior ou mais caro sairia com desconto grande demais.
+            </p>
+          </div>
 
           <div className="flex flex-wrap gap-3">
             <button type="submit" className="btn-primario" disabled={salvando || lendoFoto}>

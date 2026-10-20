@@ -1,4 +1,5 @@
 import "server-only";
+import { io } from "next/cache";
 import { cookies } from "next/headers";
 import { jwtVerify, SignJWT } from "jose";
 
@@ -47,6 +48,13 @@ export async function lerSessao(): Promise<{ userId: string } | null> {
   // Fora do try de propósito: SESSION_SECRET ausente é erro de configuração e deve
   // estourar alto (500 + log), não deslogar todo mundo em silêncio.
   const chave = chaveSecreta();
+  // O `jwtVerify` lê o relógio (`new Date()`, para conferir a expiração). Com cacheComponents, toda
+  // renderização dinâmica faz antes um prerender "de runtime", e ler o relógio nele, depois do
+  // `cookies()`, aborta esse prerender com "used `new Date()` ... while prerendering" (console.error
+  // em todo acesso de quem está logado, e o prefetch dessas páginas cortado). `io()` avisa que vem
+  // IO: no prerender ele suspende aqui, sem erro; numa requisição de verdade (e nas rotas de API)
+  // resolve na hora. Preferido ao `connection()`, que bloquearia também o prefetch.
+  await io();
   try {
     const { payload } = await jwtVerify(token, chave, { algorithms: ["HS256"] });
     return payload.sub ? { userId: payload.sub } : null;

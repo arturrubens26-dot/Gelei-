@@ -9,6 +9,7 @@ import { calcularFrete } from "@/lib/frete";
 import {
   agruparKits,
   conferirComposicao,
+  conferirSaboresPermitidos,
   emCentavos,
   mesmoConteudo,
   normalizarComposicao,
@@ -183,7 +184,9 @@ const reaisDe = (centavos: number) => new Prisma.Decimal(centavos).div(100);
  *   (avulsos e caixas, em qualquer ordem) for o mesmo; senão, 422.
  * - Produto ou kit oculto/inexistente: 422 com `indisponiveis` (produtos, avulsos ou dentro de
  *   caixas) e `kitsIndisponiveis`.
- * - Caixa com potes a mais ou a menos que o kit leva: 400 em `kits.N.sabores` (N = posição enviada).
+ * - Caixa com potes a mais ou a menos que o kit leva, ou com sabor fora do kit (`permitidoEmKit`
+ *   desligado: "Kit Presente: Morango 250g não entra no kit."): 400 em `kits.N.sabores`
+ *   (N = posição enviada). Vem depois do 422 e antes do 409.
  * - Endereço novo é conferido contra o CEP (existência, cidade e UF), senão
  *   daria para pagar o frete de uma capital entregando em outro estado.
  */
@@ -240,12 +243,22 @@ export async function criarPedido(
     );
   }
 
-  // Quantos potes a caixa leva vem do kit no banco: confere cada linha como foi enviada.
+  // Quantos potes a caixa leva vem do kit no banco, e cada sabor precisa estar marcado como "Pode
+  // entrar no Kit Presente" (um pote grande ou caro dentro da caixa sairia com desconto demais).
+  // Confere cada linha como foi enviada; as duas mensagens podem vir juntas na mesma linha.
   const composicaoErrada: Record<string, string[]> = {};
   linhasDeKit.forEach((linha, i) => {
     const kit = kitPorId.get(linha.kitId)!;
+    const mensagens: string[] = [];
     const conferida = conferirComposicao(linha.sabores, kit.potes, { nomeDoKit: kit.nome });
-    if (!conferida.ok) composicaoErrada[`kits.${i}.sabores`] = [conferida.mensagem];
+    if (!conferida.ok) mensagens.push(conferida.mensagem);
+    const sabores = linha.sabores.map((s) => {
+      const produto = produtoPorId.get(s.productId)!;
+      return { productId: s.productId, nome: produto.nome, permitidoEmKit: produto.permitidoEmKit };
+    });
+    const foraDoKit = conferirSaboresPermitidos(sabores, kit.nome);
+    if (foraDoKit) mensagens.push(foraDoKit);
+    if (mensagens.length > 0) composicaoErrada[`kits.${i}.sabores`] = mensagens;
   });
   if (Object.keys(composicaoErrada).length > 0) {
     throw new ErroNegocio(400, "Confira os potes do kit.", composicaoErrada);

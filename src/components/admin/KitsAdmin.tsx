@@ -6,16 +6,20 @@ import { CampoForm } from "@/components/admin/CampoForm";
 import { CaixaDoKit } from "@/components/kits/CaixaDoKit";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { KitAdminDTO } from "@/lib/kits-admin";
-import { avisoDePrecoDoKit, emCentavos, faixaDeEconomia } from "@/lib/kits-regras";
+import { avisosDoKit, emCentavos, faixaDeEconomia } from "@/lib/kits-regras";
 
 type Aviso = { tipo: "ok" | "erro"; texto: string };
-/** Sabor à venda: as fotos da prévia e os preços avulsos da conta de economia. */
+/**
+ * Sabor que a cliente pode escolher (à venda e "Pode entrar no Kit Presente"): as fotos da prévia e
+ * os preços avulsos da conta de economia.
+ */
 export type SaborParaKit = { id: string; nome: string; imagemUrl: string; preco: number };
 
 const brl = (centavos: number) => formatarBRL(centavos / 100);
 
 function textoDaEconomia(economia: { minima: number; maxima: number } | null, potes: number): string {
-  if (!economia || economia.maxima <= 0) return `Não sai mais barato que ${potes} potes avulsos.`;
+  if (!economia) return "Nenhum sabor à venda pode entrar no kit agora.";
+  if (economia.maxima <= 0) return `Não sai mais barato que ${potes} potes avulsos.`;
   if (economia.minima === economia.maxima) return `A cliente economiza ${formatarBRL(economia.maxima)} por caixa.`;
   return `A cliente economiza de ${formatarBRL(economia.minima)} a ${formatarBRL(economia.maxima)} por caixa, conforme os sabores.`;
 }
@@ -200,7 +204,7 @@ function FormularioKit({
   const centavos = lerValorEmCentavos(form.preco);
   const precosAvulsos = sabores.map((s) => emCentavos(s.preco));
   const faixa = centavos && centavos > 0 ? faixaDeEconomia(centavos, kit.potes, precosAvulsos) : null;
-  const avisoAoVivo = centavos && centavos > 0 ? avisoDePrecoDoKit(centavos, kit.potes, precosAvulsos) : null;
+  const avisoAoVivo = centavos && centavos > 0 ? avisosDoKit(centavos, kit.potes, precosAvulsos) : null;
   const dicaPreco =
     centavos === null || centavos < 1
       ? "Ex.: 40,00"

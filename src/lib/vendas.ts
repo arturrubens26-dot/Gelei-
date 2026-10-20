@@ -66,11 +66,19 @@ export function dataDaVenda(dia: string | undefined, agora: Date): Date {
 }
 
 /**
- * Texto livre que pode ir para a tela do admin: recusa controles C0/C1, marcas invisíveis de direção
- * (que invertem o texto na lista, ex.: U+202E) e meio caractere UTF-16 solto (vira "�" ao gravar).
+ * Texto livre que pode ir para a tela do admin (e para o pedido, o carrinho e as planilhas). Recusa:
+ * - controles C0/C1 (fora tab e quebra de linha) e o hífen invisível U+00AD;
+ * - marcas invisíveis de direção, que invertem ou embaralham o texto na lista (U+061C, U+200E/F,
+ *   U+202A–U+202E, U+2066–U+2069);
+ * - separadores de linha/parágrafo U+2028/U+2029 (quebram linha onde a tela não espera);
+ * - caracteres de largura zero e invisíveis (U+200B–U+200D, U+2060–U+2064, U+FEFF), os de anotação
+ *   U+FFF9–U+FFFB e as "tags" U+E0000–U+E007F (escondem texto que a pessoa não vê);
+ * - meio caractere UTF-16 solto (vira "�" ao gravar).
+ * Sem a flag `u`: as tags, fora do plano básico, são conferidas pelo par de substitutos (U+DB40 +
+ * U+DC00–U+DC7F).
  */
 const TEXTO_INVALIDO =
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F​-‏‪-‮⁦-⁩﻿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\uFFF9-\uFFFB]|\uDB40[\uDC00-\uDC7F]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 export function textoLivreValido(texto: string): boolean {
   return !TEXTO_INVALIDO.test(texto);
