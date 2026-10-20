@@ -1,13 +1,14 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { FotoDoPote } from "@/components/FotoDoPote";
+import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { calcularEntrega, mascararCep } from "@/lib/carrinho/entrega";
-import { acoesCarrinho, totaisDoCarrinho, useCarrinho } from "@/lib/carrinho/store";
+import { acoesCarrinho, economiaDaCaixa, totaisDoCarrinho, useCarrinho, type KitCarrinho } from "@/lib/carrinho/store";
 import { formatarBRL } from "@/lib/dinheiro";
-import { MAX_POR_PRODUTO } from "@/lib/limites";
-import { ehFotoEnviada } from "@/lib/produtos-regras";
+import { emCentavos, textoDaComposicao } from "@/lib/kits-regras";
+import { MAX_KITS_POR_PEDIDO, MAX_POR_PRODUTO } from "@/lib/limites";
 import { useCarrinhoUI } from "./contexto";
 
 /**
@@ -67,7 +68,20 @@ export function CarrinhoLateral() {
     titulo.current?.focus();
   }
 
-  const vazio = estado.itens.length === 0;
+  function mudarCaixas(kit: KitCarrinho, quantidade: number) {
+    acoesCarrinho.definirQuantidadeKit(kit.chave, quantidade);
+    const nome = `${kit.nome} (${textoDaComposicao(kit.sabores)})`;
+    setAnuncio(quantidade < 1 ? `${nome} removido do carrinho.` : `${nome}: ${quantidade} ${quantidade === 1 ? "caixa" : "caixas"}.`);
+    if (quantidade < 1) titulo.current?.focus();
+  }
+
+  function removerKit(kit: KitCarrinho) {
+    acoesCarrinho.removerKit(kit.chave);
+    setAnuncio(`${kit.nome} (${textoDaComposicao(kit.sabores)}) removido do carrinho.`);
+    titulo.current?.focus();
+  }
+
+  const vazio = totais.vazio;
 
   return (
     <dialog
@@ -108,14 +122,21 @@ export function CarrinhoLateral() {
           </div>
         ) : (
           <ul className="flex flex-col gap-4">
+            {estado.kits.map((kit) => (
+              <LinhaDoKit
+                key={kit.chave}
+                kit={kit}
+                podeAumentar={totais.caixas < MAX_KITS_POR_PEDIDO}
+                aoMudar={(q) => mudarCaixas(kit, q)}
+                aoRemover={() => removerKit(kit)}
+              />
+            ))}
             {estado.itens.map((item) => (
               <li key={item.productId} className="flex gap-3 border-b border-accent1/60 pb-4">
-                <Image
+                <FotoDoPote
                   src={item.imagemUrl}
                   alt=""
-                  width={72}
-                  height={72}
-                  unoptimized={ehFotoEnviada(item.imagemUrl)}
+                  lado={72}
                   className="size-18 shrink-0 rounded-lg border border-accent2/60 object-cover"
                 />
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -212,6 +233,12 @@ export function CarrinhoLateral() {
 
       {!vazio && (
         <div className="border-t-2 border-accent2/60 bg-white/50 px-5 py-4">
+          {totais.economiaKitsCentavos > 0 && (
+            <p className="mb-2 text-xs text-primaria/85">
+              Com {totais.caixas === 1 ? "o kit" : "os kits"}, você economiza{" "}
+              <strong className="font-semibold">{formatarBRL(totais.economiaKitsCentavos / 100)}</strong> em relação aos potes avulsos.
+            </p>
+          )}
           <dl className="flex flex-col gap-1.5 text-sm">
             <div className="flex justify-between">
               <dt>Subtotal</dt>
@@ -232,5 +259,78 @@ export function CarrinhoLateral() {
         </div>
       )}
     </dialog>
+  );
+}
+
+/**
+ * Uma linha de caixas de kit: miniatura com os potes reais, a composição ("Pimenta ×2 · Morango"),
+ * o preço da caixa com o dos mesmos potes avulsos e o contador de caixas.
+ */
+function LinhaDoKit({
+  kit,
+  podeAumentar,
+  aoMudar,
+  aoRemover,
+}: {
+  kit: KitCarrinho;
+  podeAumentar: boolean;
+  aoMudar: (quantidade: number) => void;
+  aoRemover: () => void;
+}) {
+  const composicao = textoDaComposicao(kit.sabores);
+  const { avulsosCentavos } = economiaDaCaixa(kit);
+  const potes = kit.sabores.reduce((soma, s) => soma + s.quantidade, 0);
+  const nome = `${kit.nome} (${composicao})`;
+
+  return (
+    <li className="flex gap-3 border-b border-accent1/60 pb-4">
+      <MiniaturaKit sabores={kit.sabores} />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div>
+          <p className="font-titulos text-base font-semibold leading-snug">{kit.nome}</p>
+          <p className="text-sm font-medium leading-snug">{composicao}</p>
+        </div>
+        <p className="text-sm text-primaria/80">
+          <span className="whitespace-nowrap">{formatarBRL(kit.preco)} cada</span>
+          {/* O preço dos avulsos só aparece quando a caixa sai mais barata (senão a loja não fala em economia). */}
+          {avulsosCentavos > emCentavos(kit.preco) && (
+            <span className="whitespace-nowrap">
+              {" "}
+              ({potes} avulsos: {formatarBRL(avulsosCentavos / 100)})
+            </span>
+          )}
+        </p>
+        <div className="flex items-center justify-between gap-2">
+          <div className="inline-flex items-center rounded-full border border-accent2">
+            <button
+              type="button"
+              className="inline-flex size-11 items-center justify-center rounded-full text-lg hover:bg-accent1/40"
+              aria-label={`Diminuir caixas de ${nome}`}
+              onClick={() => aoMudar(kit.quantidade - 1)}
+            >
+              −
+            </button>
+            <span className="min-w-8 text-center text-sm font-semibold">{kit.quantidade}</span>
+            <button
+              type="button"
+              className="inline-flex size-11 items-center justify-center rounded-full text-lg hover:bg-accent1/40 disabled:opacity-40"
+              aria-label={`Aumentar caixas de ${nome}`}
+              disabled={!podeAumentar}
+              onClick={() => aoMudar(kit.quantidade + 1)}
+            >
+              +
+            </button>
+          </div>
+          <p className="font-semibold">{formatarBRL((emCentavos(kit.preco) * kit.quantidade) / 100)}</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex min-h-11 items-center self-start text-sm font-medium text-secundaria underline underline-offset-2"
+          onClick={aoRemover}
+        >
+          Remover <span className="sr-only">{nome}</span>
+        </button>
+      </div>
+    </li>
   );
 }

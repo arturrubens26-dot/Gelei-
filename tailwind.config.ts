@@ -1,6 +1,6 @@
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
-import { cores, padroes, tipografia } from "./src/design-system";
+import { cores, kraft, padroes, tipografia } from "./src/design-system";
 
 const pilha = (fonte: { familia: string; fallback: readonly string[] }) => [
   `"${fonte.familia}"`,
@@ -11,7 +11,8 @@ const config: Config = {
   content: ["./src/**/*.{ts,tsx,mdx}"],
   theme: {
     extend: {
-      colors: { ...cores },
+      // `kraft` vira `bg-kraft` / `bg-kraft-sombra` (caixa do kit).
+      colors: { ...cores, kraft: { DEFAULT: kraft.base, sombra: kraft.sombra } },
       fontFamily: {
         titulos: pilha(tipografia.titulos),
         textos: pilha(tipografia.textos),

@@ -3,9 +3,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { StatusPagamento } from "@/components/checkout/StatusPagamento";
+import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { exigirUsuario } from "@/lib/auth/dal";
 import { formatarBRL } from "@/lib/dinheiro";
 import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
+import { textoDaComposicao } from "@/lib/kits-regras";
 import { ultimaCobranca } from "@/lib/pagamentos";
 import { buscarPedidoDoUsuario } from "@/lib/pedidos";
 
@@ -53,6 +55,18 @@ async function DadosDoPedido({ params }: { params: PageProps<"/order-confirmatio
           Itens
         </h2>
         <ul className="divide-y divide-accent1/70">
+          {pedido.kits.map((kit) => (
+            <li key={kit.id} className="flex items-center gap-3 py-2 text-sm">
+              <MiniaturaKit sabores={kit.sabores} className="size-14" />
+              <span className="min-w-0 flex-1">
+                {kit.quantidade} × {kit.nome}
+                <span className="block text-primaria/80">
+                  {textoDaComposicao(kit.sabores)} · {formatarBRL(kit.precoUnitario)} cada
+                </span>
+              </span>
+              <span className="shrink-0 self-baseline font-semibold">{formatarBRL(kit.subtotal)}</span>
+            </li>
+          ))}
           {pedido.itens.map((item) => (
             <li key={item.productId} className="flex items-baseline justify-between gap-4 py-2 text-sm">
               <span>

@@ -207,7 +207,21 @@ export function PedidosAdmin() {
             )}
             {dados?.pedidos.map((p) => (
               <tr key={p.id}>
-                <td className="whitespace-nowrap px-4 py-3 font-semibold">{codigoPedido(p.id)}</td>
+                <td className="whitespace-nowrap px-4 py-3">
+                  {/* O código abre a ficha do pedido (o que separar, para onde mandar, imprimir). */}
+                  <Link
+                    href={`/admin/orders/${p.id}`}
+                    className="inline-flex min-h-11 items-center font-semibold text-secundaria underline underline-offset-2 hover:text-primaria"
+                  >
+                    {codigoPedido(p.id)}
+                    <span className="sr-only">: abrir a ficha do pedido</span>
+                  </Link>
+                  {p.qtdKits > 0 && (
+                    <span className="block w-fit rounded-full border border-kraft-sombra bg-kraft px-2 py-0.5 text-xs font-semibold text-primaria">
+                      Com kit
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   {p.cliente.nome}
                   {p.canal === "PRESENCIAL" ? (

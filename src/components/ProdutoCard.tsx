@@ -1,8 +1,8 @@
-import Image from "next/image";
 import { BotaoAdicionar } from "@/components/carrinho/BotaoAdicionar";
+import { FotoDoPote } from "@/components/FotoDoPote";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ProdutoDTO } from "@/lib/produtos";
-import { ehFotoEnviada, separarNome } from "@/lib/produtos-regras";
+import { separarNome } from "@/lib/produtos-regras";
 
 /**
  * Cartão de produto no formato do rótulo Geleiô: papel claro com duplo filete dourado,
@@ -15,16 +15,13 @@ export function ProdutoCard({ produto, prioritario = false }: { produto: Produto
   return (
     <article className="cartao flex flex-col p-2.5">
       <div className="overflow-hidden rounded-sm bg-[#f3ece3]">
-        <Image
+        <FotoDoPote
           src={produto.imagemUrl}
           alt={`Pote de geleia ${produto.nome}`}
-          width={480}
-          height={480}
+          lado={480}
           // Grade de 1, 2 e 3 colunas (até 1152px de largura): o navegador baixa só o tamanho necessário.
           sizes="(min-width: 1024px) 368px, (min-width: 640px) 50vw, 100vw"
-          priority={prioritario}
-          // Foto enviada pelo painel já chega reduzida (800×800) e vem de uma rota da própria loja.
-          unoptimized={ehFotoEnviada(produto.imagemUrl)}
+          prioritario={prioritario}
           className="aspect-square w-full object-cover"
         />
       </div>

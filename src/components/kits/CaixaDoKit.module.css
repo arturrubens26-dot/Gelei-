@@ -1,0 +1,43 @@
+/*
+ * O pote entrando na vaga da caixa: cai de leve, achata ao tocar o fundo e balança como gelatina
+ * até assentar (uma vez, quando a vaga recebe o pote). Só com movimento liberado no sistema: com
+ * "reduzir movimento" o pote simplesmente aparece (o globals.css também zera as animações).
+ * O transform-origin no pé do pote faz o achatamento parecer peso, e não um zoom.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .entrar {
+    transform-origin: 50% 96%;
+    animation: entrar 720ms both;
+  }
+}
+
+@keyframes entrar {
+  0% {
+    opacity: 0;
+    transform: translateY(-42%) scale(0.94, 1.05);
+    /* Queda: começa devagar e acelera, como um pote solto na caixa. */
+    animation-timing-function: cubic-bezier(0.55, 0, 0.9, 0.45);
+  }
+  14% {
+    opacity: 1;
+  }
+  36% {
+    transform: translateY(0) scale(1.08, 0.9);
+    animation-timing-function: cubic-bezier(0.3, 0.6, 0.4, 1);
+  }
+  54% {
+    transform: translateY(-2.5%) scale(0.96, 1.05);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  70% {
+    transform: translateY(0) scale(1.025, 0.975);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  85% {
+    transform: scale(0.992, 1.008);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}

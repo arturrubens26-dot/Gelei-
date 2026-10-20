@@ -3,10 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { calcularEntrega, mascararCep, type ResultadoEntrega } from "@/lib/carrinho/entrega";
-import { acoesCarrinho, totaisDoCarrinho, useCarrinho, useHidratado } from "@/lib/carrinho/store";
+import { acoesCarrinho, totaisDoCarrinho, useCarrinho, useHidratado, type KitCarrinho } from "@/lib/carrinho/store";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { EnderecoSalvo } from "@/lib/enderecos";
+import { conferirComposicao, emCentavos, textoDaComposicao } from "@/lib/kits-regras";
+
+/** "Kit Presente (Pimenta ×2 · Morango)": como a caixa aparece nas mensagens. */
+const nomeDaCaixa = (k: Pick<KitCarrinho, "nome" | "sabores">) => `${k.nome} (${textoDaComposicao(k.sabores)})`;
 
 const NOVO = "novo";
 
@@ -60,6 +65,8 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
   const [navegando, iniciarNavegacao] = useTransition();
   const [ultimoPedidoId, setUltimoPedidoId] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  // Uma caixa saiu do carrinho (kit ou sabor fora da loja, kit que mudou de tamanho): oferece montar outra.
+  const [ofertaMontarKit, setOfertaMontarKit] = useState(false);
   const [errosCampo, setErrosCampo] = useState<Record<string, string[]>>({});
   const alertaRef = useRef<HTMLParagraphElement>(null);
 
@@ -129,18 +136,31 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
   // Em centavos inteiros, a mesma conta do servidor; é o valor que o cliente "viu" e confirma.
   const totalCentavos = entrega === null ? null : totais.subtotalCentavos + Math.round(entrega * 100);
   const total = totalCentavos === null ? null : totalCentavos / 100;
-  const podeFinalizar = !enviando && enderecoCompleto && entrega !== null && carrinho.itens.length > 0;
+  const podeFinalizar = !enviando && enderecoCompleto && entrega !== null && !totais.vazio;
 
   async function finalizar() {
     setErro(null);
+    setOfertaMontarKit(false);
     setErrosCampo({});
     setEnviando(true);
 
     const itens = carrinho.itens.map((i) => ({ productId: i.productId, quantidade: i.quantidade }));
+    // Sem caixa, o corpo é exatamente o de antes dos kits (mesma assinatura da Idempotency-Key).
+    const conteudo =
+      carrinho.kits.length > 0
+        ? {
+            itens,
+            kits: carrinho.kits.map((k) => ({
+              kitId: k.kitId,
+              quantidade: k.quantidade,
+              sabores: k.sabores.map((s) => ({ productId: s.productId, quantidade: s.quantidade })),
+            })),
+          }
+        : { itens };
     const corpo = salvo
-      ? { itens, addressId: salvo.id }
+      ? { ...conteudo, addressId: salvo.id }
       : {
-          itens,
+          ...conteudo,
           endereco: {
             cep,
             rua: valores.rua,
@@ -173,13 +193,22 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         return;
       }
 
-      // Produtos que saíram do catálogo: diz quais, tira do carrinho e deixa a pessoa conferir.
+      // Produtos (ou kits) que saíram da loja: diz quais, tira do carrinho e deixa a pessoa conferir.
+      // Sai a caixa cujo kit saiu OU que leva algum sabor que saiu.
       if (resposta.status === 422 && Array.isArray(json?.detalhes?.indisponiveis)) {
         const ids: string[] = json.detalhes.indisponiveis;
-        const nomes = carrinho.itens.filter((i) => ids.includes(i.productId)).map((i) => i.nome);
-        acoesCarrinho.removerVarios(ids);
+        const kitIds: string[] = Array.isArray(json.detalhes.kitsIndisponiveis) ? json.detalhes.kitsIndisponiveis : [];
+        const avulsos = carrinho.itens.filter((i) => ids.includes(i.productId)).map((i) => i.nome);
+        const caixas = carrinho.kits
+          .filter((k) => kitIds.includes(k.kitId) || k.sabores.some((s) => ids.includes(s.productId)))
+          .map(nomeDaCaixa);
+        const nomes = [...avulsos, ...caixas];
+        acoesCarrinho.removerVarios(ids, kitIds);
+        setOfertaMontarKit(caixas.length > 0);
+        // Só com potes avulsos, a mesma frase de antes dos kits.
+        const [um, varios] = caixas.length > 0 ? ["Este item", "Estes itens"] : ["Este produto", "Estes produtos"];
         setErro(
-          `${nomes.length === 1 ? "Este produto não está mais disponível e saiu" : "Estes produtos não estão mais disponíveis e saíram"} do carrinho: ${nomes.join("; ") || "veja o resumo"}. Confira o resumo e finalize de novo.`,
+          `${nomes.length === 1 ? `${um} não está mais disponível e saiu` : `${varios} não estão mais disponíveis e saíram`} do carrinho: ${nomes.join("; ") || "veja o resumo"}. Confira o resumo e finalize de novo.`,
         );
         return;
       }
@@ -187,17 +216,36 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
       // Preço, peso ou entrega mudaram desde que a pessoa viu o total: diz o que mudou e pede nova confirmação.
       if (resposta.status === 409 && Array.isArray(json?.detalhes?.itens)) {
         const atuais: { productId: string; nome?: string; preco: number; pesoGramas?: number }[] = json.detalhes.itens;
-        const mudancas = atuais.flatMap((n) => {
-          const antigo = carrinho.itens.find((i) => i.productId === n.productId);
-          return antigo && antigo.preco !== n.preco
-            ? [`${antigo.nome}: ${formatarBRL(antigo.preco)} → ${formatarBRL(n.preco)}`]
-            : [];
+        const kitsAtuais: { kitId: string; nome?: string; preco: number; pesoCaixaGramas?: number; potes?: number }[] =
+          Array.isArray(json.detalhes.kits) ? json.detalhes.kits : [];
+        const mudancas = [
+          ...atuais.flatMap((n) => {
+            const antigo = carrinho.itens.find((i) => i.productId === n.productId);
+            return antigo && antigo.preco !== n.preco
+              ? [`${antigo.nome}: ${formatarBRL(antigo.preco)} → ${formatarBRL(n.preco)}`]
+              : [];
+          }),
+          ...kitsAtuais.flatMap((n) => {
+            const antigo = carrinho.kits.find((k) => k.kitId === n.kitId);
+            return antigo && antigo.preco !== n.preco
+              ? [`${antigo.nome}: ${formatarBRL(antigo.preco)} → ${formatarBRL(n.preco)}`]
+              : [];
+          }),
+        ];
+        // O kit passou a levar outro número de potes: as caixas montadas antes não servem mais.
+        const foraDoTamanho = carrinho.kits.filter((k) => {
+          const atual = kitsAtuais.find((n) => n.kitId === k.kitId);
+          return atual?.potes !== undefined && !conferirComposicao(k.sabores, atual.potes).ok;
         });
-        acoesCarrinho.atualizarPrecos(atuais);
+        acoesCarrinho.atualizarPrecos(atuais, kitsAtuais);
+        foraDoTamanho.forEach((k) => acoesCarrinho.removerKit(k.chave));
         acoesCarrinho.definirCotacao(null);
         setConsulta(null);
+        setOfertaMontarKit(foraDoTamanho.length > 0);
         setErro(
-          `Os valores mudaram desde que você viu o total${mudancas.length ? ` (${mudancas.join("; ")})` : " (a entrega foi recalculada)"}. Atualizamos o resumo: confira o novo total e finalize de novo.`,
+          `Os valores mudaram desde que você viu o total${mudancas.length ? ` (${mudancas.join("; ")})` : " (a entrega foi recalculada)"}.${
+            foraDoTamanho.length > 0 ? ` A caixa mudou de tamanho e saiu do carrinho: ${foraDoTamanho.map(nomeDaCaixa).join("; ")}.` : ""
+          } Atualizamos o resumo: confira o novo total e finalize de novo.`,
         );
         return;
       }
@@ -206,7 +254,27 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         setErro(json?.erro ?? "Não foi possível finalizar o pedido.");
         // Só o 400 traz erros por campo; nos demais, `detalhes` tem outro formato.
         const detalhes = json?.detalhes;
-        setErrosCampo(resposta.status === 400 && detalhes && typeof detalhes === "object" ? detalhes : {});
+        const porCampo: Record<string, string[]> = resposta.status === 400 && detalhes && typeof detalhes === "object" ? detalhes : {};
+        setErrosCampo(porCampo);
+        // Caixa com potes a mais ou a menos ("kits.0.sabores", na posição em que foi enviada): só
+        // acontece com um carrinho de antes de o kit mudar. Ela sai do carrinho, senão a pessoa ficaria
+        // presa nesse erro; o caminho é montar de novo.
+        const erradas = Object.keys(porCampo).flatMap((campo) => {
+          const m = /^kits\.(\d+)\.sabores$/.exec(campo);
+          const caixa = m ? carrinho.kits[Number(m[1])] : undefined;
+          return caixa ? [caixa] : [];
+        });
+        erradas.forEach((k) => acoesCarrinho.removerKit(k.chave));
+        setOfertaMontarKit(erradas.length > 0);
+        if (erradas.length > 0) {
+          // A frase do servidor ("Kit Presente: a caixa leva 3 potes; vieram 2.") vem primeiro, e o
+          // que fizemos depois; os detalhes já entraram no texto, então não se repetem embaixo.
+          const motivos = [...new Set(Object.values(porCampo).flat())].join(" ");
+          setErrosCampo({});
+          setErro(
+            `${motivos || json?.erro || "Confira os potes do kit."} ${erradas.length === 1 ? "Esta caixa saiu" : "Estas caixas saíram"} do carrinho: ${erradas.map(nomeDaCaixa).join("; ")}. Se quiser, monte a caixa de novo.`,
+          );
+        }
         return;
       }
 
@@ -240,13 +308,18 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
     );
   }
 
-  if (carrinho.itens.length === 0) {
+  if (totais.vazio) {
     return (
       <div className="flex flex-col items-center gap-4 py-16 text-center">
         {erro && (
           <p ref={alertaRef} tabIndex={-1} role="alert" className="max-w-prose rounded-lg border-2 border-secundaria bg-white/70 p-3 font-medium text-secundaria">
             {erro}
           </p>
+        )}
+        {ofertaMontarKit && (
+          <Link href="/kits" className="btn-secundario">
+            Montar outro kit
+          </Link>
         )}
         {ultimoPedidoId ? (
           <>
@@ -350,6 +423,16 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
       {/* 2. Resumo */}
       <Secao numero={2} titulo="Resumo do pedido">
         <ul className="divide-y divide-accent1/70">
+          {carrinho.kits.map((k) => (
+            <li key={k.chave} className="flex items-center gap-3 py-2 text-sm">
+              <MiniaturaKit sabores={k.sabores} className="size-14" />
+              <span className="min-w-0 flex-1">
+                {k.quantidade} × {k.nome}
+                <span className="block text-primaria/80">{textoDaComposicao(k.sabores)}</span>
+              </span>
+              <span className="shrink-0 self-baseline font-semibold">{formatarBRL((emCentavos(k.preco) * k.quantidade) / 100)}</span>
+            </li>
+          ))}
           {carrinho.itens.map((i) => (
             <li key={i.productId} className="flex items-baseline justify-between gap-4 py-2 text-sm">
               <span>
@@ -373,6 +456,12 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
             <dd>{total !== null ? formatarBRL(total) : formatarBRL(subtotal)}</dd>
           </div>
         </dl>
+        {totais.economiaKitsCentavos > 0 && (
+          <p className="mt-3 text-xs text-primaria/85">
+            Com {totais.caixas === 1 ? "o kit" : "os kits"}, você economiza {formatarBRL(totais.economiaKitsCentavos / 100)} em relação aos
+            potes avulsos (já descontado no subtotal).
+          </p>
+        )}
         <p className="mt-3 text-xs text-primaria/80">
           Os valores finais são conferidos pelo servidor ao finalizar o pedido.
         </p>
@@ -388,6 +477,13 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
           {erro}
           {primeiroDetalhe ? ` ${primeiroDetalhe}` : ""}
         </p>
+        {ofertaMontarKit && (
+          <p className="mb-3 text-sm">
+            <Link href="/kits" className="font-semibold text-secundaria underline underline-offset-2">
+              Montar outro kit
+            </Link>
+          </p>
+        )}
         <button
           type="button"
           className="btn-primario w-full py-3 text-base"

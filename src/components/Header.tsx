@@ -4,9 +4,18 @@ import { Suspense } from "react";
 import { BotaoCarrinho } from "@/components/carrinho/BotaoCarrinho";
 import { MenuUsuario, MenuUsuarioCarregando } from "@/components/MenuUsuario";
 import { logos, marca } from "@/design-system";
+import { listarKits } from "@/lib/kits";
 
-/** Cabeçalho da loja: logo oficial (pote + framboesas + Geleiô), navegação, conta e carrinho. */
-export function Header() {
+const estiloLink =
+  "inline-flex min-h-11 items-center text-sm font-semibold text-primaria underline-offset-4 hover:text-secundaria hover:underline";
+
+/**
+ * Cabeçalho da loja: logo oficial (pote + framboesas + Geleiô), navegação, conta e carrinho.
+ * O link "Kits" só aparece com um kit à venda (lista em cache, expirada pelo painel ao mudar).
+ */
+export async function Header() {
+  const temKit = (await listarKits()).length > 0;
+
   return (
     <header className="border-b border-accent2/50 bg-destaque">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2 sm:px-6">
@@ -24,12 +33,20 @@ export function Header() {
 
         <div className="flex items-center gap-4 sm:gap-6">
           <nav aria-label="Principal">
-            <Link
-              href="/products"
-              className="inline-flex min-h-11 items-center text-sm font-semibold text-primaria underline-offset-4 hover:text-secundaria hover:underline"
-            >
-              Nossas geleias
-            </Link>
+            <ul className="flex items-center gap-4 sm:gap-6">
+              <li>
+                <Link href="/products" className={estiloLink}>
+                  Nossas geleias
+                </Link>
+              </li>
+              {temKit && (
+                <li>
+                  <Link href="/kits" className={estiloLink}>
+                    Kits
+                  </Link>
+                </li>
+              )}
+            </ul>
           </nav>
           <Suspense fallback={<MenuUsuarioCarregando />}>
             <MenuUsuario />

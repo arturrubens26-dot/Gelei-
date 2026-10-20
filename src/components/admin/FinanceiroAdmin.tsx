@@ -213,7 +213,7 @@ function Resumo({ dados }: { dados: FinanceiroDoMes }) {
 }
 
 function Entradas({ dados }: { dados: FinanceiroDoMes }) {
-  const { site, presencial, ticketMedio, porSabor } = dados.entradas;
+  const { site, presencial, ticketMedio, porSabor, kits } = dados.entradas;
   return (
     <section aria-labelledby="titulo-entradas" className="cartao flex flex-col gap-4 p-5">
       <div>
@@ -227,31 +227,49 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
         <Linha rotulo="Vendas na feira e no balcão" valor={presencial.total} detalhe={`${presencial.vendas} ${presencial.vendas === 1 ? "venda" : "vendas"}`} />
         <Linha rotulo="Frete cobrado no site" valor={site.frete} detalhe="já incluído nas vendas pelo site" discreto />
         <Linha rotulo="Valor médio por venda" valor={ticketMedio} detalhe="entradas ÷ vendas" discreto />
+        {/* Já está dentro das vendas acima: a linha só mostra quanto veio em caixas e o desconto dado. */}
+        {kits.caixas > 0 && (
+          <Linha
+            rotulo="Kits de presente"
+            valor={kits.valor}
+            detalhe={`${kits.caixas} ${kits.caixas === 1 ? "caixa" : "caixas"} · desconto dado ${formatarBRL(kits.desconto)} · já incluído nas vendas`}
+            discreto
+          />
+        )}
       </dl>
       <div>
         <h3 className="mb-2 font-semibold">Por sabor</h3>
         {porSabor.length === 0 ? (
           <p className="text-sm text-primaria/80">Nenhuma venda paga neste mês.</p>
         ) : (
-          <table className="w-full text-left text-sm">
-            <caption className="sr-only">Potes vendidos e valor por sabor, sem o frete</caption>
-            <thead className="border-b-2 border-accent2/60">
-              <tr>
-                <th scope="col" className="py-2 pr-3 font-semibold">Sabor</th>
-                <th scope="col" className="px-3 py-2 text-right font-semibold">Potes</th>
-                <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-accent1/70">
-              {porSabor.map((s) => (
-                <tr key={s.productId}>
-                  <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
-                  <td className="px-3 py-2 text-right tabular-nums">{s.potes}</td>
-                  <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
+          <>
+            <table className="w-full text-left text-sm">
+              <caption className="sr-only">Potes vendidos (total e quantos dentro de caixas de kit) e valor por sabor, sem o frete</caption>
+              <thead className="border-b-2 border-accent2/60">
+                <tr>
+                  <th scope="col" className="py-2 pr-3 font-semibold">Sabor</th>
+                  <th scope="col" className="px-3 py-2 text-right font-semibold">Potes</th>
+                  <th scope="col" className="px-3 py-2 text-right font-semibold">em kits</th>
+                  <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-accent1/70">
+                {porSabor.map((s) => (
+                  <tr key={s.productId}>
+                    <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
+                    <td className="px-3 py-2 text-right tabular-nums">{s.potes}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-primaria/85">{s.potesEmKits > 0 ? s.potesEmKits : "—"}</td>
+                    <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {porSabor.some((s) => s.potesEmKits > 0) && (
+              <p className="mt-2 text-xs text-primaria/75">
+                “Potes” já inclui os que saíram em kits. O valor de um pote em kit é a parte dele no preço da caixa.
+              </p>
+            )}
+          </>
         )}
       </div>
     </section>

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { CarregandoAdmin, GuardaAdmin } from "@/components/admin/GuardaAdmin";
+import { KitsAdmin } from "@/components/admin/KitsAdmin";
 import { ProdutosAdmin } from "@/components/admin/ProdutosAdmin";
+import { listarKitsAdmin } from "@/lib/kits-admin";
 import { listarProdutosAdmin } from "@/lib/produtos-admin";
 
 export const metadata: Metadata = { title: "Produtos" };
@@ -16,7 +18,17 @@ export default function PaginaProdutosAdmin() {
   );
 }
 
-/** Lido do banco a cada visita (não do cache da loja): mostra também os produtos ocultos. */
+/** Lido do banco a cada visita (não do cache da loja): mostra também os produtos e kits ocultos. */
 async function Catalogo() {
-  return <ProdutosAdmin produtos={await listarProdutosAdmin()} />;
+  const [produtos, kits] = await Promise.all([listarProdutosAdmin(), listarKitsAdmin()]);
+  // Prévia da caixa e conta da economia: só os sabores à venda (os que a cliente pode escolher).
+  const sabores = produtos.filter((p) => p.ativo).map((p) => ({ id: p.id, nome: p.nome, imagemUrl: p.imagemUrl, preco: p.preco }));
+  return (
+    <div className="flex flex-col gap-12">
+      <ProdutosAdmin produtos={produtos} />
+      <div className="border-t border-accent2/50 pt-10">
+        <KitsAdmin kits={kits} sabores={sabores} />
+      </div>
+    </div>
+  );
 }

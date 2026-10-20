@@ -36,6 +36,18 @@ export const cores = {
 export type NomeCor = keyof typeof cores;
 
 /**
+ * Kraft da caixa de presente ("Monte seu kit"), desenhada em CSS: `bg-kraft` e `bg-kraft-sombra`.
+ * Texto sobre kraft SEMPRE em primaria (≈ 8,1:1 sobre `base` e ≈ 5,4:1 sobre `sombra`): o carmesim
+ * fica em ≈ 4,4:1 sobre o kraft claro, abaixo dos 4,5:1, e só serve para enfeite e ícone.
+ */
+export const kraft = {
+  /** Papelão claro da caixa. */
+  base: "#E9D7B7",
+  /** Dobras, filetes e o fundo da janela (a parte de dentro da caixa, na sombra). */
+  sombra: "#C9AE85",
+} as const;
+
+/**
  * Cores das séries nos gráficos do painel. Entradas no carmesim da marca; despesas num dourado
  * escurecido (o accent2 puro tem contraste ≈ 2:1 sobre branco, abaixo dos 3:1 de WCAG 1.4.11).
  * Par validado para daltonismo sobre o branco do cartão: ΔE 16,2 (deuteranopia), contraste ≥ 3:1.
