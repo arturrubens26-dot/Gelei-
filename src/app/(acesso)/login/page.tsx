@@ -61,7 +61,8 @@ export default function PaginaLogin({ searchParams }: PageProps<"/login">) {
 
         <div className="relative h-64 overflow-hidden rounded-[1.5rem] border border-accent2/50 bg-destaque [grid-area:cena] sm:h-80 lg:h-auto">
           <AnimatedJamJar />
-          <p className="assinatura absolute inset-x-0 bottom-4 hidden text-center text-3xl text-primaria lg:block">{marca.fraseRodape}</p>
+          {/* pointer-events-none: a frase ocupa a largura toda e ficava por cima do botão de pausa. */}
+          <p className="assinatura pointer-events-none absolute inset-x-0 bottom-4 hidden text-center text-3xl text-primaria lg:block">{marca.fraseRodape}</p>
         </div>
       </div>
     </main>

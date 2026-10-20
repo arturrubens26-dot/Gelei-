@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import {
+  frame,
   useAnimate,
   useInView,
   useMotionValue,
@@ -63,10 +64,13 @@ const paralaxe = (profundidade: number) =>
 
 // Boca do pote (elipse da superfície da geleia) e pontos da coreografia, medidos na foto.
 const BOCA = { cx: 383, cy: 258, rx: 198, ry: 21 };
-/** Centro do fundo do pote: origem do balanço do corpo (achata e estica a partir da mesa). */
-const BASE_POTE = { x: 383, y: 786 };
+/**
+ * Centro do fundo do pote, onde o pé de vidro encosta na mesa (y 782,5 no recorte, com a borda
+ * macia até 783): origem do balanço do corpo (achata e estica a partir da mesa) e centro da sombra.
+ */
+const BASE_POTE = { x: 383, y: 783 };
 /** Área do pote que responde ao clique/toque: do topo da tampa fechada até o fundo. */
-const AREA_TOQUE = { x: 136, y: 188, largura: 494, altura: 598 };
+const AREA_TOQUE = { x: 136, y: 188, largura: 494, altura: BASE_POTE.y - 188 };
 /** Camadas do corpo do pote: balançam a partir do fundo e ficam no plano do meio do paralaxe. */
 const ESTILO_CORPO = { transformOrigin: origem(BASE_POTE.x, BASE_POTE.y), translate: paralaxe(2) };
 const CENTRO_TAMPA = { x: 383, y: 240 };
@@ -127,6 +131,19 @@ const QUADRO_PARADO: AnimationSequence = [
   ["[data-colher]", { ...COLHER_ERGUIDA, opacity: 1 }, { duration: 0, at: 0 }],
   ["[data-porcao]", { opacity: 1 }, { duration: 0, at: 0 }],
   ["[data-gota]", { opacity: 1, scale: 1, y: uy(0) }, { duration: 0, at: 0 }],
+];
+
+/**
+ * Pose de repouso, aplicada na hora no começo da cena: tampa fechada, colher fora, sem gota nem
+ * porção, corpo e sombra no lugar. Uma animação parada no meio (stop) congela o valor onde estava,
+ * e ABRIR e QUADRO_PARADO não repõem tudo (o 1º trecho do ABRIR nem tem `x` da tampa).
+ */
+const POSE_REPOUSO: AnimationSequence = [
+  ["[data-tampa]", { x: ux(0), y: uy(0), rotate: 0 }, { duration: 0 }],
+  ["[data-colher]", { ...COLHER_FORA, opacity: 0 }, { duration: 0, at: 0 }],
+  ["[data-porcao], [data-gota], [data-onda], [data-onda-toque]", { opacity: 0 }, { duration: 0, at: 0 }],
+  ["[data-corpo], [data-acompanha]", { y: uy(0), rotate: 0, scaleX: 1, scaleY: 1 }, { duration: 0, at: 0 }],
+  ["[data-sombra]", { scaleX: 1, opacity: 1 }, { duration: 0, at: 0 }],
 ];
 
 /*
@@ -202,8 +219,9 @@ export function AnimatedJamJar() {
   const visivelRef = useRef(false);
   const fimUltima = useRef(0);
   const imagens = useRef<(HTMLImageElement | null)[]>([]);
+  const reacao = useRef<AnimationPlaybackControls | null>(null);
 
-  /** Roda uma sequência registrando os controles (para pausar/cancelar). */
+  /** Roda uma sequência da coreografia registrando os controles (para pausar/cancelar). */
   const rodar = useCallback(
     async (sequencia: AnimationSequence, opcoes?: { repeat?: number; repeatDelay?: number }, laco = false) => {
       const controles = animar(sequencia, opcoes);
@@ -215,6 +233,25 @@ export function AnimatedJamJar() {
       } finally {
         conjunto.delete(controles);
       }
+    },
+    [animar],
+  );
+
+  /**
+   * Reação a um toque ou ao formulário (chacoalhar, negar, comemorar). Dura menos de 1 s e quem
+   * dispara é a pessoa, então fica FORA dos conjuntos pausáveis: no framer-motion 13 uma animação
+   * interrompida (stop, ou outra no mesmo valor) nunca resolve a promise, e um pause() depois disso
+   * reaplica o 1º quadro da Web Animation cancelada (os anéis da ondulação ficavam congelados).
+   * Uma reação nova termina a anterior na hora (complete leva ao fim, que é a pose de repouso).
+   */
+  const reagir = useCallback(
+    (sequencia: AnimationSequence) => {
+      reacao.current?.complete();
+      const controles = animar(sequencia);
+      reacao.current = controles;
+      void controles.then(() => {
+        if (reacao.current === controles) reacao.current = null;
+      });
     },
     [animar],
   );
@@ -273,12 +310,18 @@ export function AnimatedJamJar() {
     await abrir();
   }, [abrir, pararLacos, rodar]);
 
-  // Começo: espera as fotos decodificarem (sem animar camadas ainda invisíveis) e abre o pote.
-  // Com "reduzir movimento", vai direto para o quadro parado.
+  // Começo (e volta à rota, que reexecuta os efeitos): repõe a pose de repouso, espera as fotos
+  // decodificarem (sem animar camadas ainda invisíveis) e abre o pote. Com "reduzir movimento",
+  // vai direto para o quadro parado.
   useEffect(() => {
     if (reduzir === null) return; // ainda não sabemos (primeira renderização)
     const minha = ++geracao.current;
     let cancelado = false;
+
+    // Web Animations "zumbis" (paradas no meio, que um pause() reacenderia) saem de cena.
+    escopo.current?.getAnimations({ subtree: true }).forEach((a) => a.cancel());
+    reacao.current = null;
+    animar(POSE_REPOUSO);
 
     if (reduzir) {
       pararLacos();
@@ -286,7 +329,10 @@ export function AnimatedJamJar() {
       estado.current = "aberto";
     } else {
       const fotos = imagens.current.filter((img): img is HTMLImageElement => Boolean(img));
-      void Promise.all(fotos.map((img) => img.decode().catch(() => undefined))).then(() => {
+      // A pose com duração 0 só é escrita no próximo quadro do framer-motion: o ABRIR espera esse
+      // quadro, senão leria o x da tampa ainda fora do lugar.
+      const poseAplicada = new Promise<void>((pronto) => frame.postRender(() => pronto()));
+      void Promise.all([poseAplicada, ...fotos.map((img) => img.decode().catch(() => undefined))]).then(() => {
         if (!cancelado && minha === geracao.current && estado.current === "fechado") void abrir();
       });
     }
@@ -295,7 +341,7 @@ export function AnimatedJamJar() {
       cancelado = true;
       pararTudo();
     };
-  }, [reduzir, abrir, animar, pararLacos, pararTudo]);
+  }, [reduzir, abrir, animar, pararLacos, pararTudo, escopo]);
 
   // Formulário no mesmo <main>: o foco num campo repete a cena (no máximo a cada 8 s) e o
   // resultado do envio faz o pote reagir (balança "não" no erro, pula no acerto).
@@ -314,7 +360,7 @@ export function AnimatedJamJar() {
     const aoResultado = (e: Event) => {
       if (!podeReagir()) return;
       const resultado = (e as CustomEvent<ResultadoLogin>).detail;
-      void rodar((resultado === "erro" ? negar : comemorar)(alvoDoBalanco(estado.current)));
+      reagir((resultado === "erro" ? negar : comemorar)(alvoDoBalanco(estado.current)));
     };
     pagina.addEventListener("focusin", aoFocar);
     pagina.addEventListener(EVENTO_RESULTADO_LOGIN, aoResultado);
@@ -322,13 +368,15 @@ export function AnimatedJamJar() {
       pagina.removeEventListener("focusin", aoFocar);
       pagina.removeEventListener(EVENTO_RESULTADO_LOGIN, aoResultado);
     };
-  }, [reduzir, repetir, rodar, escopo]);
+  }, [reduzir, repetir, reagir, escopo]);
 
   // Paralaxe pelo mouse sobre o card inteiro (no toque não há "passar por cima": fica parado).
   useEffect(() => {
     if (reduzir !== false) return;
     const cartao = raiz.current?.parentElement;
-    if (!cartao) return;
+    // A cena é guardada aqui: quando a rota é escondida, o React solta o ref antes da limpeza.
+    const cena = escopo.current;
+    if (!cartao || !cena) return;
     const limitar = (v: number) => Math.max(-1, Math.min(1, v));
     const aoMover = (e: PointerEvent) => {
       if (e.pointerType !== "mouse" || pausadoPelaPessoa.current) return;
@@ -345,17 +393,27 @@ export function AnimatedJamJar() {
     return () => {
       cartao.removeEventListener("pointermove", aoMover);
       cartao.removeEventListener("pointerleave", aoSair);
+      // Volta ao centro na hora (sem a mola, que escreveria num ref já solto).
       aoSair();
+      molaX.jump(0);
+      molaY.jump(0);
+      cena.style.setProperty("--px", "0");
+      cena.style.setProperty("--py", "0");
     };
-  }, [reduzir, alvoX, alvoY]);
+  }, [reduzir, alvoX, alvoY, molaX, molaY, escopo]);
 
-  /** Clique/toque no pote: chacoalha como gelatina. */
+  /**
+   * Clique/toque no pote: chacoalha como gelatina. É `click`, não `pointerdown`: no celular o
+   * pointerdown dispara antes de o navegador decidir que o gesto é rolagem (e no mouse viria até
+   * do botão direito e do meio).
+   */
   function cutucar() {
     if (reduzir !== false || pausadoPelaPessoa.current) return;
-    void rodar(chacoalhar(alvoDoBalanco(estado.current)));
+    reagir(chacoalhar(alvoDoBalanco(estado.current)));
   }
 
-  // Fora da tela (rota escondida com display:none, aba de outra página): pausa tudo.
+  // Fora da tela (rota escondida com display:none, aba de outra página): pausa a coreografia e os
+  // laços. As reações (menos de 1 s) não entram aqui: terminam sozinhas, na pose de repouso.
   useEffect(() => {
     visivelRef.current = visivel;
     const todos = [...ativos.current, ...lacos.current];
@@ -523,7 +581,7 @@ export function AnimatedJamJar() {
               src="/login/pote.webp"
               alt=""
               width={494}
-              height={500}
+              height={505}
               loading="eager"
               draggable={false}
               sizes="(min-width: 1024px) 340px, 60vw"
@@ -572,15 +630,17 @@ export function AnimatedJamJar() {
           <div
             className="cursor-colher pointer-events-auto absolute touch-manipulation"
             style={{ ...caixa(AREA_TOQUE.x, AREA_TOQUE.y, AREA_TOQUE.largura), height: `${(AREA_TOQUE.altura / VH) * 100}%` }}
-            onPointerDown={cutucar}
+            onClick={cutucar}
           />
         </div>
       </div>
 
-      {/* Pausa (WCAG 2.2.2): fora da área aria-hidden; some quando o sistema pede menos movimento. */}
+      {/* Pausa (WCAG 2.2.2): fora da área aria-hidden; some quando o sistema pede menos movimento.
+          z-10: no desktop a assinatura do card (largura toda, logo depois na página) cobria o botão
+          e o clique do mouse caía nela. */}
       <label
         title="Pausar animação"
-        className="absolute bottom-3 left-3 inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-accent2/70 bg-white/85 text-primaria shadow-sm transition-colors hover:bg-white has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-secundaria motion-reduce:hidden"
+        className="absolute bottom-3 left-3 z-10 inline-flex size-11 cursor-pointer items-center justify-center rounded-full border border-accent2/70 bg-white/85 text-primaria shadow-sm transition-colors hover:bg-white has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-secundaria motion-reduce:hidden"
       >
         <input
           type="checkbox"
