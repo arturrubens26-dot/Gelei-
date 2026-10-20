@@ -1,6 +1,5 @@
-# Netlify. O Next.js é detectado sozinho e roda pelo adaptador OpenNext (sem plugin para instalar).
-# As variáveis (DATABASE_URL, SESSION_SECRET, APP_URL...) ficam no painel da Netlify, nunca aqui:
-# a lista está no README, em "Publicar na Netlify".
+# Netlify. As variáveis (DATABASE_URL, SESSION_SECRET, APP_URL...) ficam no painel da Netlify, nunca
+# aqui: a lista está no README, em "Publicar na Netlify".
 [build]
   # O `prebuild` do package.json roda `prisma generate` antes (o cliente gerado não vai para o Git).
   command = "npm run build"
@@ -9,3 +8,10 @@
 [build.environment]
   # A mesma versão usada neste computador.
   NODE_VERSION = "24"
+
+# Next.js Runtime da Netlify (OpenNext): transforma o .next em funções e regras de rota. Declarado
+# aqui (e fixado no package.json) porque a Netlify só o liga sozinha quando detecta o Next.js na
+# criação do projeto; este projeto foi criado com o repositório vazio e o primeiro deploy publicou o
+# .next como arquivos soltos ("0 new function(s)"), dando 404 em todas as páginas.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
