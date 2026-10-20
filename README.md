@@ -107,7 +107,12 @@ No plano grátis, cada publicação gasta créditos: junte as mudanças antes de
 | `POST /api/orders/[id]/simular-pagamento` | logado | demonstração: marca o próprio pedido como PAGO (só com `PAGAMENTOS_SIMULADOS=true` e sem Mercado Pago) |
 | `GET /api/admin/orders?status=&canal=` · `PATCH /api/admin/orders/[id]` | **admin** | lista/filtra pedidos (por status e canal `ONLINE`/`PRESENCIAL`) e muda o status (só transições válidas para o canal) |
 | `POST /api/admin/orders` | **admin** | lança uma **venda presencial** `{ itens: [{ productId, quantidade, precoUnitarioCentavos }], formaPagamento, status?: ENTREGUE \| PAGO, data?: "AAAA-MM-DD", clienteNome?, observacao? }`. Cabeçalho `Idempotency-Key` **obrigatório** (a mesma chave com o mesmo conteúdo devolve a venda já lançada, 200; com conteúdo diferente, 422). Limite de 200 por hora por admin |
-| `GET /api/admin/financial-stats` | **admin** | KPIs (faturamento, despesas, resultado), entradas e despesas por mês e transações recentes |
+| `GET /api/admin/financial-stats?mes=AAAA-MM` | **admin** | o Financeiro de um mês: resumo, entradas por canal e por sabor, saídas por categoria, 12 meses até ele e movimentações |
+| `GET /api/admin/products` | **admin** | todos os produtos, inclusive os ocultos, com o histórico de vendas e produções |
+| `POST /api/admin/products` | **admin** | cria produto (multipart: sabor, pesoGramas, precoCentavos, descricao, ativo, foto) |
+| `PATCH /api/admin/products/[id]` | **admin** | edita (multipart; foto opcional) ou mostra/oculta na loja (JSON `{ ativo }`) |
+| `DELETE /api/admin/products/[id]` | **admin** | exclui produto sem vendas nem produções (com histórico: 409, oculte) |
+| `GET /fotos/[id]` | público | foto enviada pelo painel (guardada no banco; cache permanente) |
 | `GET /api/admin/expenses?mes=AAAA-MM` · `POST /api/admin/expenses` | **admin** | o mês das despesas (lançamentos, total por categoria, vendas pagas e saldo) · lança uma despesa `{ descricao, categoria, quantidade, unidade, valorCentavos, data, fornecedor?, observacao? }` |
 | `PATCH` · `DELETE /api/admin/expenses/[id]` | **admin** | corrige (envia todos os campos) ou exclui uma despesa |
 | `GET/POST /api/admin/supplies` · `PATCH /api/admin/supplies/[id]` · `POST …/[id]/adjustments` | **admin** | insumos com estoque (comprado, usado, ajustes, sobra, custo médio); cadastro/edição; ajuste de estoque (perda, recontagem) |
@@ -121,7 +126,7 @@ As rotas `/api/admin/*` conferem `is_admin` **no banco a cada chamada** (não co
 - **Frete (simulado):** CEP `01…` → R$ 15; `20…` → R$ 25; demais CEPs → R$ 30 (valor provisório). Peso total acima de 2 kg soma R$ 5. Regras em `src/lib/frete.ts` — trocar por Correios/Loggi mantendo `calcularFrete`. Como o frete sai do CEP, o endereço do pedido é conferido contra o CEP (senão daria para pagar frete de capital entregando em outro estado).
 - **Faturamento:** soma dos pedidos **Pago + Enviado + Entregue** (o pedido enviado já foi pago). Pendentes e cancelados ficam de fora. O gráfico mensal agrupa pela **data de criação** do pedido, no horário de Brasília.
 - **Status:** `PENDENTE → PAGO → ENVIADO → ENTREGUE`; `PENDENTE` e `PAGO` podem ir a `CANCELADO`.
-- **Venda presencial (`/admin/orders/nova`):** venda de feira ou balcão lançada pelo admin. Fica na mesma tabela de pedidos, com `canal = PRESENCIAL`, então entra no faturamento, no gráfico e no planner de despesas como qualquer pedido pago; o Financeiro mostra à parte o KPI **Vendas presenciais**.
+- **Venda presencial (`/admin/orders/nova`):** venda de feira ou balcão lançada pelo admin. Fica na mesma tabela de pedidos, com `canal = PRESENCIAL`, então entra no faturamento, no gráfico e no planner de despesas como qualquer pedido pago; o Financeiro mostra à parte as **vendas na feira e no balcão**.
   - **Sem cliente cadastrado nem entrega:** `user_id` e `address_id` ficam vazios, frete 0, total = soma dos itens. O nome do cliente (opcional) aparece como "Venda presencial · Maria". O cliente nunca vê essas vendas (a confirmação de pedido só busca pedidos online).
   - **Preço:** vem do catálogo, mas o admin pode mudar por item (desconto de feira); viaja em **centavos inteiros**, de R$ 0 a R$ 999,99 por pote (o teto pega "2490" digitado no lugar de "24,90"). Um item pode custar 0, mas a venda não pode ter total zero: brinde e amostra vão em Despesas. Uma linha por produto.
   - **Forma de pagamento** obrigatória: dinheiro, PIX, cartão de débito, cartão de crédito ou outro.
@@ -129,7 +134,7 @@ As rotas `/api/admin/*` conferem `is_admin` **no banco a cada chamada** (não co
   - **Data:** sem data, vale hoje no relógio do servidor; pode ser um dia passado (desde 2020), nunca futuro. A venda retroativa é gravada ao meio-dia de Brasília daquele dia, e `lancado_em` guarda quando ela foi lançada (a lista mostra "lançada em …"). `registrado_por_id` guarda qual admin lançou.
   - **Banco:** a CHECK `orders_canal_coerente` garante que pedido online tem cliente e endereço, e que venda presencial não tem endereço nem frete, tem forma de pagamento e só usa os status `PAGO`, `ENTREGUE` e `CANCELADO`.
   - **Desfazer a migração** `20261016230000_venda_presencial`: o passo a passo está no topo do `migration.sql` (antes, apague ou arquive as vendas presenciais, senão o `SET NOT NULL` falha).
-- **Despesas (`/admin/expenses`):** tudo o que a loja gasta, com quantidade, unidade e valor pago (ex.: Adesivos, 50 un, R$ 20,00 → R$ 0,40 cada). Categorias fixas (ingredientes, potes e embalagens, rótulos e adesivos, entrega, divulgação, equipamentos, taxas e impostos, outros) em `src/lib/despesas.ts`; mudar a lista exige migração (enum no banco). Cada mês mostra vendas pagas, despesas e saldo; o Financeiro mostra o **resultado** (faturamento bruto − despesas) e as despesas no gráfico mensal.
+- **Despesas (`/admin/expenses`):** tudo o que a loja gasta, com quantidade, unidade e valor pago (ex.: Adesivos, 50 un, R$ 20,00 → R$ 0,40 cada). Categorias fixas (ingredientes, potes e embalagens, rótulos e adesivos, entrega, divulgação, equipamentos, taxas e impostos, outros) em `src/lib/despesas.ts`; mudar a lista exige migração (enum no banco). Cada mês mostra vendas pagas, despesas e saldo; o Financeiro mostra o mesmo mês com mais detalhe (de onde veio e para onde foi o dinheiro).
   - **Data da compra:** de 2020 até hoje; **data futura não entra** (o Resultado somaria um gasto que ainda não aconteceu). Sem data, vale hoje no relógio do servidor.
   - **Valores digitados:** formato brasileiro ("1.234,56", "20,5", ",50"; "20.5" também). O malformado ("1.2345", "12.34,56") é recusado em vez de adivinhado (`lerNumeroBrasileiro` em `src/lib/dinheiro.ts`). O valor viaja em centavos; quantidade até 3 casas, mínimo 0,001. O banco recusa valor ou quantidade ≤ 0.
   - **Mês das vendas:** as duas telas (Despesas e Financeiro) deixam o Postgres converter a meia-noite de Brasília (`AT TIME ZONE 'America/Sao_Paulo'`), então contam o mesmo mês mesmo com horário de verão.
@@ -146,6 +151,18 @@ As rotas `/api/admin/*` conferem `is_admin` **no banco a cada chamada** (não co
 - **Banco:** restrições `CHECK` (preço, peso, quantidade, total ≥ frete) e índices, além da validação na API. Falha de conexão vira 503 (não 500).
 - **Pagamento simulado:** só vale com `PAGAMENTOS_SIMULADOS=true`; em produção (`NODE_ENV=production`) exige também `APP_ENV="demo"`. Sem os dois, o servidor recusa iniciar e a rota de simulação responde 404.
 - **LGPD:** o carrinho e o CEP ficam no `localStorage` por até 7 dias e são apagados ao finalizar o pedido e ao sair da conta. Ainda faltam política de privacidade e rotina de exportação/anonimização de dados.
+
+### Produtos (`/admin/products`)
+
+- Criar, editar (preço, peso, descrição, foto), ocultar/mostrar na loja e excluir. O nome segue o rótulo: "Sabor, 112g". Produto novo ganha id legível (`morango-112g`); editar não muda o id.
+- **Foto:** o navegador recorta em quadrado pelo centro e reduz para 800×800 JPEG antes de enviar. O servidor confere o tipo pelos primeiros bytes (JPG, PNG ou WebP, até 2 MB) e guarda na tabela `produto_fotos`, porque a Netlify não guarda arquivos enviados. Cada foto nova tem outro endereço (`/fotos/<id>`), então pode ficar em cache para sempre.
+- **Excluir x ocultar:** produto com vendas ou produções não pode ser excluído (pedidos e fichas apontam para ele): oculte. Oculto, ele some da vitrine e não pode ser comprado (o pedido responde 422 "indisponível"), mas o histórico continua certo.
+- A vitrine usa o catálogo em cache (tag `produtos`): toda mudança no painel o expira na hora (`revalidateTag("produtos", { expire: 0 })`).
+
+### Financeiro (`/admin/financial`)
+
+- Um mês por vez (setas para navegar): frase-resumo ("entraram X e saíram Y: sobraram Z"), **De onde veio o dinheiro** (site, feira/balcão, frete, valor médio, por sabor), **Para onde foi** (despesas por categoria), **Últimos 12 meses** até o mês escolhido (gráfico ou tabela; clicar no mês abre ele) e **Movimentações do mês** (vendas e despesas na mesma lista).
+- Mesma conta do painel de Despesas: vendas pagas pela data do pedido (horário de Brasília), despesas pela data da compra.
 
 ### Produção (`/admin/production`)
 

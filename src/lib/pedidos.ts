@@ -148,7 +148,8 @@ export async function criarPedido(
   }
 
   const ids = [...quantidades.keys()];
-  const produtos = await db.product.findMany({ where: { id: { in: ids } } });
+  // Produto oculto da loja conta como indisponível (o carrinho do cliente pode ser de antes).
+  const produtos = await db.product.findMany({ where: { id: { in: ids }, ativo: true } });
   if (produtos.length !== ids.length) {
     const achados = new Set(produtos.map((p) => p.id));
     throw new ErroNegocio(422, "Alguns produtos do carrinho não estão mais disponíveis.", {

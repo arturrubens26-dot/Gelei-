@@ -7,6 +7,7 @@ import { calcularEntrega, mascararCep } from "@/lib/carrinho/entrega";
 import { acoesCarrinho, totaisDoCarrinho, useCarrinho } from "@/lib/carrinho/store";
 import { formatarBRL } from "@/lib/dinheiro";
 import { MAX_POR_PRODUTO } from "@/lib/limites";
+import { ehFotoEnviada } from "@/lib/produtos-regras";
 import { useCarrinhoUI } from "./contexto";
 
 /**
@@ -114,7 +115,8 @@ export function CarrinhoLateral() {
                   alt=""
                   width={72}
                   height={72}
-                  className="size-18 shrink-0 rounded-lg border border-accent2/60"
+                  unoptimized={ehFotoEnviada(item.imagemUrl)}
+                  className="size-18 shrink-0 rounded-lg border border-accent2/60 object-cover"
                 />
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <p className="font-titulos text-base font-semibold leading-snug">{item.nome}</p>

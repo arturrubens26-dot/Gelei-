@@ -37,10 +37,19 @@ export async function lerJson(request: Request): Promise<unknown> {
   const tipo = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   if (tipo !== "application/json") return undefined;
 
-  const declarado = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declarado) && declarado > MAX_BYTES_CORPO) {
-    throw new ErroNegocio(413, "Corpo da requisição grande demais.");
+  const corpo = await lerBytes(request, MAX_BYTES_CORPO, "Corpo da requisição grande demais.");
+  if (!corpo) return undefined;
+  try {
+    return JSON.parse(corpo.toString("utf8"));
+  } catch {
+    return undefined;
   }
+}
+
+/** Lê o corpo inteiro com teto de tamanho (413 acima dele, sem carregar o resto na memória). */
+async function lerBytes(request: Request, maxBytes: number, mensagem413: string): Promise<Buffer | undefined> {
+  const declarado = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declarado) && declarado > maxBytes) throw new ErroNegocio(413, mensagem413);
 
   const leitor = request.body?.getReader();
   if (!leitor) return undefined;
@@ -50,15 +59,26 @@ export async function lerJson(request: Request): Promise<unknown> {
     const { done, value } = await leitor.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_BYTES_CORPO) {
+    if (total > maxBytes) {
       await leitor.cancel();
-      throw new ErroNegocio(413, "Corpo da requisição grande demais.");
+      throw new ErroNegocio(413, mensagem413);
     }
     partes.push(value);
   }
+  return Buffer.concat(partes);
+}
 
+/**
+ * Lê um formulário multipart (cadastro de produto com foto), com teto de tamanho. Devolve
+ * `undefined` se não for multipart ou se não der para ler.
+ */
+export async function lerFormulario(request: Request, maxBytes: number): Promise<FormData | undefined> {
+  const tipo = request.headers.get("content-type") ?? "";
+  if (tipo.split(";")[0]?.trim().toLowerCase() !== "multipart/form-data") return undefined;
+  const corpo = await lerBytes(request, maxBytes, "Arquivo grande demais (a foto pode ter no máximo 2 MB).");
+  if (!corpo) return undefined;
   try {
-    return JSON.parse(Buffer.concat(partes).toString("utf8"));
+    return await new Response(new Uint8Array(corpo), { headers: { "content-type": tipo } }).formData();
   } catch {
     return undefined;
   }

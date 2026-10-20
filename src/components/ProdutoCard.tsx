@@ -2,12 +2,7 @@ import Image from "next/image";
 import { BotaoAdicionar } from "@/components/carrinho/BotaoAdicionar";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ProdutoDTO } from "@/lib/produtos";
-
-/** "Morango com Pedaços, 250g" → sabor "Morango com Pedaços" e peso "250g" (como no rótulo). */
-function separarNome(nome: string): { sabor: string; peso: string | null } {
-  const i = nome.lastIndexOf(",");
-  return i > 0 ? { sabor: nome.slice(0, i).trim(), peso: nome.slice(i + 1).trim() } : { sabor: nome, peso: null };
-}
+import { ehFotoEnviada, separarNome } from "@/lib/produtos-regras";
 
 /**
  * Cartão de produto no formato do rótulo Geleiô: papel claro com duplo filete dourado,
@@ -28,6 +23,8 @@ export function ProdutoCard({ produto, prioritario = false }: { produto: Produto
           // Grade de 1, 2 e 3 colunas (até 1152px de largura): o navegador baixa só o tamanho necessário.
           sizes="(min-width: 1024px) 368px, (min-width: 640px) 50vw, 100vw"
           priority={prioritario}
+          // Foto enviada pelo painel já chega reduzida (800×800) e vem de uma rota da própria loja.
+          unoptimized={ehFotoEnviada(produto.imagemUrl)}
           className="aspect-square w-full object-cover"
         />
       </div>

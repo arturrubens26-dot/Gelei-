@@ -65,10 +65,29 @@ model Product {
   imagemUrl  String      @map("imagem_url")
   /// Peso de cada unidade, em gramas (ex.: 250). Usado no cálculo de frete.
   pesoGramas Int         @map("peso_gramas")
+  /// Aparece na loja? Produto com vendas ou produções não pode ser excluído (o histórico aponta
+  /// para ele): o admin o oculta da loja.
+  ativo      Boolean     @default(true)
   orderItems OrderItem[]
   producoes  Producao[]
+  fotos      ProdutoFoto[]
 
   @@map("products")
+}
+
+/// Foto enviada pelo painel (a Netlify não guarda arquivos enviados, então a imagem fica no banco).
+/// Servida em /fotos/<id>; cada foto nova ganha outro id, então o endereço pode ficar em cache para sempre.
+model ProdutoFoto {
+  id        String   @id @default(cuid())
+  productId String   @map("product_id")
+  /// image/jpeg, image/png ou image/webp (conferido pelos primeiros bytes do arquivo).
+  tipo      String   @db.VarChar(20)
+  dados     Bytes
+  criadoEm  DateTime @default(now()) @map("criado_em")
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([productId])
+  @@map("produto_fotos")
 }
 
 model Address {

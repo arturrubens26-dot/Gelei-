@@ -2,63 +2,91 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import { GraficoReceita, rotuloMes } from "@/components/admin/GraficoReceita";
-import { Kpi } from "@/components/admin/Kpi";
-import type { EstatisticasFinanceiras } from "@/lib/admin";
+import type { FinanceiroDoMes } from "@/lib/admin";
+import { ROTULO_CATEGORIA, formatarDia, nomeDoMes, somarMeses } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
-import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
 
+/** "outubro de 2026" → "Outubro de 2026" (o `capitalize` do CSS faria "Outubro De 2026"). */
+const primeiraMaiuscula = (texto: string) => texto.charAt(0).toUpperCase() + texto.slice(1);
+
+/**
+ * Financeiro, um mês por vez: quanto entrou, quanto saiu e o que sobrou; de onde veio e para onde
+ * foi o dinheiro; os 12 meses até ele; e cada movimentação (vendas e despesas na mesma lista).
+ */
 export function FinanceiroAdmin() {
+  // null = mês corrente (quem decide é o servidor, no horário de Brasília).
+  const [mes, setMes] = useState<string | null>(null);
   const [versao, setVersao] = useState(0);
-  const [resultado, setResultado] = useState<{ versao: number; dados?: EstatisticasFinanceiras; erro?: string } | null>(null);
+  const [resultado, setResultado] = useState<{ chave: string; dados?: FinanceiroDoMes; erro?: string } | null>(null);
   const [comoTabela, setComoTabela] = useState(false);
+  const chave = `${mes ?? "atual"}|${versao}`;
 
   useEffect(() => {
     let cancelado = false;
-    fetch("/api/admin/financial-stats")
+    fetch(`/api/admin/financial-stats${mes ? `?mes=${mes}` : ""}`)
       .then(async (resposta) => {
         const json = await resposta.json().catch(() => null);
         if (cancelado) return;
-        setResultado(
-          resposta.ok ? { versao, dados: json } : { versao, erro: json?.erro ?? "Não foi possível carregar o financeiro." },
-        );
+        setResultado(resposta.ok ? { chave, dados: json } : { chave, erro: json?.erro ?? "Não foi possível carregar o financeiro." });
       })
       .catch(() => {
-        if (!cancelado) setResultado({ versao, erro: "Sem conexão. Tente novamente." });
+        if (!cancelado) setResultado({ chave, erro: "Sem conexão. Tente novamente." });
       });
     return () => {
       cancelado = true;
     };
-  }, [versao]);
+  }, [chave, mes]);
 
-  const carregando = resultado?.versao !== versao;
+  const carregando = resultado?.chave !== chave;
   const dados = resultado?.dados;
   const erro = !carregando ? resultado?.erro : undefined;
+  const mesNaTela = dados?.mes ?? mes;
+  const noMesAtual = dados ? dados.mes === dados.mesAtual : mes === null;
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-wrap items-start justify-between gap-4">
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-titulos text-3xl font-bold">Financeiro</h1>
-          <p className="mt-1 text-sm text-primaria/80">
-            Entradas são os pedidos <strong>Pago, Enviado e Entregue</strong> (pendentes e cancelados ficam de fora). Saídas são
-            as despesas lançadas em{" "}
-            <Link href="/admin/expenses" className="font-semibold text-secundaria underline underline-offset-2">
-              Despesas
-            </Link>
-            .
-          </p>
+          <p className="mt-1 text-sm text-primaria/80">Quanto entrou, quanto saiu e o que sobrou em cada mês.</p>
         </div>
-        {/* aria-disabled (e não disabled): o foco não se perde enquanto atualiza. */}
-        <button
-          type="button"
-          className="btn-secundario aria-disabled:cursor-wait aria-disabled:opacity-60"
-          onClick={() => !carregando && setVersao((v) => v + 1)}
-          aria-disabled={carregando || undefined}
-        >
-          {carregando ? "Atualizando…" : "Atualizar"}
-        </button>
+        <nav aria-label="Escolher o mês" className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn-secundario"
+            disabled={!mesNaTela}
+            onClick={() => mesNaTela && setMes(somarMeses(mesNaTela, -1))}
+            aria-label={mesNaTela ? `Mês anterior: ${nomeDoMes(somarMeses(mesNaTela, -1))}` : "Mês anterior"}
+          >
+            ‹
+          </button>
+          <p className="min-w-44 text-center font-titulos text-lg font-semibold" aria-live="polite">
+            {mesNaTela ? primeiraMaiuscula(nomeDoMes(mesNaTela)) : "Mês atual"}
+          </p>
+          <button
+            type="button"
+            className="btn-secundario"
+            disabled={!mesNaTela || noMesAtual}
+            onClick={() => mesNaTela && setMes(somarMeses(mesNaTela, 1))}
+            aria-label={mesNaTela ? `Próximo mês: ${nomeDoMes(somarMeses(mesNaTela, 1))}` : "Próximo mês"}
+          >
+            ›
+          </button>
+          {!noMesAtual && (
+            <button type="button" className="btn-secundario" onClick={() => setMes(null)}>
+              Mês atual
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn-secundario aria-disabled:cursor-wait aria-disabled:opacity-60"
+            onClick={() => !carregando && setVersao((v) => v + 1)}
+            aria-disabled={carregando || undefined}
+          >
+            {carregando ? "Atualizando…" : "Atualizar"}
+          </button>
+        </nav>
       </header>
 
       {erro && (
@@ -75,123 +103,270 @@ export function FinanceiroAdmin() {
 
       {dados && (
         <div className={`flex flex-col gap-8 transition-opacity ${carregando ? "opacity-60" : ""}`} aria-busy={carregando}>
-          {/* KPIs */}
-          {/* Colunas automáticas: o cartão nunca fica mais estreito que um valor como "R$ 12.345,67". */}
-          <ul className="grid grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-4">
-            <Kpi rotulo="Faturamento bruto total" valor={formatarBRL(dados.faturamentoBruto)} dica={`${dados.pedidosPagos} pedidos pagos, com frete`} />
-            <Kpi rotulo="Despesas registradas" valor={formatarBRL(dados.despesasTotal)} dica="tudo o que foi lançado em Despesas" />
-            <Kpi
-              rotulo="Resultado"
-              valor={formatarBRL(dados.resultado)}
-              dica={dados.resultado < 0 ? "faturamento menos despesas: negativo" : "faturamento menos despesas"}
-            />
-            {/* É receita (o cliente paga o frete); o que a loja paga de entrega entra em Despesas. */}
-            <Kpi rotulo="Frete cobrado dos clientes" valor={formatarBRL(dados.custoDelivery)} dica="já incluído no faturamento bruto" />
-            <Kpi rotulo="Ticket médio" valor={formatarBRL(dados.ticketMedio)} dica="faturamento bruto ÷ pedidos pagos" />
-            {/* Parte do faturamento feita na feira/balcão: sem isso o ticket médio mistura canais sem aviso. */}
-            <Kpi
-              rotulo="Vendas presenciais"
-              valor={formatarBRL(dados.vendasPresenciais.total)}
-              dica={`${dados.vendasPresenciais.quantidade} ${dados.vendasPresenciais.quantidade === 1 ? "venda" : "vendas"} na feira ou no balcão, já no faturamento`}
-            />
-          </ul>
+          <Resumo dados={dados} />
 
-          {/* Entradas e despesas por mês */}
-          <section aria-labelledby="titulo-receita" className="cartao p-5">
+          <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+            <Entradas dados={dados} />
+            <Saidas dados={dados} />
+          </div>
+
+          <section aria-labelledby="titulo-evolucao" className="cartao p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 id="titulo-receita" className="text-2xl font-bold">
-                  Entradas e despesas por mês
+                <h2 id="titulo-evolucao" className="text-2xl font-bold">
+                  Últimos 12 meses
                 </h2>
-                <p className="text-xs text-primaria/75">
-                  Últimos 12 meses. Vendas pela data do pedido e despesas pela data da compra (horário de Brasília).
-                </p>
+                <p className="text-xs text-primaria/75">Até {nomeDoMes(dados.mes)}: entradas e saídas de cada mês.</p>
               </div>
-              {/* Sem aria-pressed: o texto já muda ("Ver gráfico"/"Ver como tabela"); os dois juntos se contradiziam. */}
               <button type="button" className="btn-secundario" onClick={() => setComoTabela((v) => !v)}>
                 {comoTabela ? "Ver gráfico" : "Ver como tabela"}
               </button>
             </div>
-
-            {dados.receitaMensal.every((m) => m.receita === 0 && m.despesas === 0) ? (
-              <p className="py-12 text-center text-sm text-primaria/80">Ainda não há vendas pagas nem despesas nos últimos 12 meses.</p>
+            {dados.evolucao.every((m) => m.receita === 0 && m.despesas === 0) ? (
+              <p className="py-12 text-center text-sm text-primaria/80">Nenhuma venda paga nem despesa nesses 12 meses.</p>
             ) : comoTabela ? (
-              <div role="region" aria-label="Tabela das entradas e despesas por mês" tabIndex={0} className="relative overflow-x-auto">
+              <div role="region" aria-label="Tabela dos últimos 12 meses" tabIndex={0} className="relative overflow-x-auto">
                 <table className="w-full min-w-md text-left text-sm">
-                  <caption className="sr-only">Entradas, despesas e saldo por mês</caption>
+                  <caption className="sr-only">Entradas, saídas e o que sobrou em cada mês</caption>
                   <thead className="border-b-2 border-accent2/60">
                     <tr>
                       <th scope="col" className="px-3 py-2 font-semibold">Mês</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Pedidos</th>
+                      <th scope="col" className="px-3 py-2 text-right font-semibold">Vendas</th>
                       <th scope="col" className="px-3 py-2 text-right font-semibold">Entradas</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Despesas</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Saldo</th>
+                      <th scope="col" className="px-3 py-2 text-right font-semibold">Saídas</th>
+                      <th scope="col" className="px-3 py-2 text-right font-semibold">Sobrou</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-accent1/70">
-                    {dados.receitaMensal.map((m) => (
-                      <tr key={m.mes}>
-                        <th scope="row" className="px-3 py-2 font-medium">{rotuloMes(m.mes)}</th>
+                    {dados.evolucao.map((m) => (
+                      <tr key={m.mes} className={m.mes === dados.mes ? "bg-accent1/30" : undefined}>
+                        <th scope="row" className="px-3 py-2 font-medium">
+                          {/* Clicar no mês abre o Financeiro dele. */}
+                          <button type="button" className="underline underline-offset-2" onClick={() => setMes(m.mes)}>
+                            {rotuloMes(m.mes)}
+                          </button>
+                        </th>
                         <td className="px-3 py-2 text-right tabular-nums">{m.pedidos}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatarBRL(m.receita)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatarBRL(m.despesas)}</td>
-                        <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatarBRL(m.receita - m.despesas)}</td>
+                        <td className={`px-3 py-2 text-right font-semibold tabular-nums ${m.receita - m.despesas < 0 ? "text-secundaria" : ""}`}>
+                          {formatarBRL(m.receita - m.despesas)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <GraficoReceita dados={dados.receitaMensal} />
+              <GraficoReceita dados={dados.evolucao} />
             )}
           </section>
 
-          {/* Transações recentes */}
-          <section aria-labelledby="titulo-transacoes" className="cartao p-5">
-            <h2 id="titulo-transacoes" className="mb-1 text-2xl font-bold">
-              Transações recentes
-            </h2>
-            <p className="mb-4 text-xs text-primaria/75">
-              Entradas (vendas pagas), das mais novas para as mais antigas. As saídas estão em{" "}
-              <Link href="/admin/expenses" className="font-semibold text-secundaria underline underline-offset-2">
-                Despesas
-              </Link>
-              .
-            </p>
-            {dados.transacoesRecentes.length === 0 ? (
-              <p className="py-8 text-center text-sm text-primaria/80">Nenhuma venda paga ainda.</p>
-            ) : (
-              <div role="region" aria-label="Tabela das vendas recentes" tabIndex={0} className="relative overflow-x-auto">
-                <table className="w-full min-w-2xl text-left text-sm">
-                  <caption className="sr-only">Vendas pagas mais recentes</caption>
-                  <thead className="border-b-2 border-accent2/60">
-                    <tr>
-                      <th scope="col" className="px-3 py-2 font-semibold">Data</th>
-                      <th scope="col" className="px-3 py-2 font-semibold">Pedido</th>
-                      <th scope="col" className="px-3 py-2 font-semibold">Cliente</th>
-                      <th scope="col" className="px-3 py-2 font-semibold">Status</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Frete</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Entrada</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-accent1/70">
-                    {dados.transacoesRecentes.map((t) => (
-                      <tr key={t.id}>
-                        <td className="whitespace-nowrap px-3 py-2">{formatarDataHora(t.createdAt)}</td>
-                        <td className="whitespace-nowrap px-3 py-2 font-semibold">{codigoPedido(t.id)}</td>
-                        <td className="px-3 py-2">{t.cliente}</td>
-                        <td className="px-3 py-2"><EtiquetaStatus status={t.status} /></td>
-                        <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatarBRL(t.deliveryFee)}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums">{formatarBRL(t.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <Movimentacoes dados={dados} />
         </div>
       )}
     </div>
+  );
+}
+
+function Resumo({ dados }: { dados: FinanceiroDoMes }) {
+  const { entradas, saidas, resultado, vendas, lancamentos } = dados.resumo;
+  const negativo = resultado < 0;
+  return (
+    <section aria-labelledby="titulo-resumo" className="flex flex-col gap-4">
+      <h2 id="titulo-resumo" className="sr-only">
+        Resumo de {nomeDoMes(dados.mes)}
+      </h2>
+      <p className="text-base">
+        Em <strong>{nomeDoMes(dados.mes)}</strong> entraram <strong>{formatarBRL(entradas)}</strong> e saíram{" "}
+        <strong>{formatarBRL(saidas)}</strong>:{" "}
+        {negativo ? (
+          <strong className="text-secundaria">faltaram {formatarBRL(-resultado)}</strong>
+        ) : (
+          <strong>sobraram {formatarBRL(resultado)}</strong>
+        )}
+        .
+      </p>
+      <ul className="grid gap-4 sm:grid-cols-3">
+        <li className="cartao p-5">
+          <p className="text-sm font-medium text-primaria/85">Entradas</p>
+          <p className="mt-2 text-3xl font-bold tabular-nums">{formatarBRL(entradas)}</p>
+          <p className="mt-1 text-xs text-primaria/80">
+            {vendas} {vendas === 1 ? "venda paga" : "vendas pagas"} (site, feira e balcão)
+          </p>
+        </li>
+        <li className="cartao p-5">
+          <p className="text-sm font-medium text-primaria/85">Saídas</p>
+          <p className="mt-2 text-3xl font-bold tabular-nums">{formatarBRL(saidas)}</p>
+          <p className="mt-1 text-xs text-primaria/80">
+            {lancamentos} {lancamentos === 1 ? "despesa lançada" : "despesas lançadas"}
+          </p>
+        </li>
+        <li className={`cartao p-5 ${negativo ? "border-secundaria" : ""}`}>
+          <p className="text-sm font-medium text-primaria/85">{negativo ? "Faltou" : "Sobrou"}</p>
+          <p className={`mt-2 text-3xl font-bold tabular-nums ${negativo ? "text-secundaria" : ""}`}>{formatarBRL(resultado)}</p>
+          <p className="mt-1 text-xs text-primaria/80">entradas menos saídas</p>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+function Entradas({ dados }: { dados: FinanceiroDoMes }) {
+  const { site, presencial, ticketMedio, porSabor } = dados.entradas;
+  return (
+    <section aria-labelledby="titulo-entradas" className="cartao flex flex-col gap-4 p-5">
+      <div>
+        <h2 id="titulo-entradas" className="text-2xl font-bold">
+          De onde veio o dinheiro
+        </h2>
+        <p className="text-xs text-primaria/75">Vendas pagas, enviadas ou entregues. Pendentes e canceladas ficam de fora.</p>
+      </div>
+      <dl className="flex flex-col divide-y divide-accent1/70 text-sm">
+        <Linha rotulo="Vendas pelo site" valor={site.total} detalhe={`${site.pedidos} ${site.pedidos === 1 ? "pedido" : "pedidos"}`} />
+        <Linha rotulo="Vendas na feira e no balcão" valor={presencial.total} detalhe={`${presencial.vendas} ${presencial.vendas === 1 ? "venda" : "vendas"}`} />
+        <Linha rotulo="Frete cobrado no site" valor={site.frete} detalhe="já incluído nas vendas pelo site" discreto />
+        <Linha rotulo="Valor médio por venda" valor={ticketMedio} detalhe="entradas ÷ vendas" discreto />
+      </dl>
+      <div>
+        <h3 className="mb-2 font-semibold">Por sabor</h3>
+        {porSabor.length === 0 ? (
+          <p className="text-sm text-primaria/80">Nenhuma venda paga neste mês.</p>
+        ) : (
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Potes vendidos e valor por sabor, sem o frete</caption>
+            <thead className="border-b-2 border-accent2/60">
+              <tr>
+                <th scope="col" className="py-2 pr-3 font-semibold">Sabor</th>
+                <th scope="col" className="px-3 py-2 text-right font-semibold">Potes</th>
+                <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-accent1/70">
+              {porSabor.map((s) => (
+                <tr key={s.productId}>
+                  <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
+                  <td className="px-3 py-2 text-right tabular-nums">{s.potes}</td>
+                  <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Linha({ rotulo, valor, detalhe, discreto = false }: { rotulo: string; valor: number; detalhe: string; discreto?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-2">
+      <dt className={discreto ? "text-primaria/80" : "font-medium"}>
+        {rotulo}
+        <span className="block text-xs font-normal text-primaria/70">{detalhe}</span>
+      </dt>
+      <dd className={`shrink-0 tabular-nums ${discreto ? "text-primaria/80" : "text-lg font-semibold"}`}>{formatarBRL(valor)}</dd>
+    </div>
+  );
+}
+
+function Saidas({ dados }: { dados: FinanceiroDoMes }) {
+  const maior = Math.max(0, ...dados.saidas.map((c) => c.total));
+  const total = dados.resumo.saidas;
+  return (
+    <section aria-labelledby="titulo-saidas" className="cartao flex flex-col gap-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 id="titulo-saidas" className="text-2xl font-bold">
+            Para onde foi o dinheiro
+          </h2>
+          <p className="text-xs text-primaria/75">Despesas do mês, pela data da compra, por categoria.</p>
+        </div>
+        <Link href="/admin/expenses" className="text-sm font-semibold text-secundaria underline underline-offset-2">
+          Lançar ou corrigir despesas
+        </Link>
+      </div>
+      {dados.saidas.length === 0 ? (
+        <p className="text-sm text-primaria/80">Nenhuma despesa lançada neste mês.</p>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {dados.saidas.map((c) => {
+            const parte = total > 0 ? Math.round((c.total / total) * 100) : 0;
+            return (
+              <li key={c.categoria}>
+                <div className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="font-medium">
+                    {ROTULO_CATEGORIA[c.categoria]}{" "}
+                    <span className="text-xs font-normal text-primaria/70">
+                      ({c.lancamentos} {c.lancamentos === 1 ? "lançamento" : "lançamentos"})
+                    </span>
+                  </span>
+                  <span className="shrink-0 tabular-nums">
+                    {formatarBRL(c.total)} <span className="text-xs text-primaria/70">· {parte}%</span>
+                  </span>
+                </div>
+                <div className="mt-1 h-2 overflow-hidden rounded-full bg-accent1/40" aria-hidden="true">
+                  <div className="h-full rounded-full bg-secundaria/80" style={{ width: `${maior > 0 ? (c.total / maior) * 100 : 0}%` }} />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function Movimentacoes({ dados }: { dados: FinanceiroDoMes }) {
+  return (
+    <section aria-labelledby="titulo-movimentacoes" className="cartao p-5">
+      <h2 id="titulo-movimentacoes" className="text-2xl font-bold">
+        Movimentações do mês
+      </h2>
+      <p className="mb-4 text-xs text-primaria/75">
+        Vendas pagas e despesas de {nomeDoMes(dados.mes)}, da mais recente para a mais antiga.
+        {dados.movimentacoesTruncadas ? " Mostrando as 100 mais recentes." : ""}
+      </p>
+      {dados.movimentacoes.length === 0 ? (
+        <p className="py-8 text-center text-sm text-primaria/80">Nenhuma movimentação neste mês.</p>
+      ) : (
+        <div role="region" aria-label="Tabela das movimentações do mês" tabIndex={0} className="relative overflow-x-auto">
+          <table className="w-full min-w-2xl text-left text-sm">
+            <caption className="sr-only">Entradas e saídas do mês</caption>
+            <thead className="border-b-2 border-accent2/60">
+              <tr>
+                <th scope="col" className="px-3 py-2 font-semibold">Dia</th>
+                <th scope="col" className="px-3 py-2 font-semibold">Tipo</th>
+                <th scope="col" className="px-3 py-2 font-semibold">Descrição</th>
+                <th scope="col" className="px-3 py-2 font-semibold">Onde / categoria</th>
+                <th scope="col" className="px-3 py-2 text-right font-semibold">Valor</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-accent1/70">
+              {dados.movimentacoes.map((m) => (
+                <tr key={`${m.tipo}-${m.id}`}>
+                  <td className="whitespace-nowrap px-3 py-2 tabular-nums">{formatarDia(m.dia)}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        m.tipo === "entrada" ? "bg-accent1/70" : "border border-secundaria/60 text-secundaria"
+                      }`}
+                    >
+                      {m.tipo === "entrada" ? "Entrada" : "Saída"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">{m.descricao}</td>
+                  <td className="px-3 py-2 text-primaria/85">{m.detalhe}</td>
+                  <td className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums ${m.tipo === "saida" ? "text-secundaria" : ""}`}>
+                    {m.tipo === "saida" ? "− " : "+ "}
+                    {formatarBRL(m.valor)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

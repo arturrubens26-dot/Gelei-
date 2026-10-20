@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { CampoForm } from "@/components/admin/CampoForm";
 import { Kpi } from "@/components/admin/Kpi";
 import { coresGrafico } from "@/design-system";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
@@ -878,28 +879,6 @@ export function DespesasAdmin() {
           </>
         ) : null}
       </section>
-    </div>
-  );
-}
-
-function CampoForm({ id, rotulo, erro, dica, children }: { id: string; rotulo: string; erro?: string; dica?: string; children: ReactNode }) {
-  return (
-    <div>
-      <label htmlFor={id} className="mb-1 block text-sm font-semibold">
-        {rotulo}
-      </label>
-      {children}
-      {erro ? (
-        <p id={`${id}-erro`} className="mt-1 text-xs font-semibold text-secundaria">
-          {erro}
-        </p>
-      ) : (
-        dica && (
-          <p id={`${id}-dica`} className="mt-1 text-xs text-primaria/75">
-            {dica}
-          </p>
-        )
-      )}
     </div>
   );
 }

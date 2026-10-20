@@ -22,7 +22,8 @@ export async function listarProdutos(): Promise<ProdutoDTO[]> {
   cacheLife("minutes");
   cacheTag("produtos");
 
-  const produtos = await db.product.findMany({ orderBy: { nome: "asc" } });
+  // Só os visíveis: produto oculto pelo painel some da vitrine (o histórico continua no banco).
+  const produtos = await db.product.findMany({ where: { ativo: true }, orderBy: { nome: "asc" } });
   return produtos.map((p) => ({
     id: p.id,
     nome: p.nome,
