@@ -19,8 +19,13 @@ import {
   type LinhaDeKit,
 } from "@/lib/kits-regras";
 import { MAX_PEDIDOS_PENDENTES, MAX_POR_PRODUTO } from "@/lib/limites";
+import { codigoPedido, resumoDoPedido } from "@/lib/formatacao";
+import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
+import { etapaDoPagamento, type PedidoResumoDTO } from "@/lib/pagamentos-regras";
 import type { StatusPedido } from "@/lib/status";
 import type { EnderecoEntrada } from "@/lib/validacao";
+
+export type { PedidoResumoDTO } from "@/lib/pagamentos-regras";
 
 export type PedidoDTO = {
   id: string;
@@ -429,4 +434,50 @@ export async function criarPedido(
 export async function telefoneDoCliente(userId: string): Promise<string | null> {
   const usuario = await db.user.findUnique({ where: { id: userId }, select: { telefone: true } });
   return usuario?.telefone ?? null;
+}
+
+/** Quantos pedidos "Meus pedidos" mostra (os mais recentes). */
+const MAX_MEUS_PEDIDOS = 50;
+
+/**
+ * "Meus pedidos": os pedidos online da conta, do mais recente ao mais antigo, com a etapa do
+ * pagamento (a mesma regra da página do pedido) e o que foi comprado numa linha. Só lê o banco.
+ */
+export async function listarPedidosDoUsuario(userId: string): Promise<PedidoResumoDTO[]> {
+  const pedidos = await db.order.findMany({
+    where: { userId, canal: "ONLINE" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: MAX_MEUS_PEDIDOS,
+    select: {
+      id: true,
+      createdAt: true,
+      status: true,
+      total: true,
+      modoEntrega: true,
+      items: { orderBy: { productId: "asc" }, select: { quantidade: true, product: { select: { nome: true } } } },
+      kits: { orderBy: { id: "asc" }, select: { quantidade: true, kit: { select: { nome: true } } } },
+      pagamentos: { orderBy: [{ criadoEm: "desc" }, { id: "desc" }], take: 1, select: { status: true } },
+    },
+  });
+  const gatewayAtivo = pagamentoOnlineDisponivel();
+  const agora = Date.now();
+  return pedidos.map((p) => ({
+    id: p.id,
+    codigo: codigoPedido(p.id),
+    createdAt: p.createdAt.toISOString(),
+    status: p.status,
+    etapa: etapaDoPagamento({
+      gatewayAtivo,
+      pedidoStatus: p.status,
+      pedidoCriadoEm: p.createdAt,
+      ultimaCobranca: p.pagamentos[0] ? { status: p.pagamentos[0].status, avisadoEm: null } : null,
+      agora,
+    }),
+    total: p.total.toNumber(),
+    modoEntrega: p.modoEntrega ?? "ENTREGA",
+    resumo: resumoDoPedido([
+      ...p.items.map((i) => ({ nome: i.product.nome, quantidade: i.quantidade })),
+      ...p.kits.map((k) => ({ nome: k.kit.nome, quantidade: k.quantidade })),
+    ]),
+  }));
 }
