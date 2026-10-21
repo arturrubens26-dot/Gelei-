@@ -3,6 +3,8 @@ import { Suspense } from "react";
 import { CarregandoAdmin, GuardaAdmin } from "@/components/admin/GuardaAdmin";
 import { KitsAdmin } from "@/components/admin/KitsAdmin";
 import { ProdutosAdmin } from "@/components/admin/ProdutosAdmin";
+import { TaxaDeEntregaAdmin } from "@/components/admin/TaxaDeEntregaAdmin";
+import { obterConfigEntregaAdmin } from "@/lib/entrega";
 import { listarKitsAdmin } from "@/lib/kits-admin";
 import { listarProdutosAdmin } from "@/lib/produtos-admin";
 
@@ -20,7 +22,7 @@ export default function PaginaProdutosAdmin() {
 
 /** Lido do banco a cada visita (não do cache da loja): mostra também os produtos e kits ocultos. */
 async function Catalogo() {
-  const [produtos, kits] = await Promise.all([listarProdutosAdmin(), listarKitsAdmin()]);
+  const [produtos, kits, entrega] = await Promise.all([listarProdutosAdmin(), listarKitsAdmin(), obterConfigEntregaAdmin()]);
   // Prévia da caixa e conta da economia: só os sabores que a cliente pode escolher (à venda e
   // marcados "Pode entrar no Kit Presente"), como em listarKitsAdmin.
   const sabores = produtos
@@ -31,6 +33,9 @@ async function Catalogo() {
       <ProdutosAdmin produtos={produtos} />
       <div className="border-t border-accent2/50 pt-10">
         <KitsAdmin kits={kits} sabores={sabores} />
+      </div>
+      <div className="border-t border-accent2/50 pt-10">
+        <TaxaDeEntregaAdmin inicial={entrega} />
       </div>
     </div>
   );

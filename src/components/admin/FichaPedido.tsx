@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { LinkWhatsApp } from "@/components/admin/LinkWhatsApp";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import { FotoDoPote } from "@/components/FotoDoPote";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
@@ -210,11 +211,21 @@ export function FichaPedido({ id }: { id: string }) {
       <div className="grid gap-6 md:grid-cols-2">
         <section aria-labelledby="titulo-cliente" className="cartao p-5 print:break-inside-avoid">
           <h2 id="titulo-cliente" className="mb-3 text-xl font-bold">
-            {e ? "Cliente e entrega" : "Cliente"}
+            {pedido.modoEntrega === "RETIRADA" ? "Cliente e retirada" : e ? "Cliente e entrega" : "Cliente"}
           </h2>
           <p className="font-semibold">{pedido.cliente.nome}</p>
           {pedido.cliente.email && <p className="text-sm text-primaria/85">{pedido.cliente.email}</p>}
-          {e ? (
+          {pedido.telefone && (
+            <p className="text-sm">
+              <LinkWhatsApp telefone={pedido.telefone} />
+            </p>
+          )}
+          {pedido.modoEntrega === "RETIRADA" ? (
+            <p className="mt-3 text-sm leading-relaxed">
+              <strong className="font-semibold">Retirada na loja</strong> (sem frete). Combine o dia e o horário com a cliente pelo
+              WhatsApp.
+            </p>
+          ) : e ? (
             <address className="mt-3 text-sm not-italic leading-relaxed">
               {e.rua}, {e.numero}
               {e.complemento ? ` — ${e.complemento}` : ""}

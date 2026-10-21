@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import type { PedidoAdminDTO } from "@/lib/admin";
+import { LinkWhatsApp } from "@/components/admin/LinkWhatsApp";
 import { hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import { ROTULO_STATUS, codigoPedido, formatarDataHora } from "@/lib/formatacao";
@@ -232,7 +233,21 @@ export function PedidosAdmin() {
                       {p.formaPagamento && <span className="text-primaria/80">{ROTULO_FORMA_PAGAMENTO[p.formaPagamento]}</span>}
                     </span>
                   ) : (
-                    <span className="block text-xs text-primaria/75">{p.cliente.email}</span>
+                    <>
+                      <span className="block text-xs text-primaria/75">{p.cliente.email}</span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                        {p.modoEntrega && (
+                          <span
+                            className={`rounded-full border px-2 py-0.5 font-semibold text-primaria ${
+                              p.modoEntrega === "RETIRADA" ? "border-accent3 bg-accent3/15" : "border-accent2 bg-accent2/15"
+                            }`}
+                          >
+                            {p.modoEntrega === "RETIRADA" ? "Retirada" : "Entrega"}
+                          </span>
+                        )}
+                        {p.telefone && <LinkWhatsApp telefone={p.telefone} pedido={codigoPedido(p.id)} />}
+                      </span>
+                    </>
                   )}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3">
