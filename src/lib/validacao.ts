@@ -7,8 +7,10 @@ import {
   normalizarTelefone,
   telefoneValido,
 } from "@/lib/entrega-regras";
+import { CONFERENCIAS, MAX_OBSERVACAO_LINK } from "@/lib/auth/redefinicao-regras";
 import {
   MAX_BYTES_SENHA,
+  MIN_CARACTERES_SENHA,
   MAX_KITS_POR_PEDIDO,
   MAX_LINHAS_DE_KIT,
   MAX_POR_PRODUTO,
@@ -167,17 +169,50 @@ export const pedidoSchema = z
 
 export type PedidoEntrada = z.output<typeof pedidoSchema>;
 
+/** Regra da senha nova (cadastro e redefinição): 8 caracteres no mínimo e 72 bytes no máximo. */
+export const senhaNovaSchema = z
+  .string({ error: `A senha deve ter pelo menos ${MIN_CARACTERES_SENHA} caracteres.` })
+  .min(MIN_CARACTERES_SENHA, `A senha deve ter pelo menos ${MIN_CARACTERES_SENHA} caracteres.`)
+  .max(200, "A senha é longa demais (máximo de 72 bytes; acentos e emojis ocupam mais de 1).")
+  // O bcrypt considera só os primeiros 72 BYTES: com acentos isso é menos de 72 caracteres.
+  .refine((s) => new TextEncoder().encode(s).length <= MAX_BYTES_SENHA, {
+    message: "A senha é longa demais (máximo de 72 bytes; acentos e emojis ocupam mais de 1).",
+  });
+
+const emailSchema = z.email("E-mail inválido.").max(160).transform((v) => v.toLowerCase());
+
 export const registroSchema = z.object({
   nome: z.string().trim().min(2, "Informe seu nome.").max(100),
-  email: z.email("E-mail inválido.").max(160).transform((v) => v.toLowerCase()),
-  senha: z
+  email: emailSchema,
+  senha: senhaNovaSchema,
+});
+
+/** POST /api/auth/esqueci-senha. */
+export const esqueciSenhaSchema = z.object({ email: emailSchema });
+
+/**
+ * POST /api/auth/redefinir-senha. O token só tem teto aqui: formato errado responde a mesma mensagem
+ * de link vencido (sem `detalhes`), conferido em redefinirComToken.
+ */
+export const redefinirSenhaSchema = z.object({
+  // Ausente, de outro tipo ou comprido demais vira "", que redefinirComToken recusa com a mensagem única.
+  token: z.string().max(200).catch(""),
+  senha: senhaNovaSchema,
+});
+
+/** POST /api/admin/clientes/[id]/link-senha: o que a dona conferiu e uma observação opcional. */
+export const linkSenhaSchema = z.object({
+  conferencia: z
+    .array(z.enum(CONFERENCIAS, { error: "Item de conferência desconhecido." }))
+    .max(CONFERENCIAS.length)
+    .transform((itens) => [...new Set(itens)]),
+  observacao: z
     .string()
-    .min(8, "A senha deve ter pelo menos 8 caracteres.")
-    .max(200)
-    // O bcrypt considera só os primeiros 72 BYTES: com acentos isso é menos de 72 caracteres.
-    .refine((s) => new TextEncoder().encode(s).length <= MAX_BYTES_SENHA, {
-      message: "A senha é longa demais (máximo de 72 bytes; acentos e emojis ocupam mais de 1).",
-    }),
+    .trim()
+    .max(MAX_OBSERVACAO_LINK, `A observação pode ter no máximo ${MAX_OBSERVACAO_LINK} caracteres.`)
+    .refine(textoLivreValido, "Tem caracteres inválidos.")
+    .optional()
+    .transform((v) => (v ? v : null)),
 });
 
 export const loginSchema = z.object({

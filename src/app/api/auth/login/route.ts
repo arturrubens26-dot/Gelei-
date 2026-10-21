@@ -45,7 +45,7 @@ export const POST = comTratamento("api/auth/login", async (request: Request) => 
 
   const usuario = await db.user.findUnique({
     where: { email },
-    select: { id: true, nome: true, email: true, isAdmin: true, passwordHash: true },
+    select: { id: true, nome: true, email: true, isAdmin: true, passwordHash: true, sessaoVersao: true },
   });
 
   // Sempre roda uma comparação de bcrypt, mesmo sem usuário, para o tempo não revelar e-mails cadastrados.
@@ -63,7 +63,7 @@ export const POST = comTratamento("api/auth/login", async (request: Request) => 
   } else {
     limparTentativas(chaveConta);
   }
-  await criarSessao(usuario.id, { admin: usuario.isAdmin });
+  await criarSessao(usuario.id, { admin: usuario.isAdmin, versao: usuario.sessaoVersao });
   return Response.json({
     usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, isAdmin: usuario.isAdmin },
   });

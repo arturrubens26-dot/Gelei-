@@ -29,3 +29,12 @@ export const ROTULO_STATUS: Record<StatusPedido, string> = {
 };
 
 export type StatusPedidoChave = StatusPedido;
+
+/**
+ * O que foi comprado, numa linha: "2 × Pimenta, 112g · 1 × Kit Presente". Corta em `max` caracteres
+ * com "…" (Meus pedidos e a ficha do cliente no painel).
+ */
+export function resumoDoPedido(linhas: readonly { nome: string; quantidade: number }[], max = 120): string {
+  const texto = linhas.map((l) => `${l.quantidade} × ${l.nome}`).join(" · ");
+  return texto.length > max ? `${texto.slice(0, max - 1).trimEnd()}…` : texto;
+}

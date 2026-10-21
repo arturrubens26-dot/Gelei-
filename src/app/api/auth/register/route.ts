@@ -25,10 +25,13 @@ export const POST = comTratamento("api/auth/register", async (request: Request) 
     // `isAdmin` não vem da entrada: toda conta criada aqui é de cliente.
     const usuario = await db.user.create({
       data: { nome, email, passwordHash: await gerarHash(senha) },
-      select: { id: true, nome: true, email: true, isAdmin: true },
+      select: { id: true, nome: true, email: true, isAdmin: true, sessaoVersao: true },
     });
-    await criarSessao(usuario.id, { admin: false });
-    return Response.json({ usuario }, { status: 201 });
+    await criarSessao(usuario.id, { admin: false, versao: usuario.sessaoVersao });
+    return Response.json(
+      { usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, isAdmin: usuario.isAdmin } },
+      { status: 201 },
+    );
   } catch (e) {
     unstable_rethrow(e); // criarSessao() usa cookies(): sinais internos do Next não são erros daqui
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {

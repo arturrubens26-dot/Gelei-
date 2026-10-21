@@ -43,26 +43,32 @@ enum PaymentMethod {
 
 /// Clientes e administradores. `isAdmin` nunca deve ser definido a partir de entrada do usuário.
 model User {
-  id                   String          @id @default(cuid())
-  email                String          @unique
-  passwordHash         String          @map("password_hash")
+  id                   String             @id @default(cuid())
+  email                String             @unique
+  passwordHash         String             @map("password_hash")
   nome                 String
-  isAdmin              Boolean         @default(false) @map("is_admin")
-  createdAt            DateTime        @default(now()) @map("created_at")
+  isAdmin              Boolean            @default(false) @map("is_admin")
+  createdAt            DateTime           @default(now()) @map("created_at")
   addresses            Address[]
-  orders               Order[]         @relation("PedidosDoCliente")
+  orders               Order[]            @relation("PedidosDoCliente")
   /// Vendas presenciais que este admin lançou (auditoria).
-  vendasRegistradas    Order[]         @relation("VendasRegistradas")
+  vendasRegistradas    Order[]            @relation("VendasRegistradas")
   /// Pedidos/vendas que este admin cancelou ou estornou (auditoria).
-  pedidosCancelados    Order[]         @relation("PedidosCancelados")
+  pedidosCancelados    Order[]            @relation("PedidosCancelados")
   expenses             Expense[]
   /// Produções e ajustes de estoque que este admin lançou (auditoria).
-  producoesRegistradas Producao[]      @relation("ProducoesRegistradas")
-  ajustesRegistrados   AjusteEstoque[] @relation("AjustesRegistrados")
+  producoesRegistradas Producao[]         @relation("ProducoesRegistradas")
+  ajustesRegistrados   AjusteEstoque[]    @relation("AjustesRegistrados")
   /// Último WhatsApp informado num pedido (só dígitos, com DDD): pré-preenche a próxima compra.
-  telefone             String?         @db.VarChar(11)
+  telefone             String?            @db.VarChar(11)
   /// Admin que mudou a configuração da loja por último (auditoria).
-  configLojaAtualizada ConfigLoja[]    @relation("ConfigLojaAtualizadaPor")
+  configLojaAtualizada ConfigLoja[]       @relation("ConfigLojaAtualizadaPor")
+  /// Sobe a cada troca de senha: sessões com versão antiga (claim "v" do JWT) deixam de valer.
+  sessaoVersao         Int                @default(0) @map("sessao_versao")
+  /// Pedidos de redefinição de senha desta conta.
+  redefinicoes         RedefinicaoSenha[] @relation("RedefinicoesDaConta")
+  /// Links de redefinição que este admin gerou no painel (auditoria).
+  linksSenhaGerados    RedefinicaoSenha[] @relation("LinksSenhaGerados")
 
   @@map("users")
 }
@@ -469,4 +475,37 @@ model ConfigLoja {
 
   @@index([atualizadoPorId])
   @@map("config_loja")
+}
+
+/// Por onde veio o link de redefinição de senha.
+enum OrigemRedefinicao {
+  EMAIL
+  PAINEL
+}
+
+/// Pedido de redefinição de senha (por e-mail ou gerado pela dona no painel). Só o hash SHA-256 do
+/// token fica aqui; o token vai no fragmento do link (#t=...). Sem IP nem e-mail (LGPD): as linhas
+/// com mais de 12 meses são apagadas. Ver src/lib/auth/redefinicao.ts.
+model RedefinicaoSenha {
+  id           String            @id @default(cuid())
+  userId       String            @map("user_id")
+  /// sha256(token) em hex (64 caracteres).
+  tokenHash    String            @unique @map("token_hash") @db.Char(64)
+  origem       OrigemRedefinicao
+  criadoEm     DateTime          @default(now()) @map("criado_em")
+  expiraEm     DateTime          @map("expira_em")
+  usadoEm      DateTime?         @map("usado_em")
+  /// Um link novo invalida o anterior.
+  invalidadoEm DateTime?         @map("invalidado_em")
+  /// PAINEL: admin que gerou e o que conferiu ("EMAIL", "NOME", "PEDIDO", "ENDERECO", "TELEFONE").
+  geradoPorId  String?           @map("gerado_por_id")
+  conferencia  String[]          @default([])
+  observacao   String?           @db.VarChar(200)
+  user         User              @relation("RedefinicoesDaConta", fields: [userId], references: [id], onDelete: Cascade)
+  geradoPor    User?             @relation("LinksSenhaGerados", fields: [geradoPorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, criadoEm])
+  @@index([criadoEm])
+  @@index([geradoPorId])
+  @@map("redefinicoes_senha")
 }

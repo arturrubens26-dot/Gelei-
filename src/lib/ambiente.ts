@@ -50,6 +50,18 @@ export function validarAmbiente(): void {
     }
   }
 
+  // E-mail (redefinição de senha por e-mail): pela metade não derruba o site, só fica desligado.
+  const variaveisSmtp = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "EMAIL_REMETENTE"];
+  const smtpDefinidas = variaveisSmtp.filter((v) => process.env[v]?.trim());
+  if (smtpDefinidas.length > 0 && smtpDefinidas.length < variaveisSmtp.length) {
+    console.warn(
+      `[ambiente] SMTP incompleto (faltam ${variaveisSmtp.filter((v) => !smtpDefinidas.includes(v)).join(", ")}): ` +
+        "o e-mail fica desligado e a redefinição de senha segue só pelo painel.",
+    );
+  } else if (smtpDefinidas.length > 0 && !["465", "587"].includes(process.env.SMTP_PORT!.trim())) {
+    console.warn("[ambiente] SMTP_PORT precisa ser 465 (TLS) ou 587 (STARTTLS): o e-mail fica desligado.");
+  }
+
   if (problemas.length > 0) {
     throw new Error(`Ambiente mal configurado:\n- ${problemas.join("\n- ")}`);
   }

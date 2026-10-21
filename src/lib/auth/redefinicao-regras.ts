@@ -79,3 +79,92 @@ export type LinkSenhaGeradoDTO = {
   expiraEm: string;
   mensagemSugerida: string;
 };
+
+// --- regras -----------------------------------------------------------------------------------
+
+/** Formato do token: 32 bytes aleatórios em base64url, sem "=" (43 caracteres). */
+export const FORMATO_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Endereço do desenvolvimento local quando não há APP_URL. */
+const BASE_LOCAL = "http://localhost:3000";
+
+/**
+ * Origem do site para montar links que saem por mensagem: SÓ a APP_URL (nunca Host ou
+ * X-Forwarded-Host, que o cliente controla: envenenaria o link). Em produção, só https; sem ela,
+ * `null` (os dois caminhos da redefinição ficam desligados). Fora da produção, sem APP_URL, vale o
+ * localhost.
+ */
+export function origemDoSite(appUrl: string | undefined, producao: boolean): string | null {
+  const bruto = appUrl?.trim();
+  if (!bruto) return producao ? null : BASE_LOCAL;
+  try {
+    const url = new URL(bruto);
+    if (producao ? url.protocol !== "https:" : !["https:", "http:"].includes(url.protocol)) return null;
+    if (url.username || url.password) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Link de redefinição: o token vai no FRAGMENTO (#t=...), que o navegador não manda ao servidor, aos
+ * logs nem no Referer; o "preview" do Instagram e os verificadores de link não o consomem.
+ */
+export function linkDeRedefinicao(appUrl: string | undefined, token: string, producao: boolean): string | null {
+  const origem = origemDoSite(appUrl, producao);
+  if (!origem || !FORMATO_TOKEN.test(token)) return null;
+  return `${origem}/redefinir-senha#t=${token}`;
+}
+
+/**
+ * O que a dona precisa ter conferido: e-mail e nome sempre; se a conta tem pedido ou endereço, também
+ * algo de um pedido (PEDIDO) ou da entrega (ENDERECO). TELEFONE é registro a mais, não substitui.
+ */
+export function conferenciaSuficiente(conferencia: readonly ConferenciaIdentidade[], temHistorico: boolean): boolean {
+  const tem = (c: ConferenciaIdentidade) => conferencia.includes(c);
+  if (!tem("EMAIL") || !tem("NOME")) return false;
+  return !temHistorico || tem("PEDIDO") || tem("ENDERECO");
+}
+
+/** Situação de um link no histórico da ficha. */
+export function situacaoDoLink(
+  link: { usadoEm: Date | null; invalidadoEm: Date | null; expiraEm: Date },
+  agora: number = Date.now(),
+): SituacaoLinkSenha {
+  if (link.usadoEm) return "USADO";
+  if (link.invalidadoEm) return "SUBSTITUIDO";
+  if (link.expiraEm.getTime() <= agora) return "VENCIDO";
+  return "VALENDO";
+}
+
+/** A sessão (versão gravada no JWT; sem "v" conta 0) ainda vale para a versão atual da conta? */
+export function sessaoValida(versaoDoToken: number, versaoDaConta: number): boolean {
+  return versaoDoToken === versaoDaConta;
+}
+
+/** "Maria Clara Souza" → "Maria". */
+export function primeiroNome(nome: string): string {
+  return nome.trim().split(/\s+/)[0] || nome.trim();
+}
+
+const BRASILIA_MS = -3 * 60 * 60_000;
+const diaEm = (data: Date) => new Date(data.getTime() + BRASILIA_MS).toISOString().slice(0, 10);
+
+/** "15:40" no horário de Brasília (UTC−3, sem horário de verão desde 2019). */
+export function horaDeBrasilia(data: Date): string {
+  return new Date(data.getTime() + BRASILIA_MS).toISOString().slice(11, 16);
+}
+
+/**
+ * Mensagem para a dona copiar e mandar pela DM. O link fica sozinho na última linha: um ponto ou
+ * uma vírgula logo depois dele poderia entrar no link e estragar o token.
+ */
+export function mensagemSugerida(nome: string, link: string, expiraEm: Date, agora: Date = new Date()): string {
+  const quando = diaEm(expiraEm) === diaEm(agora) ? "de hoje" : "de amanhã";
+  return (
+    `Oi, ${primeiroNome(nome)}! Aqui está o link para você criar uma senha nova na Geleiô. ` +
+    `Ele vale até as ${horaDeBrasilia(expiraEm)} ${quando} e só funciona uma vez. Se não foi você que pediu, é só ignorar.\n\n` +
+    link
+  );
+}

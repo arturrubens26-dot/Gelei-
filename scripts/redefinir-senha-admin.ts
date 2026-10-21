@@ -111,8 +111,12 @@ async function principal() {
     if (!usuario) throw new Error(`Não existe conta com o e-mail ${email}.`);
     if (!usuario.isAdmin) throw new Error(`${email} não é administrador: este comando só troca senha de admin.`);
 
-    await db.user.update({ where: { id: usuario.id }, data: { passwordHash: await bcrypt.hash(senha, 12) } });
-    console.log(`✔ Senha de ${email} redefinida. Já pode entrar em /login com ela.`);
+    // A versão de sessão sobe junto: as sessões abertas com a senha antiga (outro navegador) caem.
+    await db.user.update({
+      where: { id: usuario.id },
+      data: { passwordHash: await bcrypt.hash(senha, 12), sessaoVersao: { increment: 1 } },
+    });
+    console.log(`✔ Senha de ${email} redefinida e sessões antigas encerradas. Já pode entrar em /login com ela.`);
   } finally {
     await db.$disconnect();
   }

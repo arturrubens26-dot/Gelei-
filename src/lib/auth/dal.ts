@@ -2,6 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { sessaoValida } from "./redefinicao-regras";
 import { lerSessao } from "./sessao";
 
 export type UsuarioAtual = {
@@ -20,10 +21,13 @@ export type UsuarioAtual = {
 export const getUsuarioAtual = cache(async (): Promise<UsuarioAtual | null> => {
   const sessao = await lerSessao();
   if (!sessao) return null;
-  return db.user.findUnique({
+  const usuario = await db.user.findUnique({
     where: { id: sessao.userId },
-    select: { id: true, nome: true, email: true, isAdmin: true },
+    select: { id: true, nome: true, email: true, isAdmin: true, sessaoVersao: true },
   });
+  // Senha trocada depois que este cookie foi emitido: a sessão não vale mais (sem consulta a mais).
+  if (!usuario || !sessaoValida(sessao.versao, usuario.sessaoVersao)) return null;
+  return { id: usuario.id, nome: usuario.nome, email: usuario.email, isAdmin: usuario.isAdmin };
 });
 
 /** Para páginas: manda para o login se não houver usuário. */

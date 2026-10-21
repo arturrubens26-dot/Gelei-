@@ -20,13 +20,14 @@ function chaveSecreta(): Uint8Array {
 }
 
 /**
- * A sessão guarda SÓ o id do usuário. Papel (admin) e demais dados são sempre
- * lidos do banco a cada requisição, então rebaixar um admin vale na hora.
+ * A sessão guarda o id do usuário e a versão de sessão da conta (claim "v"). Papel (admin) e demais
+ * dados são sempre lidos do banco a cada requisição, então rebaixar um admin vale na hora; trocar a
+ * senha sobe a versão no banco e derruba as sessões antigas (getUsuarioAtual compara).
  * A duração é menor para administradores.
  */
-export async function criarSessao(userId: string, opcoes: { admin: boolean }): Promise<void> {
+export async function criarSessao(userId: string, opcoes: { admin: boolean; versao: number }): Promise<void> {
   const duracao = opcoes.admin ? DURACAO_ADMIN_SEGUNDOS : DURACAO_CLIENTE_SEGUNDOS;
-  const token = await new SignJWT({})
+  const token = await new SignJWT({ v: opcoes.versao })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
     .setIssuedAt()
@@ -42,7 +43,8 @@ export async function criarSessao(userId: string, opcoes: { admin: boolean }): P
   });
 }
 
-export async function lerSessao(): Promise<{ userId: string } | null> {
+/** `versao`: a do token (sem o claim "v", de antes da versão de sessão, conta como 0). */
+export async function lerSessao(): Promise<{ userId: string; versao: number } | null> {
   const token = (await cookies()).get(NOME_COOKIE)?.value;
   if (!token) return null;
   // Fora do try de propósito: SESSION_SECRET ausente é erro de configuração e deve
@@ -57,7 +59,10 @@ export async function lerSessao(): Promise<{ userId: string } | null> {
   await io();
   try {
     const { payload } = await jwtVerify(token, chave, { algorithms: ["HS256"] });
-    return payload.sub ? { userId: payload.sub } : null;
+    if (!payload.sub) return null;
+    const v = payload.v;
+    if (v !== undefined && !(Number.isSafeInteger(v) && (v as number) >= 0)) return null;
+    return { userId: payload.sub, versao: (v as number | undefined) ?? 0 };
   } catch {
     // Token expirado, adulterado ou malformado.
     return null;
