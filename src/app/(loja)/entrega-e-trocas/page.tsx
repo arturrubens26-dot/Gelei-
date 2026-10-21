@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { PaginaDePolitica } from "@/components/PaginaDePolitica";
 import { formatarBRL } from "@/lib/dinheiro";
-import { enderecoDeRetirada, TAXA_ENTREGA_PADRAO_CENTAVOS } from "@/lib/entrega-regras";
+import { obterTaxaDeEntregaCentavos } from "@/lib/entrega";
+import { enderecoDeRetirada } from "@/lib/entrega-regras";
 
 export const metadata: Metadata = {
   title: "Entrega, trocas e devoluções",
@@ -11,19 +12,21 @@ export const metadata: Metadata = {
 
 // Rascunho para a dona revisar: área e taxa de entrega, retirada, pagamento, arrependimento (CDC art. 49),
 // produto com problema (CDC art. 26) e cancelamento.
-export default function PaginaEntregaETrocas() {
-  const taxa = formatarBRL(TAXA_ENTREGA_PADRAO_CENTAVOS / 100);
+export default async function PaginaEntregaETrocas() {
+  // A taxa em vigor (painel), em cache com a tag config-loja: a página é estática e se atualiza quando a taxa muda.
+  const centavos = await obterTaxaDeEntregaCentavos();
+  const taxa = formatarBRL(centavos / 100);
 
   return (
     <PaginaDePolitica titulo="Entrega, trocas e devoluções" atualizadaEm="21 de outubro de 2026">
       <p>
-        Entregamos em Teresina por <strong>{taxa}</strong> ou você retira na loja, sem custo. Pode desistir da compra em até 7 dias
+        Entregamos em Teresina {centavos > 0 ? <>por <strong>{taxa}</strong></> : <strong>sem custo</strong>} ou você retira na loja, também sem custo. Pode desistir da compra em até 7 dias
         depois de receber.
       </p>
 
       <h2>Onde entregamos</h2>
       <p>
-        Por enquanto, só em <strong>Teresina</strong> (CEPs de 64000-000 a 64099-999), com taxa fixa de {taxa}. O valor aparece no
+        Por enquanto, só em <strong>Teresina</strong> (CEPs de 64000-000 a 64099-999), {centavos > 0 ? `com taxa fixa de ${taxa}` : "sem taxa de entrega"}. O valor aparece no
         resumo do pedido antes de você pagar. Fora de Teresina ainda não entregamos, mas você pode escolher a retirada na loja.
       </p>
 

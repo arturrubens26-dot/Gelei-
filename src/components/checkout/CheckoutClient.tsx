@@ -2,12 +2,24 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { calcularEntrega, mascararCep, type ResultadoEntrega } from "@/lib/carrinho/entrega";
 import { acoesCarrinho, totaisDoCarrinho, useCarrinho, useHidratado, type KitCarrinho } from "@/lib/carrinho/store";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { EnderecoSalvo } from "@/lib/enderecos";
+import {
+  CIDADE_ATENDIDA,
+  MENSAGEM_FORA_DA_AREA,
+  MENSAGEM_TELEFONE_INVALIDO,
+  cepAtendido,
+  enderecoDeRetirada,
+  formatarTelefone,
+  mascararTelefone,
+  normalizarTelefone,
+  telefoneValido,
+  type ModoEntrega,
+} from "@/lib/entrega-regras";
 import { conferirComposicao, emCentavos, textoDaComposicao } from "@/lib/kits-regras";
 
 /** "Kit Presente (Pimenta ×2 · Morango)": como a caixa aparece nas mensagens. */
@@ -33,6 +45,22 @@ function novaChave(): string {
   );
 }
 
+/**
+ * Só seguimos para um link de pagamento em https na InfinitePay. O servidor já confere o host; aqui é
+ * a segunda trava. No desenvolvimento local, aceita também o servidor falso em 127.0.0.1/localhost.
+ */
+function urlDePagamentoSegura(url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol === "https:" && (u.hostname === "infinitepay.io" || u.hostname.endsWith(".infinitepay.io"))) return true;
+    const local = (h: string) => h === "localhost" || h === "127.0.0.1";
+    return local(window.location.hostname) && local(u.hostname) && u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function Secao({ numero, titulo, children }: { numero: number; titulo: string; children: ReactNode }) {
   const id = `secao-${numero}`;
   return (
@@ -48,29 +76,55 @@ function Secao({ numero, titulo, children }: { numero: number; titulo: string; c
   );
 }
 
-export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string; enderecos: EnderecoSalvo[] }) {
+/**
+ * Checkout: entregar em Teresina (taxa fixa do painel) ou retirar na loja (grátis), o WhatsApp da
+ * cliente (obrigatório, para combinar a entrega), o resumo e o pagamento. Com o pedido criado, segue
+ * para a página da InfinitePay; a confirmação do pedido fica no histórico no lugar do checkout, então
+ * o "voltar" do navegador, vindo do pagamento, cai no pedido (e não num checkout vazio).
+ */
+export function CheckoutClient({
+  nomeUsuario,
+  enderecos,
+  telefoneInicial,
+  taxaEntregaCentavos,
+}: {
+  nomeUsuario: string;
+  enderecos: EnderecoSalvo[];
+  /** Último WhatsApp informado (só dígitos), para não pedir de novo. */
+  telefoneInicial: string | null;
+  /** Taxa de entrega em Teresina em vigor (painel). O servidor recalcula ao criar o pedido. */
+  taxaEntregaCentavos: number;
+}) {
   const router = useRouter();
+  const uid = useId();
   const hidratado = useHidratado();
   const carrinho = useCarrinho();
   const totais = totaisDoCarrinho(carrinho);
 
-  const [selecionado, setSelecionado] = useState<string>(enderecos[0]?.id ?? NOVO);
+  const [modo, setModo] = useState<ModoEntrega>("ENTREGA");
+  // Começa no primeiro endereço salvo que fica em Teresina (os de fora não servem para a entrega).
+  const [selecionado, setSelecionado] = useState<string>(enderecos.find((e) => cepAtendido(e.cep))?.id ?? NOVO);
   // Só guardamos o que a pessoa digitou. O resto vem do carrinho (CEP) ou da
   // consulta do CEP — assim o pré-preenchimento funciona mesmo na hidratação.
   const [editado, setEditado] = useState<Partial<CamposEndereco>>({});
   const [consulta, setConsulta] = useState<{ chave: string; resultado: ResultadoEntrega } | null>(null);
+  const [telefone, setTelefone] = useState(() => (telefoneInicial ? formatarTelefone(telefoneInicial) : ""));
+  const [telefoneTocado, setTelefoneTocado] = useState(false);
   const [enviando, setEnviando] = useState(false);
   // Vale só enquanto a navegação para a confirmação acontece (não fica "preso" se a rota
   // for preservada escondida pelo Next e a pessoa voltar ao checkout depois).
   const [navegando, iniciarNavegacao] = useTransition();
+  const [indoPagar, setIndoPagar] = useState(false);
   const [ultimoPedidoId, setUltimoPedidoId] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   // Uma caixa saiu do carrinho (kit ou sabor fora da loja, kit que mudou de tamanho): oferece montar outra.
   const [ofertaMontarKit, setOfertaMontarKit] = useState(false);
+  // O servidor recusou a entrega fora de Teresina: o aviso oferece trocar para a retirada.
+  const [ofertaRetirada, setOfertaRetirada] = useState(false);
   const [errosCampo, setErrosCampo] = useState<Record<string, string[]>>({});
   const alertaRef = useRef<HTMLParagraphElement>(null);
 
-  // Idempotency-Key atrelada ao CONTEÚDO da compra (itens, endereço e total): reenviar a mesma
+  // Idempotency-Key atrelada ao CONTEÚDO da compra (itens, entrega, telefone e total): reenviar a mesma
   // compra depois de uma falha de rede não duplica o pedido, e qualquer mudança gera chave nova.
   // Depois de um pedido criado a chave é descartada: uma compra nova nunca reaproveita a antiga.
   const tentativa = useRef<{ chave: string; assinatura: string } | null>(null);
@@ -80,16 +134,21 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
     if (erro) alertaRef.current?.focus();
   }, [erro]);
 
+  const retirada = modo === "RETIRADA";
+
   // O endereço salvo escolhido deixou de existir (ex.: lista recarregada): volta para "novo endereço".
   const salvo = enderecos.find((e) => e.id === selecionado) ?? null;
   const novo = salvo === null;
 
-  // --- CEP efetivo e cotação de entrega -------------------------------------
+  // --- CEP efetivo e cotação de entrega (só na entrega) ---------------------
   const cep = salvo ? salvo.cep : (editado.cep ?? carrinho.cep).replace(/\D/g, "").slice(0, 8);
+  const cepCompleto = cep.length === 8;
+  const foraDaArea = !retirada && cepCompleto && !cepAtendido(cep);
   const chave = `${cep}|${totais.pesoTotalGramas}`;
   const cotacaoDoCarrinho = totais.cotacaoValida?.cep === cep ? totais.cotacaoValida : null;
+  // Fora de Teresina nem consulta: a resposta já se sabe (e a consulta de CEP é limitada por IP).
   const precisaConsultar =
-    cep.length === 8 && totais.pesoTotalGramas > 0 && !cotacaoDoCarrinho && consulta?.chave !== chave;
+    !retirada && cepCompleto && !foraDaArea && totais.pesoTotalGramas > 0 && !cotacaoDoCarrinho && consulta?.chave !== chave;
 
   useEffect(() => {
     if (!precisaConsultar) return;
@@ -107,9 +166,14 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
     : consulta?.chave === chave
       ? consulta.resultado
       : null;
-  const entrega = resultadoEntrega?.ok ? resultadoEntrega.cotacao.valor : null;
-  const consultando = cep.length === 8 && totais.pesoTotalGramas > 0 && resultadoEntrega === null;
-  const erroEntrega = resultadoEntrega && !resultadoEntrega.ok ? resultadoEntrega.mensagem : null;
+  const entregaReais = resultadoEntrega?.ok ? resultadoEntrega.cotacao.valor : null;
+  const consultando = !retirada && cepCompleto && !foraDaArea && totais.pesoTotalGramas > 0 && resultadoEntrega === null;
+  const erroEntrega = foraDaArea
+    ? MENSAGEM_FORA_DA_AREA
+    : resultadoEntrega && !resultadoEntrega.ok
+      ? resultadoEntrega.mensagem
+      : null;
+  const erroForaDaArea = foraDaArea || (resultadoEntrega !== null && !resultadoEntrega.ok && resultadoEntrega.foraDaArea === true);
 
   // --- valores do formulário de endereço novo -------------------------------
   const sugestao = resultadoEntrega?.ok ? resultadoEntrega.cotacao.endereco : undefined;
@@ -125,52 +189,74 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
 
   const enderecoCompleto = salvo
     ? true
-    : cep.length === 8 &&
+    : cepCompleto &&
       valores.rua.trim() !== "" &&
       valores.numero.trim() !== "" &&
       valores.bairro.trim() !== "" &&
       valores.cidade.trim() !== "" &&
       /^[A-Z]{2}$/.test(valores.estado);
 
+  // --- telefone ----------------------------------------------------------------
+  const telefoneDigitos = normalizarTelefone(telefone);
+  const telefoneOk = telefoneValido(telefoneDigitos);
+  const erroTelefone = errosCampo.telefone?.[0] ?? (telefoneTocado && !telefoneOk ? MENSAGEM_TELEFONE_INVALIDO : undefined);
+
+  // --- valores ---------------------------------------------------------------------
   const subtotal = totais.subtotal;
   // Em centavos inteiros, a mesma conta do servidor; é o valor que o cliente "viu" e confirma.
-  const totalCentavos = entrega === null ? null : totais.subtotalCentavos + Math.round(entrega * 100);
+  const freteCentavos = retirada ? 0 : entregaReais === null ? null : Math.round(entregaReais * 100);
+  const totalCentavos = freteCentavos === null ? null : totais.subtotalCentavos + freteCentavos;
   const total = totalCentavos === null ? null : totalCentavos / 100;
-  const podeFinalizar = !enviando && enderecoCompleto && entrega !== null && !totais.vazio;
+  const entregaPronta = retirada || (enderecoCompleto && !foraDaArea && entregaReais !== null);
+  const podeFinalizar = !enviando && !totais.vazio && telefoneOk && entregaPronta;
+
+  function escolherModo(novoModo: ModoEntrega) {
+    setModo(novoModo);
+    setOfertaRetirada(false);
+    setErro(null);
+    setErrosCampo({});
+  }
 
   async function finalizar() {
     setErro(null);
     setOfertaMontarKit(false);
+    setOfertaRetirada(false);
     setErrosCampo({});
+    setTelefoneTocado(true);
     setEnviando(true);
 
     const itens = carrinho.itens.map((i) => ({ productId: i.productId, quantidade: i.quantidade }));
-    // Sem caixa, o corpo é exatamente o de antes dos kits (mesma assinatura da Idempotency-Key).
-    const conteudo =
-      carrinho.kits.length > 0
+    const conteudo = {
+      itens,
+      ...(carrinho.kits.length > 0
         ? {
-            itens,
             kits: carrinho.kits.map((k) => ({
               kitId: k.kitId,
               quantidade: k.quantidade,
               sabores: k.sabores.map((s) => ({ productId: s.productId, quantidade: s.quantidade })),
             })),
           }
-        : { itens };
-    const corpo = salvo
-      ? { ...conteudo, addressId: salvo.id }
-      : {
-          ...conteudo,
-          endereco: {
-            cep,
-            rua: valores.rua,
-            numero: valores.numero,
-            complemento: valores.complemento,
-            bairro: valores.bairro,
-            cidade: valores.cidade,
-            estado: valores.estado,
-          },
-        };
+        : {}),
+      modoEntrega: modo,
+      telefone: telefoneDigitos,
+    };
+    // Na retirada não vai endereço nenhum (o servidor recusa se vier).
+    const corpo = retirada
+      ? conteudo
+      : salvo
+        ? { ...conteudo, addressId: salvo.id }
+        : {
+            ...conteudo,
+            endereco: {
+              cep,
+              rua: valores.rua,
+              numero: valores.numero,
+              complemento: valores.complemento,
+              bairro: valores.bairro,
+              cidade: valores.cidade,
+              estado: valores.estado,
+            },
+          };
 
     // Mesma compra => mesma chave (retry seguro); compra diferente => chave nova.
     const assinatura = JSON.stringify([corpo, totalCentavos]);
@@ -190,6 +276,13 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         // Sessão expirou no meio do caminho: recarrega e o checkout pede login de novo.
         setErro("Sua sessão expirou. Entre de novo para finalizar o pedido (seu carrinho foi mantido).");
         router.refresh();
+        return;
+      }
+
+      // Entrega fora de Teresina (endereço salvo antigo, ou a área mudou): sugere a retirada.
+      if (resposta.status === 422 && json?.detalhes?.foraDaArea === true) {
+        setOfertaRetirada(true);
+        setErro(json?.erro ?? MENSAGEM_FORA_DA_AREA);
         return;
       }
 
@@ -244,7 +337,7 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         setConsulta(null);
         setOfertaMontarKit(foraDoTamanho.length > 0);
         setErro(
-          `Os valores mudaram desde que você viu o total${mudancas.length ? ` (${mudancas.join("; ")})` : " (a entrega foi recalculada)"}.${
+          `Os valores mudaram desde que você viu o total${mudancas.length ? ` (${mudancas.join("; ")})` : " (a taxa de entrega foi atualizada)"}.${
             foraDoTamanho.length > 0 ? ` A caixa mudou de tamanho e saiu do carrinho: ${foraDoTamanho.map(nomeDaCaixa).join("; ")}.` : ""
           } Atualizamos o resumo: confira o novo total e finalize de novo.`,
         );
@@ -281,10 +374,22 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
 
       // Pedido criado. A chave é descartada: a próxima compra, ainda que idêntica, é outro pedido.
       tentativa.current = null;
-      setUltimoPedidoId(json.pedido.id);
+      const pedidoId: string = json.pedido.id;
+      setUltimoPedidoId(pedidoId);
+
+      // Com o link da InfinitePay: troca o checkout pela confirmação no histórico e vai pagar.
+      // Sem link (pagamento simulado, ou a InfinitePay falhou): a confirmação oferece "Pagar".
+      const checkoutUrl = json?.pagamento?.checkoutUrl;
+      if (urlDePagamentoSegura(checkoutUrl)) {
+        setIndoPagar(true);
+        acoesCarrinho.limpar();
+        history.replaceState(null, "", `/order-confirmation/${pedidoId}`);
+        window.location.assign(checkoutUrl);
+        return;
+      }
       // `navegando` cobre o intervalo até a nova página abrir.
       iniciarNavegacao(() => {
-        router.push(`/order-confirmation/${json.pedido.id}`);
+        router.push(`/order-confirmation/${pedidoId}`);
       });
       acoesCarrinho.limpar();
     } catch {
@@ -299,6 +404,17 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
   // Até hidratar o carrinho ainda não foi lido do navegador: esqueleto, e não "carrinho vazio".
   if (!hidratado) {
     return <div className="h-96 animate-pulse rounded-2xl bg-accent1/30" role="status" aria-label="Carregando seu carrinho" />;
+  }
+
+  if (indoPagar) {
+    return (
+      <div role="status" className="flex flex-col items-center gap-3 py-16 text-center">
+        <p className="font-titulos text-2xl">Pedido criado! Levando você para o pagamento…</p>
+        <p className="max-w-md text-sm text-primaria/85">
+          Você vai para a página segura da InfinitePay. Depois de pagar, toque em “Continuar” para voltar ao seu pedido.
+        </p>
+      </div>
+    );
   }
 
   if (navegando) {
@@ -346,9 +462,17 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
   const erroDoCampo = (campo: keyof CamposEndereco) => errosCampo[`endereco.${campo}`]?.[0];
   const primeiroDetalhe = Object.values(errosCampo).flat()[0];
   const editar = (campo: keyof CamposEndereco) => (valor: string) => setEditado((e) => ({ ...e, [campo]: valor }));
-  const motivoDesabilitado = !enderecoCompleto
-    ? "Complete o endereço de entrega para continuar."
-    : "Aguardando o cálculo da entrega.";
+  const motivoDesabilitado = !telefoneOk
+    ? "Informe seu WhatsApp com DDD para continuar."
+    : retirada
+      ? ""
+      : foraDaArea
+        ? "Escolha a retirada na loja ou um endereço em Teresina."
+        : !enderecoCompleto
+          ? "Complete o endereço de entrega para continuar."
+          : "Aguardando o cálculo da entrega.";
+  const taxa = taxaEntregaCentavos > 0 ? formatarBRL(taxaEntregaCentavos / 100) : "Grátis";
+  const idTelefone = `${uid}-telefone`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -356,73 +480,160 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         Olá, <strong>{nomeUsuario.split(" ")[0]}</strong>! Falta pouco para sua geleia chegar.
       </p>
 
-      {/* 1. Endereço */}
-      <Secao numero={1} titulo="Endereço de entrega">
-        {enderecos.length > 0 && (
-          <fieldset className="mb-5 flex flex-col gap-2">
-            <legend className="mb-2 text-sm font-semibold">Escolha um endereço</legend>
-            {enderecos.map((e) => (
-              <label key={e.id} className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-accent2/70 p-3 has-checked:border-2 has-checked:border-secundaria has-checked:bg-accent1/20">
-                <input type="radio" name="endereco" className="mt-1 size-4 accent-secundaria" checked={selecionado === e.id} onChange={() => setSelecionado(e.id)} />
-                <span className="text-sm leading-snug">
-                  {e.rua}, {e.numero}
-                  {e.complemento ? ` — ${e.complemento}` : ""}
-                  <br />
-                  {e.bairro} · {e.cidade}/{e.estado} · CEP {mascararCep(e.cep)}
-                </span>
-              </label>
-            ))}
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-accent2/70 p-3 has-checked:border-2 has-checked:border-secundaria has-checked:bg-accent1/20">
-              <input type="radio" name="endereco" className="size-4 accent-secundaria" checked={novo} onChange={() => setSelecionado(NOVO)} />
-              <span className="text-sm font-semibold">Usar um novo endereço</span>
-            </label>
-          </fieldset>
-        )}
+      {/* 1. Entrega ou retirada */}
+      <Secao numero={1} titulo="Entrega ou retirada">
+        <fieldset className="mb-5 grid gap-3 sm:grid-cols-2">
+          <legend className="mb-2 text-sm font-semibold">Como você quer receber?</legend>
+          <OpcaoDeEntrega
+            nome={`${uid}-modo`}
+            marcado={!retirada}
+            aoEscolher={() => escolherModo("ENTREGA")}
+            titulo={`Entregar em ${CIDADE_ATENDIDA}`}
+            preco={taxa}
+            descricao="Para CEPs de Teresina (começam com 640)."
+          />
+          <OpcaoDeEntrega
+            nome={`${uid}-modo`}
+            marcado={retirada}
+            aoEscolher={() => escolherModo("RETIRADA")}
+            titulo="Retirar na loja"
+            preco="Grátis"
+            descricao={enderecoDeRetirada()}
+          />
+        </fieldset>
 
-        {novo && (
-          <div className="grid grid-cols-6 gap-4">
-            <div className="col-span-6 sm:col-span-2">
-              <label htmlFor="end-cep" className="mb-1 block text-sm font-semibold">CEP</label>
-              <input
-                id="end-cep"
-                inputMode="numeric"
-                autoComplete="postal-code"
-                value={valores.cep}
-                onChange={(e) => {
-                  // Mudou o CEP: o endereço sugerido do anterior não vale mais.
-                  const cepDigitado = e.target.value;
-                  setEditado((x) => ({ ...x, cep: cepDigitado, rua: undefined, bairro: undefined, cidade: undefined, estado: undefined }));
-                }}
-                className="campo"
-                aria-invalid={erroEntrega || erroDoCampo("cep") ? true : undefined}
-                aria-describedby="status-cep"
-              />
-              <p id="status-cep" className="mt-1 text-xs" role="status" aria-live="polite">
-                {consultando ? "Consultando CEP…" : erroEntrega ?? erroDoCampo("cep") ?? null}
-              </p>
-            </div>
-            <Campo id="end-rua" rotulo="Rua" valor={valores.rua} aoMudar={editar("rua")} autoComplete="address-line1" className="col-span-6 sm:col-span-4" erro={erroDoCampo("rua")} />
-            <Campo id="end-numero" rotulo="Número" valor={valores.numero} aoMudar={editar("numero")} autoComplete="off" className="col-span-3 sm:col-span-2" erro={erroDoCampo("numero")} />
-            <Campo id="end-complemento" rotulo="Complemento (opcional)" valor={valores.complemento} aoMudar={editar("complemento")} autoComplete="address-line2" className="col-span-6 sm:col-span-4" erro={erroDoCampo("complemento")} />
-            <Campo id="end-bairro" rotulo="Bairro" valor={valores.bairro} aoMudar={editar("bairro")} autoComplete="off" className="col-span-6 sm:col-span-3" erro={erroDoCampo("bairro")} />
-            <Campo id="end-cidade" rotulo="Cidade" valor={valores.cidade} aoMudar={editar("cidade")} autoComplete="address-level2" className="col-span-4 sm:col-span-2" erro={erroDoCampo("cidade")} />
-            <Campo id="end-estado" rotulo="UF" valor={valores.estado} aoMudar={(v) => editar("estado")(v.slice(0, 2))} autoComplete="address-level1" maxLength={2} className="col-span-2 sm:col-span-1" erro={erroDoCampo("estado")} />
-          </div>
-        )}
+        {retirada ? (
+          <p className="rounded-lg border border-accent3 bg-accent3/10 p-3 text-sm leading-relaxed">
+            Depois que o pagamento for confirmado, chamamos você no WhatsApp para combinar o dia e o horário da retirada em{" "}
+            <strong className="font-semibold">{enderecoDeRetirada()}</strong>.
+          </p>
+        ) : (
+          <>
+            {enderecos.length > 0 && (
+              <fieldset className="mb-5 flex flex-col gap-2">
+                <legend className="mb-2 text-sm font-semibold">Endereço de entrega</legend>
+                {enderecos.map((e) => {
+                  const atendido = cepAtendido(e.cep);
+                  return (
+                    <label key={e.id} className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-accent2/70 p-3 has-checked:border-2 has-checked:border-secundaria has-checked:bg-accent1/20">
+                      <input type="radio" name={`${uid}-endereco`} className="mt-1 size-4 accent-secundaria" checked={selecionado === e.id} onChange={() => setSelecionado(e.id)} />
+                      <span className="text-sm leading-snug">
+                        {e.rua}, {e.numero}
+                        {e.complemento ? ` — ${e.complemento}` : ""}
+                        <br />
+                        {e.bairro} · {e.cidade}/{e.estado} · CEP {mascararCep(e.cep)}
+                        {!atendido && <span className="mt-1 block text-xs font-semibold text-secundaria">Fora da área de entrega</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+                <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-accent2/70 p-3 has-checked:border-2 has-checked:border-secundaria has-checked:bg-accent1/20">
+                  <input type="radio" name={`${uid}-endereco`} className="size-4 accent-secundaria" checked={novo} onChange={() => setSelecionado(NOVO)} />
+                  <span className="text-sm font-semibold">Usar um novo endereço</span>
+                </label>
+              </fieldset>
+            )}
 
-        {/* Falha ao calcular a entrega de um endereço salvo (ou do CEP digitado): permite tentar de novo. */}
-        {erroEntrega && (
-          <div className="mt-3 flex flex-wrap items-center gap-3" role="status">
-            {salvo && <p className="text-sm font-medium text-secundaria">{erroEntrega}</p>}
-            <button type="button" className="btn-secundario" onClick={() => setConsulta(null)}>
-              Tentar calcular a entrega de novo
-            </button>
-          </div>
+            {novo && (
+              <div className="grid grid-cols-6 gap-4">
+                <div className="col-span-6 sm:col-span-2">
+                  <label htmlFor="end-cep" className="mb-1 block text-sm font-semibold">CEP</label>
+                  <input
+                    id="end-cep"
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                    placeholder="64000-000"
+                    value={valores.cep}
+                    onChange={(e) => {
+                      // Mudou o CEP: o endereço sugerido do anterior não vale mais.
+                      const cepDigitado = e.target.value;
+                      setEditado((x) => ({ ...x, cep: cepDigitado, rua: undefined, bairro: undefined, cidade: undefined, estado: undefined }));
+                    }}
+                    className="campo"
+                    aria-invalid={erroEntrega || erroDoCampo("cep") ? true : undefined}
+                    aria-describedby="status-cep"
+                  />
+                  <p id="status-cep" className="mt-1 text-xs" role="status" aria-live="polite">
+                    {consultando ? "Consultando CEP…" : !foraDaArea ? (erroEntrega ?? erroDoCampo("cep") ?? null) : null}
+                  </p>
+                </div>
+                <Campo id="end-rua" rotulo="Rua" valor={valores.rua} aoMudar={editar("rua")} autoComplete="address-line1" className="col-span-6 sm:col-span-4" erro={erroDoCampo("rua")} />
+                <Campo id="end-numero" rotulo="Número" valor={valores.numero} aoMudar={editar("numero")} autoComplete="off" className="col-span-3 sm:col-span-2" erro={erroDoCampo("numero")} />
+                <Campo id="end-complemento" rotulo="Complemento (opcional)" valor={valores.complemento} aoMudar={editar("complemento")} autoComplete="address-line2" className="col-span-6 sm:col-span-4" erro={erroDoCampo("complemento")} />
+                <Campo id="end-bairro" rotulo="Bairro" valor={valores.bairro} aoMudar={editar("bairro")} autoComplete="off" className="col-span-6 sm:col-span-3" erro={erroDoCampo("bairro")} />
+                <Campo id="end-cidade" rotulo="Cidade" valor={valores.cidade} aoMudar={editar("cidade")} autoComplete="address-level2" className="col-span-4 sm:col-span-2" erro={erroDoCampo("cidade")} />
+                <Campo id="end-estado" rotulo="UF" valor={valores.estado} aoMudar={(v) => editar("estado")(v.slice(0, 2))} autoComplete="address-level1" maxLength={2} className="col-span-2 sm:col-span-1" erro={erroDoCampo("estado")} />
+              </div>
+            )}
+
+            {/* Fora de Teresina: o caminho é a retirada na loja (um toque troca a opção lá em cima). */}
+            {erroForaDaArea ? (
+              <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border-2 border-secundaria bg-white/70 p-3" role="status">
+                <p className="min-w-0 flex-1 basis-56 text-sm font-medium text-secundaria">{MENSAGEM_FORA_DA_AREA}</p>
+                <button type="button" className="btn-secundario" onClick={() => escolherModo("RETIRADA")}>
+                  Retirar na loja
+                </button>
+              </div>
+            ) : (
+              erroEntrega && (
+                // Falha ao calcular a entrega de um endereço salvo (ou do CEP digitado): permite tentar de novo.
+                <div className="mt-3 flex flex-wrap items-center gap-3" role="status">
+                  {salvo && <p className="text-sm font-medium text-secundaria">{erroEntrega}</p>}
+                  <button type="button" className="btn-secundario" onClick={() => setConsulta(null)}>
+                    Tentar calcular a entrega de novo
+                  </button>
+                </div>
+              )
+            )}
+          </>
         )}
       </Secao>
 
-      {/* 2. Resumo */}
-      <Secao numero={2} titulo="Resumo do pedido">
+      {/* 2. WhatsApp */}
+      <Secao numero={2} titulo="Seu WhatsApp">
+        <div className="max-w-sm">
+          <label htmlFor={idTelefone} className="mb-1 block text-sm font-semibold">
+            WhatsApp com DDD
+          </label>
+          <input
+            id={idTelefone}
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel-national"
+            placeholder="(86) 99999-9999"
+            required
+            aria-required="true"
+            value={telefone}
+            onChange={(e) => {
+              setTelefone(mascararTelefone(normalizarTelefone(e.target.value)));
+              // O erro do servidor some ao corrigir; o de formato volta a ser conferido no blur.
+              if (errosCampo.telefone) {
+                setErrosCampo((atuais) => {
+                  const resto = { ...atuais };
+                  delete resto.telefone;
+                  return resto;
+                });
+              }
+            }}
+            onBlur={() => setTelefoneTocado(true)}
+            className="campo"
+            aria-invalid={erroTelefone ? true : undefined}
+            aria-describedby={erroTelefone ? `${idTelefone}-erro` : `${idTelefone}-dica`}
+          />
+          {erroTelefone ? (
+            <p id={`${idTelefone}-erro`} className="mt-1 text-xs font-medium text-secundaria">
+              {erroTelefone}
+            </p>
+          ) : (
+            <p id={`${idTelefone}-dica`} className="mt-1 text-xs text-primaria/80">
+              Para combinar a {retirada ? "retirada" : "entrega"}. Só usamos para falar sobre o seu pedido.
+            </p>
+          )}
+        </div>
+      </Secao>
+
+      {/* 3. Resumo */}
+      <Secao numero={3} titulo="Resumo do pedido">
         <ul className="divide-y divide-accent1/70">
           {carrinho.kits.map((k) => (
             <li key={k.chave} className="flex items-center gap-3 py-2 text-sm">
@@ -448,9 +659,19 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
             <dt>Subtotal</dt>
             <dd>{formatarBRL(subtotal)}</dd>
           </div>
-          <div className="flex justify-between">
-            <dt>Taxa de entrega</dt>
-            <dd>{entrega !== null ? formatarBRL(entrega) : consultando ? "calculando…" : "informe o CEP"}</dd>
+          <div className="flex justify-between gap-4">
+            <dt>{retirada ? "Retirada na loja" : "Taxa de entrega"}</dt>
+            <dd className="text-right">
+              {retirada
+                ? "Grátis"
+                : entregaReais !== null
+                  ? formatarBRL(entregaReais)
+                  : consultando
+                    ? "calculando…"
+                    : foraDaArea
+                      ? "fora da área"
+                      : "informe o CEP"}
+            </dd>
           </div>
           <div className="flex justify-between pt-1 text-xl font-bold">
             <dt>Total</dt>
@@ -468,16 +689,34 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
         </p>
       </Secao>
 
-      {/* 3. Pagamento */}
-      <Secao numero={3} titulo="Pagamento">
+      {/* 4. Pagamento */}
+      <Secao numero={4} titulo="Pagamento">
+        <p className="mb-3 text-sm text-primaria/85">
+          Você paga com <strong className="font-semibold">PIX ou cartão (até 12x)</strong> na página segura da InfinitePay e volta para
+          cá. No parcelado, os juros aparecem antes de você confirmar.
+        </p>
         <p className="mb-4 text-sm text-primaria/85">
-          Pagamento via PIX: ao finalizar, mostramos o QR Code e o código copia e cola. O pedido é confirmado assim
-          que o pagamento cair.
+          Antes de pagar, veja como funcionam a{" "}
+          <Link href="/entrega-e-trocas" target="_blank" className="font-semibold text-secundaria underline underline-offset-2 hover:text-primaria">
+            entrega e as trocas<span className="sr-only"> (abre em nova aba)</span>
+          </Link>{" "}
+          e como cuidamos dos{" "}
+          <Link href="/privacidade" target="_blank" className="font-semibold text-secundaria underline underline-offset-2 hover:text-primaria">
+            seus dados<span className="sr-only"> (abre em nova aba)</span>
+          </Link>
+          .
         </p>
         <p ref={alertaRef} tabIndex={-1} role="alert" className="mb-3 min-h-5 text-sm font-medium text-secundaria outline-offset-4">
           {erro}
           {primeiroDetalhe ? ` ${primeiroDetalhe}` : ""}
         </p>
+        {ofertaRetirada && (
+          <p className="mb-3">
+            <button type="button" className="btn-secundario" onClick={() => escolherModo("RETIRADA")}>
+              Retirar na loja
+            </button>
+          </p>
+        )}
         {ofertaMontarKit && (
           <p className="mb-3 text-sm">
             <Link href="/kits" className="font-semibold text-secundaria underline underline-offset-2">
@@ -492,15 +731,45 @@ export function CheckoutClient({ nomeUsuario, enderecos }: { nomeUsuario: string
           aria-describedby={!podeFinalizar && !enviando ? "motivo-desabilitado" : undefined}
           onClick={finalizar}
         >
-          {enviando ? "Finalizando pedido…" : "Finalizar pedido e pagar com PIX"}
+          {enviando ? "Finalizando pedido…" : "Finalizar e ir para o pagamento"}
         </button>
-        {!podeFinalizar && !enviando && (
+        {!podeFinalizar && !enviando && motivoDesabilitado && (
           <p id="motivo-desabilitado" className="mt-2 text-center text-xs text-primaria/80">
             {motivoDesabilitado}
           </p>
         )}
       </Secao>
     </div>
+  );
+}
+
+/** Uma das duas opções (entrega ou retirada): o cartão inteiro é o rótulo do radio. */
+function OpcaoDeEntrega({
+  nome,
+  marcado,
+  aoEscolher,
+  titulo,
+  preco,
+  descricao,
+}: {
+  nome: string;
+  marcado: boolean;
+  aoEscolher: () => void;
+  titulo: string;
+  preco: string;
+  descricao: string;
+}) {
+  return (
+    <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-accent2/70 p-3 has-checked:border-2 has-checked:border-secundaria has-checked:bg-accent1/20">
+      <input type="radio" name={nome} className="mt-1 size-4 shrink-0 accent-secundaria" checked={marcado} onChange={aoEscolher} />
+      <span className="min-w-0 text-sm leading-snug">
+        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <span className="font-semibold">{titulo}</span>
+          <span className="font-semibold tabular-nums">{preco}</span>
+        </span>
+        <span className="mt-0.5 block text-xs text-primaria/80">{descricao}</span>
+      </span>
+    </label>
   );
 }
 

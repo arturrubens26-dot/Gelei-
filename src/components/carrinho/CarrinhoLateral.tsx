@@ -186,6 +186,7 @@ export function CarrinhoLateral() {
             <h3 id="titulo-entrega" className="text-lg font-semibold">
               Entrega
             </h3>
+            <p className="mt-1 text-xs text-primaria/80">Entregamos em Teresina. No checkout, você também pode retirar na loja, sem custo.</p>
             <form
               className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end"
               onSubmit={(e) => {

@@ -5,7 +5,9 @@ import { Suspense } from "react";
 import { StatusPagamento } from "@/components/checkout/StatusPagamento";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { exigirUsuario } from "@/lib/auth/dal";
+import { dadosLoja } from "@/lib/dados-loja";
 import { formatarBRL } from "@/lib/dinheiro";
+import { enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
 import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
 import { textoDaComposicao } from "@/lib/kits-regras";
 import { ultimaCobranca } from "@/lib/pagamentos";
@@ -82,8 +84,8 @@ async function DadosDoPedido({ params }: { params: PageProps<"/order-confirmatio
             <dd>{formatarBRL(pedido.subtotal)}</dd>
           </div>
           <div className="flex justify-between">
-            <dt>Taxa de entrega</dt>
-            <dd>{formatarBRL(pedido.deliveryFee)}</dd>
+            <dt>{pedido.modoEntrega === "RETIRADA" ? "Retirada na loja" : "Taxa de entrega"}</dt>
+            <dd>{pedido.modoEntrega === "RETIRADA" ? "Grátis" : formatarBRL(pedido.deliveryFee)}</dd>
           </div>
           <div className="flex justify-between pt-1 text-xl font-bold">
             <dt>Total</dt>
@@ -94,16 +96,43 @@ async function DadosDoPedido({ params }: { params: PageProps<"/order-confirmatio
 
       <section aria-labelledby="titulo-entrega" className="cartao p-5">
         <h2 id="titulo-entrega" className="mb-3 text-2xl font-bold">
-          Entrega
+          {pedido.modoEntrega === "RETIRADA" ? "Retirada na loja" : "Entrega"}
         </h2>
-        <address className="text-sm not-italic leading-relaxed">
-          {e.rua}, {e.numero}
-          {e.complemento ? ` — ${e.complemento}` : ""}
-          <br />
-          {e.bairro} · {e.cidade}/{e.estado}
-          <br />
-          CEP {e.cep.slice(0, 5)}-{e.cep.slice(5)}
-        </address>
+        {pedido.modoEntrega === "RETIRADA" || !e ? (
+          <>
+            <p className="text-sm leading-relaxed">Sem custo, na loja:</p>
+            <address className="mt-1 text-sm font-semibold not-italic leading-relaxed">{enderecoDeRetirada()}</address>
+          </>
+        ) : (
+          <address className="text-sm not-italic leading-relaxed">
+            {e.rua}, {e.numero}
+            {e.complemento ? ` — ${e.complemento}` : ""}
+            <br />
+            {e.bairro} · {e.cidade}/{e.estado}
+            <br />
+            CEP {e.cep.slice(0, 5)}-{e.cep.slice(5)}
+          </address>
+        )}
+        <p className="mt-4 border-t border-accent2/50 pt-4 text-sm leading-relaxed text-primaria/90">
+          {pedido.status === "CANCELADO"
+            ? "Este pedido foi cancelado."
+            : `Depois que o pagamento for confirmado, chamamos você no WhatsApp${
+                pedido.telefone ? ` ${formatarTelefone(pedido.telefone)}` : ""
+              } para combinar o dia e o horário da ${pedido.modoEntrega === "RETIRADA" ? "retirada" : "entrega"}.`}
+        </p>
+        <p className="mt-2 text-sm text-primaria/85">
+          Dúvidas? Fale com a gente no Instagram{" "}
+          <a
+            href={dadosLoja.instagram.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-secundaria underline underline-offset-2 hover:text-primaria"
+          >
+            @{dadosLoja.instagram.usuario}
+            <span className="sr-only"> (abre em nova aba)</span>
+          </a>
+          .
+        </p>
       </section>
 
       <div>

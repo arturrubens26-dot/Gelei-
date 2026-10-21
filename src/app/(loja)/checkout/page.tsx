@@ -5,7 +5,9 @@ import { AuthForm } from "@/components/AuthForm";
 import { CheckoutClient } from "@/components/checkout/CheckoutClient";
 import { getUsuarioAtual } from "@/lib/auth/dal";
 import { listarEnderecos } from "@/lib/enderecos";
+import { obterTaxaDeEntregaCentavos } from "@/lib/entrega";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
+import { telefoneDoCliente } from "@/lib/pedidos";
 
 export const metadata: Metadata = { title: "Finalizar pedido" };
 
@@ -22,7 +24,7 @@ export default function PaginaCheckout() {
 }
 
 async function ConteudoDoCheckout() {
-  // Site no ar antes do PIX real: avisa em vez de deixar montar um pedido que não tem como ser pago.
+  // Site no ar antes do pagamento real: avisa em vez de deixar montar um pedido que não tem como ser pago.
   // Fica dentro do Suspense (hora da requisição), então vale a configuração do servidor no ar.
   if (!pagamentoOnlineDisponivel()) {
     return (
@@ -31,7 +33,8 @@ async function ConteudoDoCheckout() {
           Pedidos pelo site em breve
         </h2>
         <p className="mx-auto mb-6 max-w-md text-primaria/80">
-          Estamos preparando o pagamento por PIX. Enquanto isso, conheça os sabores; seu carrinho fica guardado neste navegador.
+          Estamos preparando o pagamento pelo site, com PIX ou cartão. Enquanto isso, conheça os sabores; seu carrinho fica guardado
+          neste navegador.
         </p>
         <Link href="/products" className="btn-primario">
           Ver os sabores
@@ -57,6 +60,20 @@ async function ConteudoDoCheckout() {
     );
   }
 
+  const [enderecos, telefone, taxaEntregaCentavos] = await Promise.all([
+    listarEnderecos(usuario.id),
+    telefoneDoCliente(usuario.id),
+    obterTaxaDeEntregaCentavos(),
+  ]);
+
   // `key` por usuário: se outra pessoa entrar no mesmo navegador, o estado do checkout recomeça do zero.
-  return <CheckoutClient key={usuario.id} nomeUsuario={usuario.nome} enderecos={await listarEnderecos(usuario.id)} />;
+  return (
+    <CheckoutClient
+      key={usuario.id}
+      nomeUsuario={usuario.nome}
+      enderecos={enderecos}
+      telefoneInicial={telefone}
+      taxaEntregaCentavos={taxaEntregaCentavos}
+    />
+  );
 }
