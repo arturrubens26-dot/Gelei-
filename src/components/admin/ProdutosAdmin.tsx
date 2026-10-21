@@ -4,11 +4,58 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { CampoForm } from "@/components/admin/CampoForm";
+import { FotoComVerso } from "@/components/FotoComVerso";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { ProdutoAdminDTO } from "@/lib/produtos-admin";
-import { LADO_FOTO, MAX_BYTES_FOTO, ROTULO_PERMITIDO_EM_KIT, ehFotoEnviada, montarNome } from "@/lib/produtos-regras";
+import {
+  AVISO_ALEGACAO,
+  LADO_FOTO,
+  MAX_BYTES_FOTO,
+  MAX_CARACTERES_DESTAQUE,
+  MAX_CARACTERES_HARMONIZACAO,
+  MAX_DESTAQUES,
+  MAX_HARMONIZACOES,
+  ROTULO_PERMITIDO_EM_KIT,
+  TITULO_DESTAQUES,
+  TITULO_HARMONIZACOES,
+  avisosDeAlegacao,
+  ehFotoEnviada,
+  linhasDaLista,
+  montarNome,
+  produtoSchema,
+} from "@/lib/produtos-regras";
 
 type Aviso = { tipo: "ok" | "erro"; texto: string };
+
+type CampoVerso = "harmonizacoes" | "destaques";
+
+/** Limites e títulos de cada lista do verso (os mesmos do servidor, em produtos-regras.ts). */
+const VERSO: Record<CampoVerso, { titulo: string; maxItens: number; maxCaracteres: number; exemplo: string }> = {
+  harmonizacoes: {
+    titulo: TITULO_HARMONIZACOES,
+    maxItens: MAX_HARMONIZACOES,
+    maxCaracteres: MAX_CARACTERES_HARMONIZACAO,
+    exemplo: "Queijo coalho na chapa",
+  },
+  destaques: {
+    titulo: TITULO_DESTAQUES,
+    maxItens: MAX_DESTAQUES,
+    maxCaracteres: MAX_CARACTERES_DESTAQUE,
+    exemplo: "Doce e picante na mesma colherada",
+  },
+};
+
+/** As linhas que valem (aparadas, sem as vazias), como o servidor lê o textarea. */
+const itensDoTexto = (texto: string) => linhasDaLista(texto) as string[];
+
+/** A mesma validação do servidor, para avisar antes de enviar ("Item 2: ..."). */
+function erroDaLista(campo: CampoVerso, texto: string): string | undefined {
+  const lido = produtoSchema.shape[campo].safeParse(texto);
+  if (lido.success) return undefined;
+  const problema = lido.error.issues[0];
+  const item = typeof problema.path[0] === "number" ? `Item ${problema.path[0] + 1}: ` : "";
+  return `${item}${problema.message}`;
+}
 
 /** Cadastro de produtos: lista com Editar / Ocultar / Excluir e o formulário de criar e editar. */
 export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
@@ -114,6 +161,9 @@ export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
                       </span>
                     </p>
                     <p className="mt-1 text-xs text-primaria/80">{p.permitidoEmKit ? "Entra no Kit Presente" : "Fora do Kit Presente"}</p>
+                    <p className="text-xs text-primaria/80">
+                      {p.harmonizacoes.length + p.destaques.length > 0 ? "Foto com verso" : "Foto sem verso"}
+                    </p>
                   </div>
                 </div>
                 <p className="line-clamp-2 text-sm text-primaria/85">{p.descricao}</p>
@@ -151,7 +201,17 @@ export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
   );
 }
 
-type Form = { sabor: string; peso: string; preco: string; descricao: string; ativo: boolean; permitidoEmKit: boolean };
+type Form = {
+  sabor: string;
+  peso: string;
+  preco: string;
+  descricao: string;
+  ativo: boolean;
+  permitidoEmKit: boolean;
+  /** Um item por linha, como o textarea (o servidor apara e descarta as linhas vazias). */
+  harmonizacoes: string;
+  destaques: string;
+};
 
 /** Reduz a foto no navegador: recorte quadrado no centro, até 800×800, em JPEG (~100 KB). */
 async function prepararFoto(arquivo: File): Promise<Blob> {
@@ -190,9 +250,11 @@ function FormularioProduto({
           descricao: produto.descricao,
           ativo: produto.ativo,
           permitidoEmKit: produto.permitidoEmKit,
+          harmonizacoes: produto.harmonizacoes.join("\n"),
+          destaques: produto.destaques.join("\n"),
         }
       : // Produto novo nasce fora do kit: a dona marca só os potes do tamanho padrão.
-        { sabor: "", peso: "", preco: "", descricao: "", ativo: true, permitidoEmKit: false },
+        { sabor: "", peso: "", preco: "", descricao: "", ativo: true, permitidoEmKit: false, harmonizacoes: "", destaques: "" },
   );
   const [foto, setFoto] = useState<{ blob: Blob; url: string } | null>(null);
   const [lendoFoto, setLendoFoto] = useState(false);
@@ -247,6 +309,10 @@ function FormularioProduto({
     if (centavos === null || centavos < 1) locais.precoCentavos = "Informe o preço (ex.: 15,00).";
     if (form.descricao.trim().length < 2) locais.descricao = "Escreva uma descrição curta.";
     if (!produto && !foto) locais.foto = "Escolha uma foto do produto.";
+    for (const campo of ["harmonizacoes", "destaques"] as const) {
+      const erro = erroDaLista(campo, form[campo]);
+      if (erro) locais[campo] = erro;
+    }
     if (Object.keys(locais).length > 0) {
       setErros(locais);
       setErroGeral("Confira os campos destacados.");
@@ -260,6 +326,9 @@ function FormularioProduto({
     dados.set("descricao", form.descricao.trim());
     dados.set("ativo", String(form.ativo));
     dados.set("permitidoEmKit", String(form.permitidoEmKit));
+    // Sempre enviados: o campo vazio esvazia a lista (a foto do produto deixa de virar).
+    dados.set("harmonizacoes", form.harmonizacoes);
+    dados.set("destaques", form.destaques);
     if (foto) dados.set("foto", foto.blob, "foto.jpg");
 
     setSalvando(true);
@@ -273,7 +342,15 @@ function FormularioProduto({
       const json = await resposta.json().catch(() => null);
       if (!resposta.ok) {
         const detalhes: Record<string, unknown> = json?.detalhes && typeof json.detalhes === "object" ? json.detalhes : {};
-        setErros(Object.fromEntries(Object.entries(detalhes).map(([k, v]) => [k, Array.isArray(v) ? String(v[0]) : String(v)])));
+        const porCampo: Record<string, string> = {};
+        for (const [k, v] of Object.entries(detalhes)) {
+          const texto = Array.isArray(v) ? String(v[0]) : String(v);
+          // Erro de um item do verso ("harmonizacoes.2") vai para o campo da lista, dizendo qual item.
+          const item = /^(harmonizacoes|destaques)\.(\d+)$/.exec(k);
+          if (item) porCampo[item[1]] ??= `Item ${Number(item[2]) + 1}: ${texto}`;
+          else porCampo[k] ??= texto;
+        }
+        setErros(porCampo);
         setErroGeral(json?.erro ?? "Não foi possível salvar o produto.");
         return;
       }
@@ -389,6 +466,24 @@ function FormularioProduto({
             />
           </CampoForm>
 
+          <fieldset className="flex flex-col gap-4 rounded-lg border border-accent2/60 p-4">
+            <legend className="px-1 text-sm font-semibold">Verso da foto</legend>
+            <p className="-mt-1 text-xs text-primaria/80">
+              Na loja, a foto vira e mostra estas listas. Fale de sabor, textura, cor e uso. Deixe as duas vazias para a foto não virar.
+            </p>
+            {(["harmonizacoes", "destaques"] as const).map((campo) => (
+              <CampoDoVerso
+                key={campo}
+                id={`${id}-${campo}`}
+                campo={campo}
+                valor={form[campo]}
+                erro={erros[campo]}
+                aoMudar={(valor) => setForm((f) => ({ ...f, [campo]: valor }))}
+              />
+            ))}
+            <PreviaDoVerso sabor={form.sabor.trim()} foto={fotoNaTela} harmonizacoes={form.harmonizacoes} destaques={form.destaques} />
+          </fieldset>
+
           <label className="flex items-center gap-2 text-sm font-semibold">
             <input type="checkbox" checked={form.ativo} onChange={mudar("ativo")} className="size-4" />
             Mostrar na loja
@@ -421,5 +516,85 @@ function FormularioProduto({
         </div>
       </form>
     </section>
+  );
+}
+
+/** Textarea de uma lista do verso, com a contagem de linhas e caracteres e o aviso de alegação de saúde. */
+function CampoDoVerso({
+  id,
+  campo,
+  valor,
+  erro,
+  aoMudar,
+}: {
+  id: string;
+  campo: CampoVerso;
+  valor: string;
+  erro?: string;
+  aoMudar: (valor: string) => void;
+}) {
+  const cfg = VERSO[campo];
+  const itens = itensDoTexto(valor);
+  const maior = itens.reduce((m, item) => Math.max(m, item.length), 0);
+  const passou = itens.length > cfg.maxItens || maior > cfg.maxCaracteres;
+  // Não bloqueia o salvar: só lembra de evitar promessa de saúde (ANVISA) e composição não confirmada.
+  const termos = avisosDeAlegacao(valor);
+  const descritores = [erro ? `${id}-erro` : `${id}-dica`, termos.length > 0 ? `${id}-aviso` : null].filter(Boolean).join(" ");
+
+  return (
+    <div>
+      <label htmlFor={id} className="mb-1 block text-sm font-semibold">
+        {cfg.titulo} (uma por linha)
+      </label>
+      <textarea
+        id={id}
+        className="campo min-h-24"
+        value={valor}
+        onChange={(e) => aoMudar(e.target.value)}
+        rows={cfg.maxItens}
+        placeholder={`Ex.: ${cfg.exemplo}`}
+        aria-invalid={erro ? true : undefined}
+        aria-describedby={descritores}
+      />
+      {erro ? (
+        <p id={`${id}-erro`} className="mt-1 text-xs font-semibold text-secundaria">
+          {erro}
+        </p>
+      ) : (
+        <p id={`${id}-dica`} className={`mt-1 text-xs ${passou ? "font-semibold text-secundaria" : "text-primaria/75"}`}>
+          {itens.length}/{cfg.maxItens} {cfg.maxItens === 1 ? "linha" : "linhas"} · a maior tem {maior}/{cfg.maxCaracteres} caracteres
+        </p>
+      )}
+      {termos.length > 0 && (
+        <p id={`${id}-aviso`} className="mt-2 rounded-md border border-accent2 bg-accent2/15 px-3 py-2 text-xs font-medium text-primaria">
+          {AVISO_ALEGACAO} Repare em: {termos.map((t) => `“${t}”`).join(", ")}.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Como o cartão vai ficar na loja: a mesma foto que vira (clique para ver o verso). */
+function PreviaDoVerso({ sabor, foto, harmonizacoes, destaques }: { sabor: string; foto: string | null; harmonizacoes: string; destaques: string }) {
+  // Sem repetidos (o servidor recusa) e no máximo o limite de cada lista: é só uma prévia.
+  const lista = (texto: string, max: number) => [...new Set(itensDoTexto(texto))].slice(0, max);
+  const h = lista(harmonizacoes, MAX_HARMONIZACOES);
+  const d = lista(destaques, MAX_DESTAQUES);
+  if (h.length === 0 && d.length === 0) return null;
+  return (
+    <div>
+      <p className="text-sm font-semibold">Prévia na loja</p>
+      <p className="mb-2 text-xs text-primaria/75">Clique na foto para ver o verso, como a cliente verá.</p>
+      <div className="cartao w-full max-w-80 p-2.5">
+        <FotoComVerso sabor={sabor || "produto novo"} harmonizacoes={h} destaques={d}>
+          {foto ? (
+            // eslint-disable-next-line @next/next/no-img-element -- prévia local (blob:) ou a foto atual
+            <img src={foto} alt="" className="aspect-square w-full object-cover" />
+          ) : (
+            <div className="aspect-square w-full" />
+          )}
+        </FotoComVerso>
+      </div>
+    </div>
   );
 }
