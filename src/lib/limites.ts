@@ -12,6 +12,9 @@ export const MAX_PEDIDOS_PENDENTES = 20;
 /** O bcrypt só considera os primeiros 72 BYTES da senha (acentos ocupam mais de 1). */
 export const MAX_BYTES_SENHA = 72;
 
+/** Tamanho mínimo da senha (cadastro e redefinição; o AuthForm usa o mesmo número). */
+export const MIN_CARACTERES_SENHA = 8;
+
 /** Caixas de kit por pedido (soma das quantidades de todas as linhas de kit). */
 export const MAX_KITS_POR_PEDIDO = 20;
 

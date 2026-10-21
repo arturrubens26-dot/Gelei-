@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ehFotoEnviada, idParaProduto, montarNome, produtoSchema, separarNome, tipoDaImagem } from "../src/lib/produtos-regras";
+import { avisosDeAlegacao, ehFotoEnviada, idParaProduto, montarNome, produtoSchema, separarNome, tipoDaImagem } from "../src/lib/produtos-regras";
 
 describe("nome e id do produto", () => {
   it("monta e separa o nome no formato do rótulo", () => {
@@ -57,5 +57,31 @@ describe("validação do produto", () => {
     assert.equal(produtoSchema.safeParse({ ...valido, pesoGramas: "112.5" }).success, false);
     assert.equal(produtoSchema.safeParse({ ...valido, pesoGramas: "" }).success, false);
     assert.equal(produtoSchema.safeParse({ ...valido, descricao: "a​b‮c" }).success, false);
+  });
+});
+
+describe("avisos de alegação no verso", () => {
+  it("acha termos de saúde sem acento, sem diferenciar maiúsculas e por palavra", () => {
+    assert.deepEqual(avisosDeAlegacao("Ótima para a SAUDE"), ["saúde"]);
+    assert.deepEqual(avisosDeAlegacao("Rica em vitaminas e fibras"), ["vitamina", "fibra"]);
+    assert.deepEqual(avisosDeAlegacao("Ajuda na digestão"), ["digest"]);
+    assert.deepEqual(avisosDeAlegacao("Termogênica e detox"), ["termogên", "detox"]);
+    assert.deepEqual(avisosDeAlegacao("Versão light, sem açúcar"), ["sem açúcar", "light"]);
+    assert.deepEqual(avisosDeAlegacao("Previne gripes"), ["previne"]);
+  });
+
+  it("não acusa pedaço de outra palavra nem o rascunho aprovado", () => {
+    assert.deepEqual(avisosDeAlegacao("Queijo coalho com relevo"), []);
+    assert.deepEqual(avisosDeAlegacao("Queijo curado na tábua"), []);
+    assert.deepEqual(avisosDeAlegacao("Fitas e confeitos"), []);
+    assert.deepEqual(avisosDeAlegacao("Sem conservantes"), []);
+    const rascunho = [
+      "Cream cheese com torradas", "Queijo coalho na chapa", "Costelinha e carnes assadas", "Tábua de frios",
+      "Doce e picante na mesma colherada", "Vermelho intenso que deixa a tábua de frios bonita",
+      "Transforma um petisco simples em entrada de festa", "Cream cheese com biscoito salgado",
+      "Pedacinhos de fruta e de pimenta à vista no pote", "Iogurte com frutas", "Iogurte com granola",
+      "Azedinha e perfumada, como a fruta", "Com as sementes, que dão crocância", "Cobertura pronta para sobremesas",
+    ];
+    for (const texto of rascunho) assert.deepEqual(avisosDeAlegacao(texto), [], texto);
   });
 });

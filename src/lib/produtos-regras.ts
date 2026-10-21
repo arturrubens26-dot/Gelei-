@@ -12,6 +12,84 @@ export const LADO_FOTO = 800;
 /** Rótulo da caixinha do painel (e citado nos avisos do kit): o mesmo texto nos dois lugares. */
 export const ROTULO_PERMITIDO_EM_KIT = "Pode entrar no Kit Presente";
 
+// --- verso da foto (harmonizações e destaques) -------------------------------------------------
+// Os limites fazem o texto caber no quadrado da foto (de ~330 px no celular a ~368 px no desktop):
+// 2 títulos, 4 linhas e 3 itens de até 2 linhas cada, em text-sm.
+
+/** Título público da lista de harmonizações (no verso e no painel). */
+export const TITULO_HARMONIZACOES = "Harmoniza com";
+/**
+ * Título público da lista `destaques`. Não é "Benefícios": em alimento, a palavra sugere alegação de
+ * saúde. Fica em constante para a dona trocar sem migração.
+ */
+export const TITULO_DESTAQUES = "Por que você vai gostar";
+export const MAX_HARMONIZACOES = 4;
+export const MAX_CARACTERES_HARMONIZACAO = 40;
+export const MAX_DESTAQUES = 3;
+export const MAX_CARACTERES_DESTAQUE = 70;
+/** Cada item do verso tem pelo menos isto (depois de aparar). */
+export const MIN_CARACTERES_ITEM_VERSO = 2;
+
+/** Aviso do painel quando `avisosDeAlegacao` acha algo (não bloqueia o salvar). */
+export const AVISO_ALEGACAO = "Evite promessas de saúde (ANVISA).";
+
+/**
+ * Termos de saúde, função ou composição que pedem cuidado no verso. `prefixo`: vale também com o
+ * que vier depois ("digest" pega "digestivo"); senão, só a palavra inteira ("leve" não pega
+ * "relevo"). Comparação sem acento e sem diferenciar maiúsculas. "Sem conservantes" não entra: a dona
+ * confirmou que vale para todos os sabores (2026-10-21).
+ */
+const TERMOS_DE_ALEGACAO: readonly { termo: string; prefixo: boolean }[] = [
+  { termo: "saudável", prefixo: false },
+  { termo: "saudáveis", prefixo: false },
+  { termo: "saúde", prefixo: false },
+  { termo: "natural", prefixo: true },
+  { termo: "sem açúcar", prefixo: false },
+  { termo: "zero", prefixo: false },
+  { termo: "diet", prefixo: false },
+  { termo: "light", prefixo: false },
+  { termo: "leve", prefixo: false },
+  { termo: "fit", prefixo: false },
+  { termo: "vitamina", prefixo: true },
+  { termo: "fibra", prefixo: true },
+  { termo: "proteína", prefixo: true },
+  { termo: "antioxidante", prefixo: true },
+  { termo: "imunidade", prefixo: true },
+  { termo: "imunológic", prefixo: true },
+  { termo: "digest", prefixo: true },
+  { termo: "calmante", prefixo: true },
+  { termo: "termogên", prefixo: true },
+  { termo: "emagrec", prefixo: true },
+  { termo: "detox", prefixo: true },
+  { termo: "funcional", prefixo: true },
+  { termo: "nutritiv", prefixo: true },
+  { termo: "cura", prefixo: false },
+  { termo: "curar", prefixo: false },
+  { termo: "curativ", prefixo: true },
+  { termo: "previne", prefixo: true },
+  { termo: "prevenir", prefixo: false },
+  { termo: "prevenção", prefixo: false },
+];
+
+/** Sem acento e em minúsculas, para comparar ("Saúde" e "saude" são a mesma coisa). */
+function semAcento(texto: string): string {
+  return texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+
+const PADROES_DE_ALEGACAO = TERMOS_DE_ALEGACAO.map(({ termo, prefixo }) => ({
+  termo,
+  padrao: new RegExp(`(?:^|[^a-z0-9])${semAcento(termo).replace(/ /g, "\\s+")}${prefixo ? "" : "(?![a-z0-9])"}`),
+}));
+
+/**
+ * Termos do texto que soam como alegação de saúde ou de composição (como estão na lista, com acento),
+ * sem repetir. Lista vazia: nada a avisar. Serve para o painel avisar; o servidor não bloqueia.
+ */
+export function avisosDeAlegacao(texto: string): string[] {
+  const normal = semAcento(texto);
+  return PADROES_DE_ALEGACAO.filter((p) => p.padrao.test(normal)).map((p) => p.termo);
+}
+
 /** "Morango com Pedaços, 250g" → sabor "Morango com Pedaços" e peso "250g" (como no rótulo). */
 export function separarNome(nome: string): { sabor: string; peso: string | null } {
   const i = nome.lastIndexOf(",");
