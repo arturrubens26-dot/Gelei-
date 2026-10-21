@@ -2,7 +2,8 @@ import type { CotacaoEntrega } from "./store";
 
 export type ResultadoEntrega =
   | { ok: true; cotacao: CotacaoEntrega }
-  | { ok: false; mensagem: string };
+  /** `foraDaArea`: o CEP não é de Teresina (a tela sugere a retirada na loja). */
+  | { ok: false; mensagem: string; foraDaArea?: boolean };
 
 /** Máscara de CEP enquanto digita: "01310100" → "01310-100". */
 export function mascararCep(valor: string): string {
@@ -20,7 +21,11 @@ export async function calcularEntrega(cep: string, pesoTotalGramas: number): Pro
     });
     const dados = await resposta.json().catch(() => null);
     if (!resposta.ok) {
-      return { ok: false, mensagem: dados?.erro ?? "Não foi possível calcular a entrega." };
+      return {
+        ok: false,
+        mensagem: dados?.erro ?? "Não foi possível calcular a entrega.",
+        ...(dados?.detalhes?.foraDaArea === true ? { foraDaArea: true } : {}),
+      };
     }
     return {
       ok: true,

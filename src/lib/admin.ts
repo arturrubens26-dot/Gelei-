@@ -10,6 +10,7 @@ import {
   type CategoriaDespesa,
 } from "@/lib/despesas";
 import { codigoPedido } from "@/lib/formatacao";
+import type { ModoEntrega } from "@/lib/entrega-regras";
 import { STATUS_PAGOS, transicoesPermitidas, type StatusPedido } from "@/lib/status";
 import { nomeDoCliente, type CanalPedido, type FormaPagamento } from "@/lib/vendas";
 
@@ -29,6 +30,10 @@ export type PedidoAdminDTO = {
   qtdItens: number;
   /** Linhas de kit (composições diferentes; cada uma pode ter várias caixas). */
   qtdKits: number;
+  /** Pedido online: entrega ou retirada. Venda presencial: null. */
+  modoEntrega: ModoEntrega | null;
+  /** WhatsApp da cliente (só dígitos; linkWhatsApp). Null na venda presencial e nos pedidos antigos. */
+  telefone: string | null;
 };
 
 const POR_PAGINA = 50;
@@ -64,6 +69,8 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
     status: p.status,
     qtdItens: p._count.items,
     qtdKits: p._count.kits,
+    modoEntrega: p.modoEntrega,
+    telefone: p.telefone,
   }));
 
   return { pedidos: dados, total, pagina, porPagina: POR_PAGINA };

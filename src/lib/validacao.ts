@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { CATEGORIAS_DESPESA, UNIDADES_DESPESA, hojeNaLoja } from "@/lib/despesas";
 import {
+  MAX_TAXA_ENTREGA_CENTAVOS,
+  MENSAGEM_TELEFONE_INVALIDO,
+  MODOS_ENTREGA,
+  normalizarTelefone,
+  telefoneValido,
+} from "@/lib/entrega-regras";
+import {
   MAX_BYTES_SENHA,
   MAX_KITS_POR_PEDIDO,
   MAX_LINHAS_DE_KIT,
@@ -58,13 +65,31 @@ export const enderecoSchema = z.object({
 
 export type EnderecoEntrada = z.infer<typeof enderecoSchema>;
 
+/** WhatsApp com DDD: normaliza (tira máscara, +55 e o 0 da operadora) e confere. Sai só com dígitos. */
+export const telefoneSchema = z
+  .string({ error: MENSAGEM_TELEFONE_INVALIDO })
+  .max(30, MENSAGEM_TELEFONE_INVALIDO)
+  .transform(normalizarTelefone)
+  .refine(telefoneValido, MENSAGEM_TELEFONE_INVALIDO);
+
 export const calculoFreteSchema = z.object({
   cep: cepSchema,
+  // A taxa é fixa (não depende do peso); o campo continua aceito para o carrinho saber se a cotação ficou velha.
   pesoTotalGramas: z
     .number({ error: "Informe o peso total do carrinho." })
     .int("O peso deve ser um número inteiro de gramas.")
     .min(0)
-    .max(1_000_000),
+    .max(1_000_000)
+    .default(0),
+});
+
+/** PATCH /api/admin/entrega: a taxa fixa de entrega em Teresina, em centavos. */
+export const taxaEntregaSchema = z.object({
+  taxaEntregaCentavos: z
+    .number({ error: "Informe a taxa de entrega." })
+    .int("A taxa é em centavos inteiros.")
+    .min(0, "A taxa não pode ser negativa.")
+    .max(MAX_TAXA_ENTREGA_CENTAVOS, `Taxa máxima: R$ ${(MAX_TAXA_ENTREGA_CENTAVOS / 100).toFixed(2).replace(".", ",")}.`),
 });
 
 export const itemPedidoSchema = z.object({
@@ -116,6 +141,10 @@ export const pedidoSchema = z
   .object({
     itens: z.array(itemPedidoSchema).max(50).default([]),
     kits: z.array(kitPedidoSchema).max(MAX_LINHAS_DE_KIT, `No máximo ${MAX_LINHAS_DE_KIT} kits diferentes por pedido.`).default([]),
+    /** Entrega em Teresina (com endereço) ou retirada na loja (sem endereço e sem frete). */
+    modoEntrega: z.enum(MODOS_ENTREGA, { error: "Escolha entre entregar em Teresina ou retirar na loja." }),
+    /** WhatsApp da cliente: aceita com máscara ou +55; sai só com os dígitos. */
+    telefone: telefoneSchema,
     addressId: z.string().min(1).max(100).optional(),
     endereco: enderecoSchema.optional(),
     totalEsperadoCentavos: z.number().int().min(0).max(100_000_000).optional(),
@@ -126,8 +155,13 @@ export const pedidoSchema = z
     message: `No máximo ${MAX_KITS_POR_PEDIDO} caixas de kit por pedido.`,
     path: ["kits"],
   })
-  .refine((v) => Boolean(v.addressId) !== Boolean(v.endereco), {
+  .refine((v) => v.modoEntrega !== "ENTREGA" || Boolean(v.addressId) !== Boolean(v.endereco), {
     message: "Informe um endereço salvo (addressId) ou os dados de um novo endereço.",
+    path: ["endereco"],
+  })
+  // Retirada não tem endereço: mandar um seria sinal de tela desatualizada (e o banco recusaria).
+  .refine((v) => v.modoEntrega !== "RETIRADA" || (!v.addressId && !v.endereco), {
+    message: "Na retirada na loja não há endereço de entrega.",
     path: ["endereco"],
   });
 

@@ -13,7 +13,10 @@ const FORMATO_CHAVE = /^[A-Za-z0-9_-]{8,100}$/;
  *
  * Entrada: { itens?: [{ productId, quantidade }],
  *            kits?: [{ kitId, quantidade, sabores: [{ productId, quantidade }] }],
- *            addressId | endereco: {...}, totalEsperadoCentavos? }
+ *            modoEntrega: "ENTREGA" | "RETIRADA", telefone,
+ *            addressId | endereco: {...} (só na ENTREGA), totalEsperadoCentavos? }
+ * Entrega só em Teresina (CEP 640…); fora: 422 `{ detalhes: { foraDaArea: true } }`. Telefone
+ * inválido: 400 em `detalhes.telefone`. Na RETIRADA, endereço enviado: 400 em `detalhes.endereco`.
  * `itens` e `kits` podem faltar (viram []), mas não os dois vazios. `sabores` é a
  * composição de UMA caixa; `quantidade` do kit é o número de caixas.
  * Cabeçalho opcional `Idempotency-Key`: reenviar a mesma chave com o mesmo conteúdo

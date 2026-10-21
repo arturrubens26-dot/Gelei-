@@ -1,16 +1,18 @@
 import { comTratamento, erro, lerCorpo, origemInvalida } from "@/lib/api";
 import { dentroDoLimitePorCliente } from "@/lib/auth/limitador";
 import { consultarCep } from "@/lib/cep";
-import { calcularFrete } from "@/lib/frete";
+import { taxaDeEntregaAtualCentavos } from "@/lib/entrega";
+import { CIDADE_ATENDIDA, UF_ATENDIDA, calcularFrete } from "@/lib/entrega-regras";
 import { calculoFreteSchema } from "@/lib/validacao";
 
 /**
  * POST /api/delivery/calculate
- * Entrada: { cep: string, pesoTotalGramas: number }
- * Saída:   { valor, taxaBase, adicionalPeso, regiao, pesoTotalGramas, endereco }
+ * Entrada: { cep: string, pesoTotalGramas?: number }
+ * Saída 200 (CEP de Teresina): { valor, taxaBase, adicionalPeso: 0, regiao: "Teresina/PI", pesoTotalGramas, endereco }
+ * 422 fora da área: { erro: MENSAGEM_FORA_DA_AREA, detalhes: { foraDaArea: true } } (sem consultar o CEP).
+ * 422 CEP inexistente; 503 serviços de CEP fora do ar.
  *
- * Frete SIMULADO (regras em src/lib/frete.ts). O CEP é validado com
- * cep-promise; o valor cobrado no pedido é recalculado no servidor.
+ * A taxa é fixa (painel) e não depende do peso; o pedido a recalcula no servidor (criarPedido).
  */
 export const POST = comTratamento("api/delivery/calculate", async (request: Request) => {
   const bloqueio = origemInvalida(request);
@@ -26,6 +28,10 @@ export const POST = comTratamento("api/delivery/calculate", async (request: Requ
   if (!corpo.ok) return corpo.resposta;
   const { cep, pesoTotalGramas } = corpo.dados;
 
+  // Fora de Teresina responde sem gastar consulta de CEP.
+  const frete = calcularFrete({ modo: "ENTREGA", cep, taxaCentavos: await taxaDeEntregaAtualCentavos() });
+  if (!frete.ok) return erro(422, frete.mensagem, frete.motivo === "FORA_DA_AREA" ? { foraDaArea: true } : undefined);
+
   const consulta = await consultarCep(cep);
   if (!consulta.ok) {
     return consulta.motivo === "invalido"
@@ -33,5 +39,13 @@ export const POST = comTratamento("api/delivery/calculate", async (request: Requ
       : erro(503, "Não foi possível consultar o CEP agora. Tente novamente em instantes.");
   }
 
-  return Response.json({ ...calcularFrete(cep, pesoTotalGramas), endereco: consulta.endereco });
+  const valor = frete.freteCentavos / 100;
+  return Response.json({
+    valor,
+    taxaBase: valor,
+    adicionalPeso: 0,
+    regiao: `${CIDADE_ATENDIDA}/${UF_ATENDIDA}`,
+    pesoTotalGramas,
+    endereco: consulta.endereco,
+  });
 });

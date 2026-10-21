@@ -25,6 +25,13 @@ enum OrderChannel {
   PRESENCIAL
 }
 
+/// Pedido online: entrega em Teresina (com taxa) ou retirada na loja (sem endereço e sem frete).
+/// A venda presencial não tem (NULL). Mesma ordem do ramo das lembrancinhas, que usa o mesmo tipo.
+enum ModoEntrega {
+  RETIRADA
+  ENTREGA
+}
+
 /// Forma de pagamento informada na venda presencial (rótulos em src/lib/vendas.ts).
 enum PaymentMethod {
   PIX
@@ -36,52 +43,56 @@ enum PaymentMethod {
 
 /// Clientes e administradores. `isAdmin` nunca deve ser definido a partir de entrada do usuário.
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  passwordHash String    @map("password_hash")
-  nome         String
-  isAdmin      Boolean   @default(false) @map("is_admin")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  addresses    Address[]
-  orders       Order[]   @relation("PedidosDoCliente")
+  id                   String          @id @default(cuid())
+  email                String          @unique
+  passwordHash         String          @map("password_hash")
+  nome                 String
+  isAdmin              Boolean         @default(false) @map("is_admin")
+  createdAt            DateTime        @default(now()) @map("created_at")
+  addresses            Address[]
+  orders               Order[]         @relation("PedidosDoCliente")
   /// Vendas presenciais que este admin lançou (auditoria).
-  vendasRegistradas Order[] @relation("VendasRegistradas")
+  vendasRegistradas    Order[]         @relation("VendasRegistradas")
   /// Pedidos/vendas que este admin cancelou ou estornou (auditoria).
-  pedidosCancelados Order[] @relation("PedidosCancelados")
-  expenses     Expense[]
+  pedidosCancelados    Order[]         @relation("PedidosCancelados")
+  expenses             Expense[]
   /// Produções e ajustes de estoque que este admin lançou (auditoria).
   producoesRegistradas Producao[]      @relation("ProducoesRegistradas")
   ajustesRegistrados   AjusteEstoque[] @relation("AjustesRegistrados")
+  /// Último WhatsApp informado num pedido (só dígitos, com DDD): pré-preenche a próxima compra.
+  telefone             String?         @db.VarChar(11)
+  /// Admin que mudou a configuração da loja por último (auditoria).
+  configLojaAtualizada ConfigLoja[]    @relation("ConfigLojaAtualizadaPor")
 
   @@map("users")
 }
 
 model Product {
-  id         String      @id @default(cuid())
-  nome       String
-  descricao  String
+  id             String          @id @default(cuid())
+  nome           String
+  descricao      String
   /// Preço em reais (ex.: 24.90).
-  preco      Decimal     @db.Decimal(10, 2)
-  imagemUrl  String      @map("imagem_url")
+  preco          Decimal         @db.Decimal(10, 2)
+  imagemUrl      String          @map("imagem_url")
   /// Peso de cada unidade, em gramas (ex.: 250). Usado no cálculo de frete.
-  pesoGramas Int         @map("peso_gramas")
+  pesoGramas     Int             @map("peso_gramas")
   /// Aparece na loja? Produto com vendas ou produções não pode ser excluído (o histórico aponta
   /// para ele): o admin o oculta da loja.
-  ativo      Boolean     @default(true)
+  ativo          Boolean         @default(true)
   /// Pode entrar no Kit Presente? Só os potes do tamanho padrão: um pote maior ou mais caro dentro
   /// da caixa sairia com desconto grande demais. Produto novo nasce FORA do kit (a dona marca no
   /// painel); o servidor recusa (400) caixa com sabor desmarcado.
-  permitidoEmKit Boolean @default(false) @map("permitido_em_kit")
+  permitidoEmKit Boolean         @default(false) @map("permitido_em_kit")
   /// Verso da foto: "Harmoniza com" (até 4 itens de 40 caracteres; CHECK no banco). Editável no painel.
-  harmonizacoes String[] @default([])
+  harmonizacoes  String[]        @default([])
   /// Verso da foto: "Por que você vai gostar" (até 3 itens de 70). Só sabor, textura, cor e uso:
   /// nada de alegação de saúde (o painel avisa).
-  destaques     String[] @default([])
-  orderItems OrderItem[]
-  producoes  Producao[]
-  fotos      ProdutoFoto[]
+  destaques      String[]        @default([])
+  orderItems     OrderItem[]
+  producoes      Producao[]
+  fotos          ProdutoFoto[]
   /// Potes deste sabor vendidos dentro de kits (a venda avulsa fica em orderItems).
-  kitSabores OrderKitSabor[]
+  kitSabores     OrderKitSabor[]
 
   @@map("products")
 }
@@ -119,41 +130,47 @@ model Address {
 }
 
 model Order {
-  id          String      @id @default(cuid())
+  id              String         @id @default(cuid())
   /// Cliente. Obrigatório no pedido ONLINE (CHECK no banco); na venda PRESENCIAL pode faltar.
-  userId      String?     @map("user_id")
+  userId          String?        @map("user_id")
   /// Endereço de entrega. Obrigatório no ONLINE (CHECK no banco); a venda presencial não tem entrega.
   /// `Restrict` impede apagar um endereço que já tem pedidos.
-  addressId   String?     @map("address_id")
-  status      OrderStatus @default(PENDENTE)
-  canal       OrderChannel @default(ONLINE)
+  addressId       String?        @map("address_id")
+  status          OrderStatus    @default(PENDENTE)
+  canal           OrderChannel   @default(ONLINE)
   /// Total cobrado = soma dos itens + deliveryFee (0 na venda presencial).
-  total       Decimal     @db.Decimal(10, 2)
-  deliveryFee Decimal     @db.Decimal(10, 2) @map("delivery_fee")
+  total           Decimal        @db.Decimal(10, 2)
+  deliveryFee     Decimal        @map("delivery_fee") @db.Decimal(10, 2)
   /// Data da venda. Na presencial lançada depois, é o dia informado (meio-dia de Brasília).
-  createdAt   DateTime    @default(now()) @map("created_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
   /// Chave enviada pelo cliente (cabeçalho Idempotency-Key): reenviar a mesma chave devolve este pedido
   /// em vez de criar outro (duplo clique, retry de rede). NULL é permitido várias vezes.
-  idempotencyKey String?  @map("idempotency_key")
+  idempotencyKey  String?        @map("idempotency_key")
   /// Venda presencial: forma de pagamento, nome digitado pelo admin e observação (ex.: "Feira do bairro").
-  formaPagamento PaymentMethod? @map("forma_pagamento")
-  clienteNome    String?        @map("cliente_nome") @db.VarChar(100)
-  observacao     String?        @db.VarChar(300)
+  formaPagamento  PaymentMethod? @map("forma_pagamento")
+  clienteNome     String?        @map("cliente_nome") @db.VarChar(100)
+  observacao      String?        @db.VarChar(300)
   /// Admin que lançou a venda presencial. SetNull: a venda continua no histórico se a conta sair.
-  registradoPorId String?       @map("registrado_por_id")
+  registradoPorId String?        @map("registrado_por_id")
   /// Quando a venda presencial foi lançada no painel (o createdAt pode ser de outro dia: venda retroativa).
-  lancadoEm      DateTime?      @map("lancado_em")
+  lancadoEm       DateTime?      @map("lancado_em")
   /// Quem cancelou/estornou e quando (qualquer canal). SetNull: o registro fica se a conta sair.
-  canceladoEm    DateTime?      @map("cancelado_em")
-  canceladoPorId String?        @map("cancelado_por_id")
-  user        User?       @relation("PedidosDoCliente", fields: [userId], references: [id], onDelete: Restrict)
-  address     Address?    @relation(fields: [addressId], references: [id], onDelete: Restrict)
-  registradoPor User?     @relation("VendasRegistradas", fields: [registradoPorId], references: [id], onDelete: SetNull)
-  canceladoPor  User?     @relation("PedidosCancelados", fields: [canceladoPorId], references: [id], onDelete: SetNull)
-  items       OrderItem[]
+  canceladoEm     DateTime?      @map("cancelado_em")
+  canceladoPorId  String?        @map("cancelado_por_id")
+  /// Pedido online: ENTREGA (endereço obrigatório) ou RETIRADA (sem endereço, frete 0). NULL só na
+  /// venda presencial (CHECK orders_canal_coerente).
+  modoEntrega     ModoEntrega?   @map("modo_entrega")
+  /// WhatsApp da cliente (só dígitos, com DDD; obrigatório nos pedidos online novos). NULL nos
+  /// pedidos de antes desta versão e na venda presencial.
+  telefone        String?        @db.VarChar(11)
+  user            User?          @relation("PedidosDoCliente", fields: [userId], references: [id], onDelete: Restrict)
+  address         Address?       @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  registradoPor   User?          @relation("VendasRegistradas", fields: [registradoPorId], references: [id], onDelete: SetNull)
+  canceladoPor    User?          @relation("PedidosCancelados", fields: [canceladoPorId], references: [id], onDelete: SetNull)
+  items           OrderItem[]
   /// Caixas de kit do pedido (os potes avulsos continuam em `items`).
-  kits        OrderKit[]
-  pagamentos  Pagamento[]
+  kits            OrderKit[]
+  pagamentos      Pagamento[]
 
   @@unique([userId, idempotencyKey])
   // Idempotência da venda presencial (por admin). Pedidos online têm registradoPorId nulo e não colidem.
@@ -235,28 +252,28 @@ enum ExpenseUnit {
 
 /// Tudo o que a loja gasta (frutas, potes, adesivos, frete…), lançado pelo admin em /admin/expenses.
 model Expense {
-  id          String          @id @default(cuid())
-  descricao   String          @db.VarChar(120)
-  categoria   ExpenseCategory
+  id             String          @id @default(cuid())
+  descricao      String          @db.VarChar(120)
+  categoria      ExpenseCategory
   /// Quantidade comprada (ex.: 50 adesivos, 2,5 kg de açúcar). Até 3 casas decimais.
-  quantidade  Decimal         @db.Decimal(12, 3)
-  unidade     ExpenseUnit
+  quantidade     Decimal         @db.Decimal(12, 3)
+  unidade        ExpenseUnit
   /// Quanto foi pago no total, em reais (ex.: 20.00). Custo unitário = valorTotal / quantidade.
-  valorTotal  Decimal         @db.Decimal(10, 2) @map("valor_total")
+  valorTotal     Decimal         @map("valor_total") @db.Decimal(10, 2)
   /// Dia da compra (sem hora).
-  data        DateTime        @db.Date
-  fornecedor  String?         @db.VarChar(80)
-  observacao  String?         @db.VarChar(300)
-  createdAt   DateTime        @default(now()) @map("created_at")
+  data           DateTime        @db.Date
+  fornecedor     String?         @db.VarChar(80)
+  observacao     String?         @db.VarChar(300)
+  createdAt      DateTime        @default(now()) @map("created_at")
   /// Admin que lançou. SetNull: a despesa continua no histórico se a conta for removida.
-  criadoPorId String?         @map("criado_por_id")
-  criadoPor   User?           @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+  criadoPorId    String?         @map("criado_por_id")
+  criadoPor      User?           @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
   /// Compra de insumo: liga a despesa ao estoque da produção (opcional).
-  insumoId       String?  @map("insumo_id")
+  insumoId       String?         @map("insumo_id")
   /// Quanto entrou no estoque, na unidade do insumo (2,155 kg de maçã → 2155 g).
-  quantidadeBase Decimal? @db.Decimal(14, 3) @map("quantidade_base")
+  quantidadeBase Decimal?        @map("quantidade_base") @db.Decimal(14, 3)
   /// Restrict: insumo com compra não se apaga (desativa).
-  insumo         Insumo?  @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+  insumo         Insumo?         @relation(fields: [insumoId], references: [id], onDelete: Restrict)
 
   @@index([data])
   @@index([criadoPorId])
@@ -284,7 +301,7 @@ model Insumo {
   tipo            InsumoTipo
   unidade         InsumoUnit
   /// Avisar quando a sobra ficar abaixo disto (na unidade do insumo).
-  estoqueMinimo   Decimal?        @db.Decimal(14, 3) @map("estoque_minimo")
+  estoqueMinimo   Decimal?        @map("estoque_minimo") @db.Decimal(14, 3)
   /// false: não controla estoque (limão do quintal, água): entra na produção com custo informado.
   controlaEstoque Boolean         @default(true) @map("controla_estoque")
   ativo           Boolean         @default(true)
@@ -329,7 +346,7 @@ model ProducaoItem {
   /// Quantidade usada, na unidade do insumo.
   quantidade    Decimal  @db.Decimal(14, 3)
   /// R$ por unidade do insumo no dia da produção (custo médio ou o informado): compras depois não mudam o lote.
-  custoUnitario Decimal  @db.Decimal(16, 6) @map("custo_unitario")
+  custoUnitario Decimal  @map("custo_unitario") @db.Decimal(16, 6)
   producao      Producao @relation(fields: [producaoId], references: [id], onDelete: Cascade)
   insumo        Insumo   @relation(fields: [insumoId], references: [id], onDelete: Restrict)
 
@@ -372,7 +389,7 @@ model OrderItem {
   productId     String  @map("product_id")
   quantidade    Int
   /// Preço do produto no momento da compra (não muda se o preço do produto mudar depois).
-  precoUnitario Decimal @db.Decimal(10, 2) @map("preco_unitario")
+  precoUnitario Decimal @map("preco_unitario") @db.Decimal(10, 2)
   order         Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product       Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
@@ -408,7 +425,7 @@ model OrderKit {
   /// Quantas caixas com esta composição.
   quantidade    Int
   /// Preço de UMA caixa no momento da compra (congelado: mudar o preço do kit não muda pedidos antigos).
-  precoUnitario Decimal         @db.Decimal(10, 2) @map("preco_unitario")
+  precoUnitario Decimal         @map("preco_unitario") @db.Decimal(10, 2)
   order         Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   /// Restrict: kit com vendas não se apaga (oculta-se).
   kit           Kit             @relation(fields: [kitId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -427,9 +444,9 @@ model OrderKitSabor {
   /// Potes deste sabor em UMA caixa.
   quantidade   Int
   /// Preço avulso do sabor no dia (congelado): base do rateio e do "desconto dado".
-  precoAvulso  Decimal  @db.Decimal(10, 2) @map("preco_avulso")
+  precoAvulso  Decimal  @map("preco_avulso") @db.Decimal(10, 2)
   /// Parte do preço de UMA caixa atribuída a este sabor (todos os potes dele). Soma = precoUnitario.
-  valorRateado Decimal  @db.Decimal(10, 2) @map("valor_rateado")
+  valorRateado Decimal  @map("valor_rateado") @db.Decimal(10, 2)
   orderKit     OrderKit @relation(fields: [orderKitId], references: [id], onDelete: Cascade)
   /// Restrict: sabor vendido em kit não se apaga (oculta-se), como na venda avulsa.
   product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -437,4 +454,19 @@ model OrderKitSabor {
   @@unique([orderKitId, productId])
   @@index([productId])
   @@map("order_kit_sabores")
+}
+
+/// Configuração da loja editável no painel. Uma linha só (id = 1, CHECK no banco); sem a linha, vale
+/// o padrão do código (src/lib/entrega-regras.ts).
+model ConfigLoja {
+  id                  Int      @id @default(1)
+  /// Taxa fixa de entrega em Teresina, em centavos (0 a 10000; CHECK no banco).
+  taxaEntregaCentavos Int      @default(1500) @map("taxa_entrega_centavos")
+  atualizadoEm        DateTime @default(now()) @updatedAt @map("atualizado_em")
+  /// SetNull: a configuração fica se a conta do admin sair.
+  atualizadoPorId     String?  @map("atualizado_por_id")
+  atualizadoPor       User?    @relation("ConfigLojaAtualizadaPor", fields: [atualizadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([atualizadoPorId])
+  @@map("config_loja")
 }

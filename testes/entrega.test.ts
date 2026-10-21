@@ -100,3 +100,48 @@ describe("telefone", () => {
     assert.equal(finalDoTelefone(null), null);
   });
 });
+
+describe("corpo do pedido: modo de entrega e telefone", () => {
+  // Import tardio: o schema puxa outros módulos puros (despesas, vendas, status).
+  const carregar = () => import("../src/lib/validacao");
+  const endereco = { cep: "64035-420", rua: "Rua A", numero: "10", bairro: "Brasilar", cidade: "Teresina", estado: "PI" };
+  const base = { itens: [{ productId: "pimenta-112g", quantidade: 1 }], telefone: "(86) 99999-1234" };
+  const campos = (r: { success: boolean; error?: { issues: { path: PropertyKey[] }[] } }) =>
+    r.success ? [] : r.error!.issues.map((i) => i.path.map(String).join("."));
+
+  it("entrega com endereço novo ou salvo; telefone sai só com dígitos", async () => {
+    const { pedidoSchema } = await carregar();
+    const r = pedidoSchema.parse({ ...base, modoEntrega: "ENTREGA", endereco });
+    assert.equal(r.telefone, "86999991234");
+    assert.equal(r.modoEntrega, "ENTREGA");
+    assert.equal(pedidoSchema.safeParse({ ...base, modoEntrega: "ENTREGA", addressId: "ck123" }).success, true);
+  });
+
+  it("retirada sem endereço; com endereço, 400 em endereco", async () => {
+    const { pedidoSchema } = await carregar();
+    assert.equal(pedidoSchema.safeParse({ ...base, modoEntrega: "RETIRADA" }).success, true);
+    assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, modoEntrega: "RETIRADA", endereco })), ["endereco"]);
+    assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, modoEntrega: "RETIRADA", addressId: "ck123" })), ["endereco"]);
+  });
+
+  it("entrega sem endereço (ou com os dois), modo ausente e telefone inválido", async () => {
+    const { pedidoSchema } = await carregar();
+    assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, modoEntrega: "ENTREGA" })), ["endereco"]);
+    assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, modoEntrega: "ENTREGA", endereco, addressId: "ck1" })), ["endereco"]);
+    assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, endereco })), ["modoEntrega"]);
+    assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, modoEntrega: "CORREIOS", endereco })), ["modoEntrega"]);
+    for (const telefone of ["12345", "(86) 8999-12345", "", "x".repeat(40), 86999991234]) {
+      assert.deepEqual(campos(pedidoSchema.safeParse({ ...base, telefone, modoEntrega: "RETIRADA" })), ["telefone"], String(telefone));
+    }
+    assert.deepEqual(campos(pedidoSchema.safeParse({ itens: base.itens, modoEntrega: "RETIRADA" })), ["telefone"]);
+  });
+
+  it("taxa do painel: inteiro de 0 a 10000", async () => {
+    const { taxaEntregaSchema } = await carregar();
+    assert.equal(taxaEntregaSchema.safeParse({ taxaEntregaCentavos: 1500 }).success, true);
+    assert.equal(taxaEntregaSchema.safeParse({ taxaEntregaCentavos: 0 }).success, true);
+    assert.equal(taxaEntregaSchema.safeParse({ taxaEntregaCentavos: 10001 }).success, false);
+    assert.equal(taxaEntregaSchema.safeParse({ taxaEntregaCentavos: 15.5 }).success, false);
+    assert.equal(taxaEntregaSchema.safeParse({ taxaEntregaCentavos: "1500" }).success, false);
+  });
+});

@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import type { ModoEntrega } from "@/lib/entrega-regras";
 import { potesParaSeparar, type PoteParaSeparar } from "@/lib/kits-regras";
 import type { StatusPedido } from "@/lib/status";
 import { nomeDoCliente, type CanalPedido, type FormaPagamento } from "@/lib/vendas";
@@ -14,7 +15,11 @@ export type PedidoAdminDetalheDTO = {
   createdAt: string;
   /** Online: nome e e-mail do cadastro. Presencial: "Venda presencial · nome digitado" e e-mail nulo. */
   cliente: { nome: string; email: string | null };
-  /** Entrega (pedido online). A venda presencial não tem: `null`. */
+  /** Pedido online: entrega ou retirada na loja. Venda presencial: null. */
+  modoEntrega: ModoEntrega | null;
+  /** WhatsApp da cliente (só dígitos; linkWhatsApp e formatarTelefone). Null na presencial e nos antigos. */
+  telefone: string | null;
+  /** Endereço de entrega. A retirada e a venda presencial não têm: `null`. */
   endereco: {
     cep: string;
     rua: string;
@@ -95,6 +100,8 @@ export async function detalhePedidoAdmin(id: string): Promise<PedidoAdminDetalhe
     status: p.status,
     createdAt: p.createdAt.toISOString(),
     cliente: { nome: nomeDoCliente(p), email: p.user?.email ?? null },
+    modoEntrega: p.modoEntrega,
+    telefone: p.telefone,
     endereco: p.address
       ? {
           cep: p.address.cep,

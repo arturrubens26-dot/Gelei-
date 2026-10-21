@@ -5,12 +5,12 @@ import { validarEnderecoComCep } from "@/lib/cep";
 import { db } from "@/lib/db";
 import { obterOuCriarEndereco } from "@/lib/enderecos";
 import { ErroNegocio } from "@/lib/erros";
-import { calcularFrete } from "@/lib/frete";
+import { taxaDeEntregaAtualCentavos } from "@/lib/entrega";
+import { calcularFrete, type ModoEntrega } from "@/lib/entrega-regras";
 import {
   agruparKits,
   conferirComposicao,
   conferirSaboresPermitidos,
-  emCentavos,
   mesmoConteudo,
   normalizarComposicao,
   ratearPrecoDoKit,
@@ -29,6 +29,11 @@ export type PedidoDTO = {
   deliveryFee: number;
   total: number;
   createdAt: string;
+  /** Entrega em Teresina ou retirada na loja (pedidos de antes desta versão: ENTREGA). */
+  modoEntrega: ModoEntrega;
+  /** WhatsApp informado no pedido, só dígitos (formatarTelefone); null nos pedidos de antes desta versão. */
+  telefone: string | null;
+  /** Endereço de entrega; null na retirada. */
   endereco: {
     cep: string;
     rua: string;
@@ -37,7 +42,7 @@ export type PedidoDTO = {
     bairro: string;
     cidade: string;
     estado: string;
-  };
+  } | null;
   /** Potes avulsos. */
   itens: {
     productId: string;
@@ -78,8 +83,9 @@ export const incluirPedido = {
 type PedidoComRelacoes = Prisma.OrderGetPayload<{ include: typeof incluirPedido }>;
 
 export function paraPedidoDTO(p: PedidoComRelacoes): PedidoDTO {
-  // Pedido online sempre tem endereço (CHECK orders_canal_coerente); a venda presencial não passa por aqui.
-  if (!p.address) throw new Error(`Pedido ${p.id} sem endereço: só pedidos online viram PedidoDTO.`);
+  // Pedido online de ENTREGA sempre tem endereço e o de RETIRADA nunca tem (CHECK orders_canal_coerente);
+  // a venda presencial (sem modo de entrega) não passa por aqui.
+  if (!p.modoEntrega) throw new Error(`Pedido ${p.id} sem modo de entrega: só pedidos online viram PedidoDTO.`);
   const itens = p.items.map((i) => ({
     productId: i.productId,
     nome: i.product.nome,
@@ -108,15 +114,19 @@ export function paraPedidoDTO(p: PedidoComRelacoes): PedidoDTO {
     deliveryFee: p.deliveryFee.toNumber(),
     total: p.total.toNumber(),
     createdAt: p.createdAt.toISOString(),
-    endereco: {
-      cep: p.address.cep,
-      rua: p.address.rua,
-      numero: p.address.numero,
-      complemento: p.address.complemento,
-      bairro: p.address.bairro,
-      cidade: p.address.cidade,
-      estado: p.address.estado,
-    },
+    modoEntrega: p.modoEntrega,
+    telefone: p.telefone,
+    endereco: p.address
+      ? {
+          cep: p.address.cep,
+          rua: p.address.rua,
+          numero: p.address.numero,
+          complemento: p.address.complemento,
+          bairro: p.address.bairro,
+          cidade: p.address.cidade,
+          estado: p.address.estado,
+        }
+      : null,
     itens,
     kits,
   };
@@ -135,6 +145,10 @@ type EntradaPedido = {
   itens: { productId: string; quantidade: number }[];
   /** Caixas de kit; sem o campo (carrinho antigo), nenhuma. */
   kits?: LinhaDeKit[];
+  /** ENTREGA (com endereço, só em Teresina) ou RETIRADA (sem endereço, frete 0). */
+  modoEntrega: ModoEntrega;
+  /** WhatsApp já normalizado e validado (telefoneSchema): só dígitos. */
+  telefone: string;
   addressId?: string;
   endereco?: EnderecoEntrada;
   /** Total (em centavos) que o cliente viu na tela; se não bater, devolve 409. */
@@ -162,9 +176,9 @@ function conteudoDoPedido(p: PedidoComRelacoes): ConteudoComparavel {
   };
 }
 
-/** Pedido já criado para a mesma Idempotency-Key; recusa se o carrinho enviado agora for outro. */
-function repeticao(existente: PedidoComRelacoes, conteudo: ConteudoComparavel): PedidoDTO {
-  if (!mesmoConteudo(conteudoDoPedido(existente), conteudo)) {
+/** Pedido já criado para a mesma Idempotency-Key; recusa se o carrinho (ou a entrega) enviado agora for outro. */
+function repeticao(existente: PedidoComRelacoes, conteudo: ConteudoComparavel, modoEntrega: ModoEntrega): PedidoDTO {
+  if (!mesmoConteudo(conteudoDoPedido(existente), conteudo) || existente.modoEntrega !== modoEntrega) {
     throw new ErroNegocio(422, "Esta Idempotency-Key já foi usada em outro pedido, com itens diferentes.");
   }
   return paraPedidoDTO(existente);
@@ -187,8 +201,10 @@ const reaisDe = (centavos: number) => new Prisma.Decimal(centavos).div(100);
  * - Caixa com potes a mais ou a menos que o kit leva, ou com sabor fora do kit (`permitidoEmKit`
  *   desligado: "Kit Presente: Morango 250g não entra no kit."): 400 em `kits.N.sabores`
  *   (N = posição enviada). Vem depois do 422 e antes do 409.
- * - Endereço novo é conferido contra o CEP (existência, cidade e UF), senão
- *   daria para pagar o frete de uma capital entregando em outro estado.
+ * - Entrega (`modoEntrega: "ENTREGA"`): só em Teresina (CEP 640…), com a taxa do painel lida agora do
+ *   banco; fora da área, 422 com `foraDaArea`. O endereço novo é conferido contra o CEP (existência,
+ *   cidade e UF). Retirada: sem endereço e frete 0.
+ * - O telefone (já normalizado) vai para o pedido e para a conta (pré-preenche a próxima compra).
  */
 export async function criarPedido(
   userId: string,
@@ -210,7 +226,7 @@ export async function criarPedido(
   const chave = entrada.chaveIdempotencia;
   if (chave) {
     const existente = await pedidoPorChave(userId, chave);
-    if (existente) return { pedido: repeticao(existente, conteudo), repetido: true };
+    if (existente) return { pedido: repeticao(existente, conteudo, entrada.modoEntrega), repetido: true };
   }
 
   // Teto de pedidos aguardando pagamento por conta (pedidos abandonados não enchem o banco).
@@ -286,24 +302,41 @@ export async function criarPedido(
       sabores: sabores.map((s) => ({ ...s, valorRateadoCentavos: rateio.get(s.productId)! })),
     };
   });
-  const { subtotalCentavos, pesoTotalGramas } = somarConteudo({ avulsos: avulsosCalculados, kits: caixasCalculadas });
+  // O peso não muda mais o frete (taxa fixa em Teresina); a conta é a mesma do carrinho.
+  const { subtotalCentavos } = somarConteudo({ avulsos: avulsosCalculados, kits: caixasCalculadas });
 
-  // Endereço: um salvo (precisa ser do usuário) ou um novo (já validado pelo zod).
-  const salvo = entrada.addressId
+  // Endereço, só na ENTREGA: um salvo (precisa ser do usuário) ou um novo (já validado pelo zod).
+  // Na RETIRADA o zod já recusou endereço; aqui ele simplesmente não existe.
+  const entrega = entrada.modoEntrega === "ENTREGA";
+  if (!entrega && (entrada.addressId || entrada.endereco)) {
+    throw new ErroNegocio(400, "Na retirada na loja não há endereço de entrega.");
+  }
+  const salvo = entrega && entrada.addressId
     ? await db.address.findFirst({ where: { id: entrada.addressId, userId } })
     : null;
-  if (entrada.addressId && !salvo) throw new ErroNegocio(404, "Endereço não encontrado.");
-  const novo = entrada.endereco;
-  if (!salvo && !novo) throw new ErroNegocio(400, "Informe o endereço de entrega.");
+  if (entrega && entrada.addressId && !salvo) throw new ErroNegocio(404, "Endereço não encontrado.");
+  const novo = entrega ? entrada.endereco : undefined;
+  if (entrega && !salvo && !novo) throw new ErroNegocio(400, "Informe o endereço de entrega.");
 
-  // Endereço salvo já foi conferido ao ser criado. O novo é conferido agora (rede, fora da transação).
+  // Área de entrega (Teresina) e taxa em vigor, lidas agora do banco: é o que vale para o pedido.
+  // Fora da área: 422 antes de consultar o CEP (o checkout sugere a retirada).
+  const frete = calcularFrete({
+    modo: entrada.modoEntrega,
+    cep: salvo ? salvo.cep : novo?.cep,
+    taxaCentavos: entrega ? await taxaDeEntregaAtualCentavos() : 0,
+  });
+  if (!frete.ok) {
+    throw new ErroNegocio(frete.motivo === "FORA_DA_AREA" ? 422 : 400, frete.mensagem, frete.motivo === "FORA_DA_AREA" ? { foraDaArea: true } : undefined);
+  }
+
+  // Endereço salvo já foi conferido ao ser criado. O novo é conferido agora (rede, fora da transação):
+  // o CEP existe e a cidade e a UF digitadas batem com ele.
   if (novo) {
     const validacao = await validarEnderecoComCep(novo);
     if (!validacao.ok) throw new ErroNegocio(validacao.status, validacao.mensagem);
   }
 
-  const cep = salvo ? salvo.cep : novo!.cep;
-  const freteCentavos = emCentavos(calcularFrete(cep, pesoTotalGramas).valor);
+  const freteCentavos = frete.freteCentavos;
   const totalCentavos = subtotalCentavos + freteCentavos;
   const total = reaisDe(totalCentavos);
   const deliveryFee = reaisDe(freteCentavos);
@@ -313,6 +346,8 @@ export async function criarPedido(
     throw new ErroNegocio(409, "Os preços ou a entrega mudaram. Confira o novo total antes de finalizar.", {
       total: total.toNumber(),
       deliveryFee: deliveryFee.toNumber(),
+      // A taxa de entrega em Teresina agora (mesmo na retirada, para a tela mostrar a opção certa).
+      taxaEntrega: (entrega ? freteCentavos : await taxaDeEntregaAtualCentavos()) / 100,
       // Preço e peso atuais de todo produto citado (avulso ou dentro de caixa): o peso também muda
       // o frete (limite de 2 kg), e o preço avulso muda a economia mostrada no kit.
       itens: produtos.map((p) => ({
@@ -333,11 +368,15 @@ export async function criarPedido(
 
   try {
     const pedido = await db.$transaction(async (tx) => {
-      const endereco = salvo ?? (await obterOuCriarEndereco(tx, userId, novo!, { limitar: false }));
+      const endereco = entrega ? (salvo ?? (await obterOuCriarEndereco(tx, userId, novo!, { limitar: false }))) : null;
+      // O WhatsApp informado vira o da conta: pré-preenche a próxima compra.
+      await tx.user.update({ where: { id: userId }, data: { telefone: entrada.telefone } });
       return tx.order.create({
         data: {
           userId,
-          addressId: endereco.id,
+          addressId: endereco?.id ?? null,
+          modoEntrega: entrada.modoEntrega,
+          telefone: entrada.telefone,
           status: "PENDENTE",
           total,
           deliveryFee,
@@ -371,7 +410,8 @@ export async function criarPedido(
 
     const totalDeCaixas = caixasCalculadas.reduce((soma, c) => soma + c.quantidade, 0);
     console.info(
-      `[pedidos] pedido ${pedido.id} criado (itens=${avulsosCalculados.length}, caixas=${totalDeCaixas}, total=${total.toFixed(2)})`,
+      `[pedidos] pedido ${pedido.id} criado (itens=${avulsosCalculados.length}, caixas=${totalDeCaixas}, ` +
+        `entrega=${entrada.modoEntrega}, total=${total.toFixed(2)})`,
     );
     return { pedido: paraPedidoDTO(pedido), repetido: false };
   } catch (e) {
@@ -379,8 +419,14 @@ export async function criarPedido(
     // Dois envios simultâneos com a mesma chave: o segundo cai aqui e recebe o pedido do primeiro.
     if (chave && e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       const existente = await pedidoPorChave(userId, chave);
-      if (existente) return { pedido: repeticao(existente, conteudo), repetido: true };
+      if (existente) return { pedido: repeticao(existente, conteudo, entrada.modoEntrega), repetido: true };
     }
     throw e;
   }
+}
+
+/** Último WhatsApp que a cliente informou (só dígitos), para pré-preencher o checkout; null se nunca informou. */
+export async function telefoneDoCliente(userId: string): Promise<string | null> {
+  const usuario = await db.user.findUnique({ where: { id: userId }, select: { telefone: true } });
+  return usuario?.telefone ?? null;
 }
