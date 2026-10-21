@@ -1,4 +1,5 @@
 import { BotaoAdicionar } from "@/components/carrinho/BotaoAdicionar";
+import { FotoComVerso } from "@/components/FotoComVerso";
 import { FotoDoPote } from "@/components/FotoDoPote";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ProdutoDTO } from "@/lib/produtos";
@@ -11,20 +12,29 @@ import { separarNome } from "@/lib/produtos-regras";
  */
 export function ProdutoCard({ produto, prioritario = false }: { produto: ProdutoDTO; prioritario?: boolean }) {
   const { sabor, peso } = separarNome(produto.nome);
+  const foto = (
+    <FotoDoPote
+      src={produto.imagemUrl}
+      alt={`Pote de geleia ${produto.nome}`}
+      lado={480}
+      // Grade de 1, 2 e 3 colunas (até 1152px de largura): o navegador baixa só o tamanho necessário.
+      sizes="(min-width: 1024px) 368px, (min-width: 640px) 50vw, 100vw"
+      prioritario={prioritario}
+      className="aspect-square w-full object-cover"
+    />
+  );
+  const temVerso = produto.harmonizacoes.length > 0 || produto.destaques.length > 0;
 
   return (
     <article className="cartao flex flex-col p-2.5">
-      <div className="overflow-hidden rounded-sm bg-[#f3ece3]">
-        <FotoDoPote
-          src={produto.imagemUrl}
-          alt={`Pote de geleia ${produto.nome}`}
-          lado={480}
-          // Grade de 1, 2 e 3 colunas (até 1152px de largura): o navegador baixa só o tamanho necessário.
-          sizes="(min-width: 1024px) 368px, (min-width: 640px) 50vw, 100vw"
-          prioritario={prioritario}
-          className="aspect-square w-full object-cover"
-        />
-      </div>
+      {/* Com harmonizações ou destaques, a foto vira (só ela: o preço e o botão ficam no lugar). */}
+      {temVerso ? (
+        <FotoComVerso sabor={sabor} harmonizacoes={produto.harmonizacoes} destaques={produto.destaques}>
+          {foto}
+        </FotoComVerso>
+      ) : (
+        <div className="overflow-hidden rounded-sm bg-[#f3ece3]">{foto}</div>
+      )}
       <div className="flex flex-1 flex-col items-center px-4 pb-4 pt-5 text-center">
         <h3 className="font-titulos text-xl font-semibold leading-snug text-primaria">{sabor}</h3>
         {peso && <p className="mt-1 text-sm text-primaria/80">{peso}</p>}

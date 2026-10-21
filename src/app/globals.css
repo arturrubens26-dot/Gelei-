@@ -100,6 +100,46 @@
     @apply font-semibold;
   }
 
+  /* ---- Verso da foto do produto (FotoComVerso) ----
+     Só o quadrado da foto vira. Gira 180° em 450 ms; a visibilidade de cada face troca na metade do
+     giro, como reforço do backface-visibility (que o Safari às vezes ignora) e para a face escondida
+     não receber clique nem aparecer no Alto Contraste. Com "reduzir movimento", ver o @media no fim. */
+  .verso-da-foto {
+    perspective: 1200px;
+  }
+  .verso-da-foto .virador {
+    position: relative;
+    height: 100%;
+    transform-style: preserve-3d;
+    transition: transform 450ms cubic-bezier(0.45, 0.05, 0.25, 1);
+  }
+  .verso-da-foto[data-virado] .virador {
+    transform: rotateY(180deg);
+  }
+  .verso-da-foto .face {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transition: visibility 0s linear 225ms;
+  }
+  .verso-da-foto .frente {
+    transform: rotateY(0deg);
+  }
+  .verso-da-foto .verso {
+    transform: rotateY(180deg);
+  }
+  .verso-da-foto:not([data-virado]) .verso,
+  .verso-da-foto[data-virado] .frente {
+    visibility: hidden;
+  }
+  @media (forced-colors: active) {
+    .verso-da-foto .verso {
+      border: 1px solid CanvasText;
+    }
+  }
+
   /* ---- Tela /login: interações de geleia ---- */
 
   /* Cursor de colher de pau sobre o pote (ponta da concha = ponto do clique). Sem efeito quando
@@ -309,5 +349,13 @@
   /* O pote fica parado e não reage ao clique: sem o cursor de colher. */
   .cursor-colher {
     cursor: auto;
+  }
+
+  /* Verso da foto: a troca é na hora, sem girar (só a visibilidade das faces muda). */
+  .verso-da-foto .virador,
+  .verso-da-foto[data-virado] .virador,
+  .verso-da-foto .face {
+    transform: none;
+    transition: none;
   }
 }
