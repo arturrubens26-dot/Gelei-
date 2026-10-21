@@ -1,14 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { avisarResultadoLogin, movimentoReduzido } from "@/components/login/eventos";
-import { MAX_BYTES_SENHA } from "@/lib/limites";
+import { MAX_BYTES_SENHA, MIN_CARACTERES_SENHA } from "@/lib/limites";
 
 type Modo = "entrar" | "criar";
 
-const SENHA_MINIMA = 8;
 /** Parecido com o z.email() do servidor: precisa de domínio com ponto e final de 2+ letras. */
 const EMAIL_PROVAVEL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
 
@@ -31,7 +31,7 @@ function medirPreenchimento(formulario: HTMLFormElement, criando: boolean) {
   };
   const passos = [
     EMAIL_PROVAVEL.test(email) && email.length <= 160,
-    criando ? senha.tamanho >= SENHA_MINIMA && !senha.longa : senha.tamanho > 0,
+    criando ? senha.tamanho >= MIN_CARACTERES_SENHA && !senha.longa : senha.tamanho > 0,
   ];
   if (criando) passos.push(texto("nome").trim().length >= 2);
   return { nivel: passos.filter(Boolean).length / passos.length, senha };
@@ -98,10 +98,13 @@ export function AuthForm({
   destino,
   modoInicial = "entrar",
   variante = "cartao",
+  aviso,
 }: {
   destino: string;
   modoInicial?: Modo;
   variante?: "cartao" | "vidro";
+  /** Recado no topo do cartão (ex.: "Senha alterada. Entre com a nova senha."). */
+  aviso?: string;
 }) {
   const router = useRouter();
   // IDs únicos: com Cache Components a página anterior fica montada (escondida) e o mesmo
@@ -258,6 +261,7 @@ export function AuthForm({
             {CABECALHO[modo].titulo}
           </h1>
           <p className="mt-2 text-sm text-primaria/80 sm:text-base">{CABECALHO[modo].subtitulo}</p>
+          {aviso && <AvisoDoTopo texto={aviso} />}
         </div>
       ) : (
         <div className="mb-6 grid grid-cols-2 gap-1 rounded-full border border-accent2 p-1" role="group" aria-label="Entrar ou criar conta">
@@ -278,6 +282,7 @@ export function AuthForm({
           ))}
         </div>
       )}
+      {!vidro && aviso && <AvisoDoTopo texto={aviso} />}
 
       {/* onInput/onFocus medem o preenchimento (o foco pega também o que o navegador preencheu sozinho). */}
       <form ref={formularioRef} onSubmit={enviar} onInput={() => medir()} onFocus={() => medir()} className="flex flex-col gap-4" noValidate>
@@ -340,7 +345,7 @@ export function AuthForm({
               type={senhaVisivel ? "text" : "password"}
               autoComplete={criando ? "new-password" : "current-password"}
               required
-              minLength={criando ? 8 : undefined}
+              minLength={criando ? MIN_CARACTERES_SENHA : undefined}
               placeholder={criando ? "Crie uma senha" : "Sua senha"}
               className={`${classeCampo} pr-12`}
               aria-invalid={erroDe("senha") ? true : undefined}
@@ -363,20 +368,31 @@ export function AuthForm({
               // A contagem muda a cada tecla: fica só para quem vê (aria-hidden). O campo é descrito
               // por um texto fixo, para o leitor de tela não reler a dica a cada caractere.
               <p className="mt-1.5 flex items-center gap-2 text-xs text-primaria/80">
-                <PotinhoDaSenha nivel={medidaSenha.longa ? 1 : Math.min(medidaSenha.tamanho / SENHA_MINIMA, 1)} />
+                <PotinhoDaSenha nivel={medidaSenha.longa ? 1 : Math.min(medidaSenha.tamanho / MIN_CARACTERES_SENHA, 1)} />
                 <span aria-hidden="true">{dicaDaSenha(medidaSenha)}</span>
                 <span id={`${idSenha}-dica`} className="sr-only">
-                  Pelo menos {SENHA_MINIMA} caracteres.
+                  Pelo menos {MIN_CARACTERES_SENHA} caracteres.
                 </span>
               </p>
             ) : (
               <p id={`${idSenha}-dica`} className="mt-1 text-xs text-primaria/80">
-                Pelo menos {SENHA_MINIMA} caracteres.
+                Pelo menos {MIN_CARACTERES_SENHA} caracteres.
               </p>
             ))}
           {erroDe("senha") && (
             <p id={`${idSenha}-erro`} className="mt-1 text-sm font-medium text-secundaria">
               {erroDe("senha")}
+            </p>
+          )}
+          {/* Sempre que é para entrar: sem e-mail configurado, a página leva à orientação do Instagram. */}
+          {!criando && (
+            <p className="-mb-2 flex justify-end">
+              <Link
+                href={destino === "/" ? "/esqueci-senha" : `/esqueci-senha?next=${encodeURIComponent(destino)}`}
+                className="inline-flex min-h-11 items-center text-sm font-semibold text-secundaria underline-offset-4 hover:text-primaria hover:underline"
+              >
+                Esqueci minha senha
+              </Link>
             </p>
           )}
         </div>
@@ -429,11 +445,20 @@ export function AuthForm({
   );
 }
 
+/** Recado vindo de outra tela (ex.: senha alterada), com a borda verde de "deu certo". */
+function AvisoDoTopo({ texto }: { texto: string }) {
+  return (
+    <p role="status" className="mt-4 mb-2 rounded-xl border border-accent3 bg-accent3/15 px-4 py-3 text-sm font-semibold text-primaria">
+      {texto}
+    </p>
+  );
+}
+
 /** Dica da senha nova: quantos caracteres faltam até "dar o ponto", como a geleia no fogo. */
 function dicaDaSenha({ tamanho, longa }: MedidaSenha) {
   if (longa) return "Longa demais (acentos e emojis contam mais).";
-  if (tamanho === 0) return `Pelo menos ${SENHA_MINIMA} caracteres.`;
-  const faltam = SENHA_MINIMA - tamanho;
+  if (tamanho === 0) return `Pelo menos ${MIN_CARACTERES_SENHA} caracteres.`;
+  const faltam = MIN_CARACTERES_SENHA - tamanho;
   if (faltam <= 0) return "Senha no ponto.";
   return faltam === 1 ? "Falta 1 caractere." : `Faltam ${faltam} caracteres.`;
 }
