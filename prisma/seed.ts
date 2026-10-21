@@ -95,6 +95,50 @@ const produtos = [
   },
 ] as const;
 
+/**
+ * Verso da foto (rascunho aprovado pela dona em 2026-10-21; ela revisa e edita pelo painel). Só
+ * sabor, textura, cor e uso: nada de alegação de saúde nem de fato da receita que não sabemos.
+ * Limites em src/lib/produtos-regras.ts (4 × 40 e 3 × 70).
+ */
+const VERSO: Record<(typeof produtos)[number]["id"], { harmonizacoes: string[]; destaques: string[] }> = {
+  "pimenta-112g": {
+    harmonizacoes: ["Cream cheese com torradas", "Queijo coalho na chapa", "Costelinha e carnes assadas", "Tábua de frios"],
+    destaques: [
+      "Doce e picante na mesma colherada",
+      "Vermelho intenso que deixa a tábua de frios bonita",
+      "Transforma um petisco simples em entrada de festa",
+    ],
+  },
+  "abacaxi-com-pimenta-125g": {
+    harmonizacoes: ["Queijo coalho na brasa", "Lombo ou pernil assado", "Frango grelhado", "Cream cheese com biscoito salgado"],
+    destaques: [
+      "O doce do abacaxi com um toque picante",
+      "Pedacinhos de fruta e de pimenta à vista no pote",
+      "Vai do aperitivo ao prato principal",
+    ],
+  },
+  "abacaxi-125g": {
+    harmonizacoes: ["Pão quentinho com manteiga", "Bolo simples e rocambole", "Iogurte com frutas", "Queijo minas frescal"],
+    destaques: [
+      "Sabor de abacaxi, docinho com a acidez da fruta",
+      "Cor dourada que alegra o café da manhã",
+      "Combina com doces e com salgados",
+    ],
+  },
+  "maracuja-125g": {
+    harmonizacoes: ["Cheesecake e mousse", "Iogurte com granola", "Queijo brie ou camembert", "Torradas no café da manhã"],
+    destaques: ["Azedinha e perfumada, como a fruta", "Com as sementes, que dão crocância", "Cobertura pronta para sobremesas"],
+  },
+  "morango-112g": {
+    harmonizacoes: ["Torradas e pão com manteiga", "Panqueca e waffle", "Sorvete de creme", "Queijo brie ou cream cheese"],
+    destaques: [
+      "Um clássico do café da manhã e do lanche",
+      "Vermelho vivo e aroma de morango",
+      "Ótima para rechear bolos e biscoitos",
+    ],
+  },
+};
+
 /** Produtos com foto real em public/produtos/<id>.jpg. */
 const COM_FOTO = new Set(["pimenta-112g", "abacaxi-com-pimenta-125g", "abacaxi-125g", "maracuja-125g"]);
 
@@ -114,8 +158,15 @@ async function semearProdutos() {
       // ter ajustado. "Pode entrar no Kit Presente" é decisão dela no painel: o update não mexe.
       update: process.env.NODE_ENV === "production" || bancoRemoto ? {} : dados,
       // Os potes do catálogo são do tamanho padrão (112 g e 125 g): entram no kit.
-      create: { id: p.id, ...dados, permitidoEmKit: true },
+      create: { id: p.id, ...dados, permitidoEmKit: true, ...VERSO[p.id] },
     });
+    // Verso: só preenche quando as duas listas estão vazias (nunca sobrescreve o que a dona editou).
+    if (!bancoRemoto && process.env.NODE_ENV !== "production") {
+      await db.product.updateMany({
+        where: { id: p.id, harmonizacoes: { isEmpty: true }, destaques: { isEmpty: true } },
+        data: VERSO[p.id],
+      });
+    }
   }
   console.log(`✔ ${produtos.length} produtos`);
 }

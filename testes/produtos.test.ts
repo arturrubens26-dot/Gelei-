@@ -85,3 +85,51 @@ describe("avisos de alegação no verso", () => {
     for (const texto of rascunho) assert.deepEqual(avisosDeAlegacao(texto), [], texto);
   });
 });
+
+describe("listas do verso no formulário", () => {
+  const base = { sabor: "Pimenta", pesoGramas: "112", precoCentavos: "1500", descricao: "Geleia de pimenta.", ativo: "true" };
+  const erros = (campos: Record<string, unknown>) => {
+    const r = produtoSchema.safeParse({ ...base, ...campos });
+    return r.success ? {} : Object.fromEntries(r.error.issues.map((i) => [i.path.map(String).join("."), i.message]));
+  };
+
+  it("divide por linha, apara e descarta as vazias", () => {
+    const r = produtoSchema.parse({ ...base, harmonizacoes: " Queijo coalho \r\n\n Torradas \n", destaques: "Doce e picante" });
+    assert.deepEqual(r.harmonizacoes, ["Queijo coalho", "Torradas"]);
+    assert.deepEqual(r.destaques, ["Doce e picante"]);
+  });
+
+  it("ausente vira undefined (não mexe) e \"\" vira lista vazia (esvazia)", () => {
+    const semCampo = produtoSchema.parse(base);
+    assert.equal(semCampo.harmonizacoes, undefined);
+    assert.equal(semCampo.destaques, undefined);
+    const vazio = produtoSchema.parse({ ...base, harmonizacoes: "", destaques: "  \n " });
+    assert.deepEqual(vazio.harmonizacoes, []);
+    assert.deepEqual(vazio.destaques, []);
+  });
+
+  it("limites de linhas e de caracteres, com o erro na linha certa", () => {
+    assert.deepEqual(Object.keys(erros({ harmonizacoes: "a1\nb2\nc3\nd4\ne5" })), ["harmonizacoes"]);
+    assert.deepEqual(Object.keys(erros({ destaques: "um\ndois\ntrês\nquatro" })), ["destaques"]);
+    assert.deepEqual(Object.keys(erros({ harmonizacoes: `ok\n${"x".repeat(41)}` })), ["harmonizacoes.1"]);
+    assert.deepEqual(erros({ harmonizacoes: "x".repeat(40), destaques: "y".repeat(70) }), {});
+    assert.deepEqual(Object.keys(erros({ destaques: "y".repeat(71) })), ["destaques.0"]);
+    assert.deepEqual(Object.keys(erros({ harmonizacoes: "Queijo\nx" })), ["harmonizacoes.1"]);
+  });
+
+  it("recusa repetidos (sem diferenciar maiúsculas) e caracteres invisíveis ou de controle", () => {
+    assert.deepEqual(Object.keys(erros({ harmonizacoes: "Torradas\nQueijo\ntorradas" })), ["harmonizacoes.2"]);
+    assert.deepEqual(Object.keys(erros({ destaques: "Doce​picante" })), ["destaques.0"]);
+    assert.deepEqual(Object.keys(erros({ destaques: "Doce\u0007picante" })), ["destaques.0"]);
+    assert.deepEqual(Object.keys(erros({ destaques: "Doce\rpicante" })), ["destaques.0"]);
+  });
+
+  it("o rascunho aprovado cabe nos limites", () => {
+    const r = produtoSchema.safeParse({
+      ...base,
+      harmonizacoes: "Queijo coalho na brasa\nLombo ou pernil assado\nFrango grelhado\nCream cheese com biscoito salgado",
+      destaques: "O doce do abacaxi com um toque picante\nPedacinhos de fruta e de pimenta à vista no pote\nVai do aperitivo ao prato principal",
+    });
+    assert.equal(r.success, true);
+  });
+});

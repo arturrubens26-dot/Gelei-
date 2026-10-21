@@ -72,6 +72,11 @@ model Product {
   /// da caixa sairia com desconto grande demais. Produto novo nasce FORA do kit (a dona marca no
   /// painel); o servidor recusa (400) caixa com sabor desmarcado.
   permitidoEmKit Boolean @default(false) @map("permitido_em_kit")
+  /// Verso da foto: "Harmoniza com" (até 4 itens de 40 caracteres; CHECK no banco). Editável no painel.
+  harmonizacoes String[] @default([])
+  /// Verso da foto: "Por que você vai gostar" (até 3 itens de 70). Só sabor, textura, cor e uso:
+  /// nada de alegação de saúde (o painel avisa).
+  destaques     String[] @default([])
   orderItems OrderItem[]
   producoes  Producao[]
   fotos      ProdutoFoto[]

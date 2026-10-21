@@ -139,6 +139,54 @@ const textoDoProduto = (campo: string, min: number, max: number) =>
     .max(max, `Use no máximo ${max} caracteres.`)
     .refine(textoLivreValido, "Tem caracteres que não podem ser usados.");
 
+/**
+ * Lista do verso no formulário: um item por linha ("Queijo coalho\nTorradas"). Apara cada linha e
+ * descarta as vazias. Campo ausente (ou null) é `undefined`: ao editar, a lista fica como estava;
+ * `""` é a lista vazia (esvazia). Uma lista já pronta (array) passa direto para a validação.
+ */
+export function linhasDaLista(valor: unknown): unknown {
+  if (valor === undefined || valor === null) return undefined;
+  if (typeof valor !== "string") return valor;
+  return valor
+    .split(/\r?\n/)
+    .map((linha) => linha.trim())
+    .filter((linha) => linha.length > 0);
+}
+
+const chaveSemCaixa = (texto: string) => texto.toLocaleLowerCase("pt-BR");
+
+/** Índice do primeiro item repetido (sem diferenciar maiúsculas), ou -1. */
+function primeiroRepetido(itens: readonly string[]): number {
+  const vistos = new Set<string>();
+  for (const [i, item] of itens.entries()) {
+    const chave = chaveSemCaixa(item);
+    if (vistos.has(chave)) return i;
+    vistos.add(chave);
+  }
+  return -1;
+}
+
+const listaDoVerso = (o: { nome: string; maxItens: number; maxCaracteres: number }) =>
+  z.preprocess(
+    linhasDaLista,
+    z
+      .array(
+        z
+          .string()
+          .min(MIN_CARACTERES_ITEM_VERSO, `Cada linha precisa de pelo menos ${MIN_CARACTERES_ITEM_VERSO} caracteres.`)
+          .max(o.maxCaracteres, `Cada linha pode ter no máximo ${o.maxCaracteres} caracteres.`)
+          // textoLivreValido aceita tab e quebra de linha (descrição); num item de uma linha, não.
+          .refine((v) => textoLivreValido(v) && !/[\t\r\n]/.test(v), "Tem caracteres que não podem ser usados."),
+        { error: `Escreva ${o.nome} um por linha.` },
+      )
+      .max(o.maxItens, `No máximo ${o.maxItens} linhas em "${o.nome}".`)
+      .superRefine((itens, ctx) => {
+        const i = primeiroRepetido(itens);
+        if (i >= 0) ctx.addIssue({ code: "custom", message: "Esta linha está repetida.", path: [i] });
+      })
+      .optional(),
+  );
+
 /** Campos do produto. O preço vem em centavos (inteiro), como na venda presencial. */
 export const produtoSchema = z.object({
   sabor: textoDoProduto("o sabor", 2, 60).refine((v) => !v.includes(","), "Não use vírgula no sabor (ela separa o peso no rótulo)."),
@@ -162,6 +210,10 @@ export const produtoSchema = z.object({
     (v) => (v === undefined || v === null ? undefined : v === true || v === "true" || v === "on"),
     z.boolean().optional(),
   ),
+  /** Verso da foto: "Harmoniza com" (até 4 linhas de 40). Ausente: não mexe; "": esvazia. */
+  harmonizacoes: listaDoVerso({ nome: TITULO_HARMONIZACOES, maxItens: MAX_HARMONIZACOES, maxCaracteres: MAX_CARACTERES_HARMONIZACAO }),
+  /** Verso da foto: "Por que você vai gostar" (até 3 linhas de 70). Ausente: não mexe; "": esvazia. */
+  destaques: listaDoVerso({ nome: TITULO_DESTAQUES, maxItens: MAX_DESTAQUES, maxCaracteres: MAX_CARACTERES_DESTAQUE }),
 });
 
 export type ProdutoEntrada = z.output<typeof produtoSchema>;

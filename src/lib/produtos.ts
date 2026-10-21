@@ -12,6 +12,9 @@ export type ProdutoDTO = {
   pesoGramas: number;
   /** Pode entrar no Kit Presente (o montador lista só estes; o servidor recusa os outros com 400). */
   permitidoEmKit: boolean;
+  /** Verso da foto (listas vazias: a foto não vira). Títulos em TITULO_HARMONIZACOES e TITULO_DESTAQUES. */
+  harmonizacoes: string[];
+  destaques: string[];
 };
 
 /**
@@ -34,5 +37,7 @@ export async function listarProdutos(): Promise<ProdutoDTO[]> {
     imagemUrl: p.imagemUrl,
     pesoGramas: p.pesoGramas,
     permitidoEmKit: p.permitidoEmKit,
+    harmonizacoes: p.harmonizacoes ?? [],
+    destaques: p.destaques ?? [],
   }));
 }

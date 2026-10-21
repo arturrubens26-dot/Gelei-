@@ -29,6 +29,9 @@ export type ProdutoAdminDTO = {
   ativo: boolean;
   /** "Pode entrar no Kit Presente": só os potes do tamanho padrão (produto novo nasce fora). */
   permitidoEmKit: boolean;
+  /** Verso da foto: "Harmoniza com" e "Por que você vai gostar" (listas vazias: foto sem verso). */
+  harmonizacoes: string[];
+  destaques: string[];
   /**
    * Vendas (itens avulsos de pedido + caixas de kit com este sabor) e produções que apontam para o
    * produto: com alguma, ele só pode ser ocultado.
@@ -60,6 +63,8 @@ function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
     imagemUrl: p.imagemUrl,
     ativo: p.ativo,
     permitidoEmKit: p.permitidoEmKit,
+    harmonizacoes: p.harmonizacoes ?? [],
+    destaques: p.destaques ?? [],
     vendas: vendasDo(p),
     producoes: p._count.producoes,
   };
@@ -95,6 +100,9 @@ export async function lerProdutoDoFormulario(form: FormData, opcoes: { fotoObrig
     descricao: campo("descricao"),
     ativo: campo("ativo"),
     permitidoEmKit: campo("permitidoEmKit"),
+    // Um item por linha (o textarea do painel). Sem o campo: a lista fica como estava.
+    harmonizacoes: campo("harmonizacoes"),
+    destaques: campo("destaques"),
   });
   if (!lido.success) return { ok: false, resposta: erroDeValidacao(lido.error) };
 
@@ -136,6 +144,9 @@ function camposDoProduto(entrada: ProdutoEntrada) {
     ativo: entrada.ativo,
     // Sem o campo (formulário antigo): ao editar fica como estava; ao criar, o default (fora do kit).
     ...(entrada.permitidoEmKit === undefined ? {} : { permitidoEmKit: entrada.permitidoEmKit }),
+    // Verso: o mesmo padrão (campo ausente = não mexe; "" = lista vazia).
+    ...(entrada.harmonizacoes === undefined ? {} : { harmonizacoes: entrada.harmonizacoes }),
+    ...(entrada.destaques === undefined ? {} : { destaques: entrada.destaques }),
   };
 }
 
