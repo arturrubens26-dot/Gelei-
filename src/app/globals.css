@@ -74,6 +74,32 @@
     @apply font-assinatura font-normal leading-tight tracking-normal;
   }
 
+  /* Texto corrido (páginas de políticas): subtítulos em Playfair, parágrafos com respiro, listas com
+     marcador dourado (decorativo) e links carmesim sublinhados (≈ 5,9:1 sobre o branco do cartão). */
+  .texto-corrido {
+    @apply leading-relaxed text-primaria;
+  }
+  .texto-corrido h2 {
+    @apply mt-10 mb-3 text-2xl font-semibold text-balance text-primaria;
+  }
+  .texto-corrido > :first-child {
+    @apply mt-0;
+  }
+  .texto-corrido p + p,
+  .texto-corrido p + ul,
+  .texto-corrido ul + p {
+    @apply mt-3;
+  }
+  .texto-corrido ul {
+    @apply flex list-disc flex-col gap-2 pl-5 marker:text-accent2;
+  }
+  .texto-corrido a {
+    @apply font-semibold text-secundaria underline underline-offset-2 hover:text-primaria;
+  }
+  .texto-corrido strong {
+    @apply font-semibold;
+  }
+
   /* ---- Tela /login: interações de geleia ---- */
 
   /* Cursor de colher de pau sobre o pote (ponta da concha = ponto do clique). Sem efeito quando
