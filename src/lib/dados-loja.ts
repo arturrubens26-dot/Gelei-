@@ -12,7 +12,7 @@ export const dadosLoja = {
     cep: "64035-420",
   },
   instagram: {
-    usuario: "geleio0",
-    url: "https://www.instagram.com/geleio0/",
+    usuario: "ge.leio",
+    url: "https://www.instagram.com/ge.leio/",
   },
 } as const;
