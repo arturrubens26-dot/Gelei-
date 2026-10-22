@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { EtiquetaStatus } from "@/components/EtiquetaStatus";
+import { SeloDoPagamento } from "@/components/checkout/SeloDoPagamento";
 import { Ornamento } from "@/components/marca/Ornamento";
 import { exigirUsuario } from "@/lib/auth/dal";
 import { dadosLoja } from "@/lib/dados-loja";
@@ -89,7 +89,7 @@ function CartaoDoPedido({ pedido: p }: { pedido: PedidoResumoDTO }) {
           <h2 id={`pedido-${p.id}`} className="text-xl font-bold">
             Pedido {p.codigo}
           </h2>
-          <EtiquetaDoPedido pedido={p} />
+          <SeloDoPagamento status={p.status} etapa={p.etapa} />
         </div>
         <p className="mt-1 text-sm text-primaria/80">
           {formatarDataHora(p.createdAt)} · {ROTULO_MODO_ENTREGA[p.modoEntrega]}
@@ -107,24 +107,5 @@ function CartaoDoPedido({ pedido: p }: { pedido: PedidoResumoDTO }) {
         </Link>
       </div>
     </article>
-  );
-}
-
-/** Pago, enviado, entregue e cancelado: o status do pedido. Pendente: em que pé está o pagamento. */
-function EtiquetaDoPedido({ pedido: p }: { pedido: PedidoResumoDTO }) {
-  if (p.status !== "PENDENTE") return <EtiquetaStatus status={p.status} />;
-  const texto: Record<PedidoResumoDTO["etapa"], string> = {
-    PAGAR: "Falta pagar",
-    CONFIRMANDO: "Confirmando o pagamento",
-    EXPIRADO: "Prazo para pagar terminou",
-    INDISPONIVEL: "Aguardando pagamento",
-    PAGO: "Pago",
-    CANCELADO: "Cancelado",
-  };
-  const estilo = p.etapa === "EXPIRADO" ? "border-primaria/40 bg-primaria/5" : "border-accent2 bg-accent2/20";
-  return (
-    <span className={`inline-flex items-center rounded-full border px-3 py-0.5 text-xs font-bold text-primaria ${estilo}`}>
-      {texto[p.etapa]}
-    </span>
   );
 }

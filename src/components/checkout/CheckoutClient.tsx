@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
+import { siteEmLocalhost, urlDaInfinitePay } from "@/components/checkout/urlDaInfinitePay";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { calcularEntrega, mascararCep, type ResultadoEntrega } from "@/lib/carrinho/entrega";
 import { acoesCarrinho, totaisDoCarrinho, useCarrinho, useHidratado, type KitCarrinho } from "@/lib/carrinho/store";
@@ -43,22 +44,6 @@ function novaChave(): string {
     globalThis.crypto?.randomUUID?.() ??
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
   );
-}
-
-/**
- * Só seguimos para um link de pagamento em https na InfinitePay. O servidor já confere o host; aqui é
- * a segunda trava. No desenvolvimento local, aceita também o servidor falso em 127.0.0.1/localhost.
- */
-function urlDePagamentoSegura(url: unknown): url is string {
-  if (typeof url !== "string") return false;
-  try {
-    const u = new URL(url);
-    if (u.protocol === "https:" && (u.hostname === "infinitepay.io" || u.hostname.endsWith(".infinitepay.io"))) return true;
-    const local = (h: string) => h === "localhost" || h === "127.0.0.1";
-    return local(window.location.hostname) && local(u.hostname) && u.protocol === "http:";
-  } catch {
-    return false;
-  }
 }
 
 function Secao({ numero, titulo, children }: { numero: number; titulo: string; children: ReactNode }) {
@@ -380,7 +365,7 @@ export function CheckoutClient({
       // Com o link da InfinitePay: troca o checkout pela confirmação no histórico e vai pagar.
       // Sem link (pagamento simulado, ou a InfinitePay falhou): a confirmação oferece "Pagar".
       const checkoutUrl = json?.pagamento?.checkoutUrl;
-      if (urlDePagamentoSegura(checkoutUrl)) {
+      if (urlDaInfinitePay(checkoutUrl, siteEmLocalhost())) {
         setIndoPagar(true);
         acoesCarrinho.limpar();
         history.replaceState(null, "", `/order-confirmation/${pedidoId}`);

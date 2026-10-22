@@ -10,12 +10,14 @@ import { formatarBRL } from "@/lib/dinheiro";
 import { enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
 import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
 import { textoDaComposicao } from "@/lib/kits-regras";
-import { ultimaCobranca } from "@/lib/pagamentos";
+import { obterSituacaoPagamento } from "@/lib/pagamentos";
 import { buscarPedidoDoUsuario } from "@/lib/pedidos";
 
 export const metadata: Metadata = { title: "Confirmação do pedido" };
 
-export default function PaginaConfirmacao({ params }: PageProps<"/order-confirmation/[id]">) {
+type Props = PageProps<"/order-confirmation/[id]">;
+
+export default function PaginaConfirmacao({ params, searchParams }: Props) {
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10 sm:px-6">
       <Suspense
@@ -25,17 +27,19 @@ export default function PaginaConfirmacao({ params }: PageProps<"/order-confirma
           </div>
         }
       >
-        <DadosDoPedido params={params} />
+        <DadosDoPedido params={params} searchParams={searchParams} />
       </Suspense>
     </main>
   );
 }
 
-async function DadosDoPedido({ params }: { params: PageProps<"/order-confirmation/[id]">["params"] }) {
-  const { id } = await params;
-  const usuario = await exigirUsuario(`/order-confirmation/${id}`);
+async function DadosDoPedido({ params, searchParams }: Pick<Props, "params" | "searchParams">) {
+  const [{ id }, busca] = await Promise.all([params, searchParams]);
+  // `?retorno=1`: veio da InfinitePay (por /pagamento/retorno). Sem sessão, volta para cá depois do login.
+  const voltouDoPagamento = busca.retorno === "1";
+  const usuario = await exigirUsuario(`/order-confirmation/${id}${voltouDoPagamento ? "?retorno=1" : ""}`);
   // Só o dono vê o pedido: de outra pessoa (ou inexistente) é 404.
-  const pedido = await buscarPedidoDoUsuario(id, usuario.id);
+  const [pedido, situacao] = await Promise.all([buscarPedidoDoUsuario(id, usuario.id), obterSituacaoPagamento(id, usuario.id)]);
   if (!pedido) notFound();
 
   const e = pedido.endereco;
@@ -50,7 +54,7 @@ async function DadosDoPedido({ params }: { params: PageProps<"/order-confirmatio
         </p>
       </header>
 
-      <StatusPagamento pedidoId={pedido.id} statusServidor={pedido.status} cobrancaInicial={await ultimaCobranca(pedido.id)} />
+      {situacao && <StatusPagamento pedidoId={pedido.id} situacaoInicial={situacao} voltouDoPagamento={voltouDoPagamento} />}
 
       <section aria-labelledby="titulo-itens" className="cartao p-5">
         <h2 id="titulo-itens" className="mb-3 text-2xl font-bold">
