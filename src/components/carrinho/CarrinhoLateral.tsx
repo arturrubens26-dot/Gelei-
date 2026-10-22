@@ -11,6 +11,9 @@ import { emCentavos, textoDaComposicao } from "@/lib/kits-regras";
 import { MAX_KITS_POR_PEDIDO, MAX_POR_PRODUTO } from "@/lib/limites";
 import { useCarrinhoUI } from "./contexto";
 
+/** A cotação guardada já foi recalculada nesta carga de página? */
+let cotacaoConferida = false;
+
 /**
  * Carrinho lateral. Usa <dialog> nativo (showModal): o navegador cuida do foco
  * preso, da tecla Esc e do fundo escurecido.
@@ -54,6 +57,18 @@ export function CarrinhoLateral() {
       setErroCep(resultado.mensagem);
     }
   }
+
+  // A cotação guardada no navegador pode ser velha (o frete fictício de antes do deploy, ou a taxa
+  // que a dona mudou no painel): na primeira abertura desta carga de página, calcula de novo.
+  const cotacaoGuardada = totais.cotacaoValida;
+  useEffect(() => {
+    if (!aberto || !cotacaoGuardada || cotacaoConferida) return;
+    cotacaoConferida = true;
+    calcularEntrega(cotacaoGuardada.cep, cotacaoGuardada.pesoTotalGramas).then((r) =>
+      // Não deu para conferir: some a cotação (a cliente calcula de novo) em vez de ficar o valor velho.
+      acoesCarrinho.definirCotacao(r.ok ? r.cotacao : null),
+    );
+  }, [aberto, cotacaoGuardada]);
 
   function mudarQuantidade(productId: string, nome: string, quantidade: number) {
     acoesCarrinho.definirQuantidade(productId, quantidade);
@@ -221,7 +236,7 @@ export function CarrinhoLateral() {
             <p id="status-entrega" className="mt-2 min-h-5 text-sm" role="status" aria-live="polite">
               {erroCep ? (
                 <span className="font-medium text-secundaria">{erroCep}</span>
-              ) : totais.cotacaoValida ? (
+              ) : calculando ? null : totais.cotacaoValida ? (
                 <span>
                   Entrega para {totais.cotacaoValida.endereco?.cidade ?? totais.cotacaoValida.regiao}
                   {totais.cotacaoValida.endereco?.estado ? `/${totais.cotacaoValida.endereco.estado}` : ""}:{" "}
@@ -250,11 +265,11 @@ export function CarrinhoLateral() {
             </div>
             <div className="flex justify-between">
               <dt>Entrega</dt>
-              <dd>{totais.entrega === null ? "calcule pelo CEP" : formatarBRL(totais.entrega)}</dd>
+              <dd>{calculando ? "calculando…" : totais.entrega === null ? "calcule pelo CEP" : formatarBRL(totais.entrega)}</dd>
             </div>
             <div className="mt-1 flex justify-between border-t border-accent1 pt-2 text-lg font-bold">
-              <dt>{totais.total === null ? "Total (sem entrega)" : "Total"}</dt>
-              <dd>{formatarBRL(totais.total ?? totais.subtotal)}</dd>
+              <dt>{totais.total === null || calculando ? "Total (sem entrega)" : "Total"}</dt>
+              <dd>{formatarBRL(calculando ? totais.subtotal : (totais.total ?? totais.subtotal))}</dd>
             </div>
           </dl>
           <Link href="/checkout" onClick={fechar} className="btn-primario mt-4 w-full">

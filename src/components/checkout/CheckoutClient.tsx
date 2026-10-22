@@ -87,6 +87,8 @@ export function CheckoutClient({
   const totais = totaisDoCarrinho(carrinho);
 
   const [modo, setModo] = useState<ModoEntrega>("ENTREGA");
+  // A taxa em vigor; um 409 do servidor traz a nova se a dona mudou a taxa no meio da compra.
+  const [taxaAtualCentavos, setTaxaAtualCentavos] = useState(taxaEntregaCentavos);
   // Começa no primeiro endereço salvo que fica em Teresina (os de fora não servem para a entrega).
   const [selecionado, setSelecionado] = useState<string>(enderecos.find((e) => cepAtendido(e.cep))?.id ?? NOVO);
   // Só guardamos o que a pessoa digitou. O resto vem do carrinho (CEP) ou da
@@ -151,7 +153,18 @@ export function CheckoutClient({
     : consulta?.chave === chave
       ? consulta.resultado
       : null;
-  const entregaReais = resultadoEntrega?.ok ? resultadoEntrega.cotacao.valor : null;
+  // Em Teresina a taxa é fixa (painel): vale a que o servidor mandou, nunca o valor guardado numa
+  // cotação antiga do carrinho (antes do deploy era o frete fictício de R$ 30, e a taxa pode mudar).
+  // A cotação serve para conferir o CEP e sugerir o endereço.
+  const entregaReais = resultadoEntrega?.ok && cepAtendido(cep) ? taxaAtualCentavos / 100 : null;
+
+  // Cotação guardada com outro valor: corrige no carrinho (o carrinho lateral mostra o mesmo).
+  const cotacaoGuardada = totais.cotacaoValida;
+  useEffect(() => {
+    if (cotacaoGuardada && cepAtendido(cotacaoGuardada.cep) && Math.round(cotacaoGuardada.valor * 100) !== taxaAtualCentavos) {
+      acoesCarrinho.definirCotacao({ ...cotacaoGuardada, valor: taxaAtualCentavos / 100 });
+    }
+  }, [cotacaoGuardada, taxaAtualCentavos]);
   const consultando = !retirada && cepCompleto && !foraDaArea && totais.pesoTotalGramas > 0 && resultadoEntrega === null;
   const erroEntrega = foraDaArea
     ? MENSAGEM_FORA_DA_AREA
@@ -316,6 +329,8 @@ export function CheckoutClient({
           const atual = kitsAtuais.find((n) => n.kitId === k.kitId);
           return atual?.potes !== undefined && !conferirComposicao(k.sabores, atual.potes).ok;
         });
+        const taxaNova = json.detalhes.taxaEntrega;
+        if (typeof taxaNova === "number" && Number.isFinite(taxaNova) && taxaNova >= 0) setTaxaAtualCentavos(Math.round(taxaNova * 100));
         acoesCarrinho.atualizarPrecos(atuais, kitsAtuais);
         foraDoTamanho.forEach((k) => acoesCarrinho.removerKit(k.chave));
         acoesCarrinho.definirCotacao(null);
@@ -456,7 +471,7 @@ export function CheckoutClient({
         : !enderecoCompleto
           ? "Complete o endereço de entrega para continuar."
           : "Aguardando o cálculo da entrega.";
-  const taxa = taxaEntregaCentavos > 0 ? formatarBRL(taxaEntregaCentavos / 100) : "Grátis";
+  const taxa = taxaAtualCentavos > 0 ? formatarBRL(taxaAtualCentavos / 100) : "Grátis";
   const idTelefone = `${uid}-telefone`;
 
   return (

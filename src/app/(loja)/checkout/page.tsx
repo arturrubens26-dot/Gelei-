@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { AuthForm } from "@/components/AuthForm";
 import { CheckoutClient } from "@/components/checkout/CheckoutClient";
@@ -25,7 +26,9 @@ export default function PaginaCheckout() {
 
 async function ConteudoDoCheckout() {
   // Site no ar antes do pagamento real: avisa em vez de deixar montar um pedido que não tem como ser pago.
-  // Fica dentro do Suspense (hora da requisição), então vale a configuração do servidor no ar.
+  // `connection()`: a checagem lê variáveis de ambiente e roda na hora da requisição; sem isso ela
+  // rodaria no prerender e o "em breve" (ou não) ficaria gravado no shell estático do build.
+  await connection();
   if (!pagamentoOnlineDisponivel()) {
     return (
       <section aria-labelledby="titulo-em-breve" className="cartao p-6 text-center">
