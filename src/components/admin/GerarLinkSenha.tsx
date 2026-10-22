@@ -155,10 +155,10 @@ export function GerarLinkSenha({
             ref={mensagemRef}
             id={`${uid}-mensagem`}
             readOnly
-            rows={7}
+            rows={8}
             value={gerado.mensagemSugerida}
             onFocus={(e) => e.currentTarget.select()}
-            className="campo resize-none text-sm break-all"
+            className="campo resize-y text-sm"
           />
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-primario" onClick={() => copiar("mensagem")}>
