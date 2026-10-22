@@ -3,9 +3,10 @@
  * sobre o pagamento simulado, e `validarAmbiente` roda na subida do servidor
  * (src/instrumentation.ts) para falhar cedo e alto em vez de operar mal configurado.
  */
+import { FORMATO_HANDLE, origemPublicaDe } from "@/lib/infinitepay-regras";
 
 /**
- * O PIX simulado deixa o cliente marcar o próprio pedido como pago. Em produção só vale
+ * O pagamento simulado deixa o cliente marcar o próprio pedido como pago. Em produção só vale
  * se houver um SEGUNDO sinal explícito de que o ambiente é uma demonstração (APP_ENV=demo):
  * esquecer a flag ligada não basta para abrir o buraco.
  */
@@ -34,20 +35,36 @@ export function validarAmbiente(): void {
     );
   }
 
-  const tokenMercadoPago = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
-  if (tokenMercadoPago && !/^(APP_USR|TEST)-/.test(tokenMercadoPago)) {
-    problemas.push("MERCADOPAGO_ACCESS_TOKEN não parece um Access Token do Mercado Pago (começa com APP_USR- ou TEST-).");
+  // InfinitePay: handle malformado é erro de digitação (o servidor não sobe); faltar a chave ou a
+  // APP_URL só deixa o pagamento desligado (checkout "em breve"), sem derrubar o site.
+  const handle = process.env.INFINITEPAY_HANDLE?.trim();
+  const chaveInfinitePay = process.env.INFINITEPAY_API_KEY?.trim();
+  if (handle && !FORMATO_HANDLE.test(handle)) {
+    problemas.push(
+      'INFINITEPAY_HANDLE inválido: use a InfiniteTag sem o "$", em minúsculas (ex.: "geleio").',
+    );
   }
-  if (tokenMercadoPago && process.env.NODE_ENV === "production") {
-    if (tokenMercadoPago.startsWith("TEST-")) {
-      console.warn("[ambiente] Mercado Pago com credencial de TESTE: os PIX gerados não cobram de verdade.");
-    }
-    if (!process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim() && !process.env.APP_URL?.startsWith("https://")) {
-      console.warn(
-        "[ambiente] Sem MERCADOPAGO_WEBHOOK_SECRET nem APP_URL com https: o Mercado Pago não tem para onde avisar, " +
-          "e o pagamento só é confirmado enquanto o cliente está na página do pedido.",
-      );
-    }
+  if (handle && !chaveInfinitePay) {
+    console.warn("[ambiente] INFINITEPAY_HANDLE sem INFINITEPAY_API_KEY: o pagamento pelo site fica desligado (checkout \"em breve\").");
+  }
+  if (chaveInfinitePay && !handle) {
+    console.warn("[ambiente] INFINITEPAY_API_KEY sem INFINITEPAY_HANDLE: o pagamento pelo site fica desligado.");
+  }
+  if (chaveInfinitePay && !chaveInfinitePay.startsWith("inchk_")) {
+    console.warn("[ambiente] INFINITEPAY_API_KEY não começa com \"inchk_\": confira se é a chave do Checkout Integrado.");
+  }
+  if (handle && chaveInfinitePay && !origemPublicaDe(process.env.APP_URL)) {
+    console.warn("[ambiente] InfinitePay sem APP_URL válida (https): o pagamento pelo site fica desligado.");
+  }
+  // O servidor falso dos testes nunca vale no site publicado (APP_URL https).
+  if (process.env.INFINITEPAY_API_URL?.trim() && process.env.NODE_ENV === "production" && process.env.APP_URL?.trim().startsWith("https://")) {
+    problemas.push("INFINITEPAY_API_URL é só para testes neste computador: remova-a do site publicado.");
+  }
+  const sobrasMercadoPago = ["MERCADOPAGO_ACCESS_TOKEN", "MERCADOPAGO_WEBHOOK_SECRET", "MERCADOPAGO_API_URL"].filter((v) =>
+    process.env[v]?.trim(),
+  );
+  if (sobrasMercadoPago.length > 0) {
+    console.warn(`[ambiente] ${sobrasMercadoPago.join(", ")} não são mais usadas (o pagamento é pela InfinitePay): pode remover.`);
   }
 
   // E-mail (redefinição de senha por e-mail): pela metade não derruba o site, só fica desligado.

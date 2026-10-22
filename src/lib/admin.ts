@@ -11,6 +11,7 @@ import {
 } from "@/lib/despesas";
 import { codigoPedido } from "@/lib/formatacao";
 import type { ModoEntrega } from "@/lib/entrega-regras";
+import { pagamentoAdminDe, pedidoExpirado, type PagamentoAdminDTO } from "@/lib/pagamentos-regras";
 import { STATUS_PAGOS, transicoesPermitidas, type StatusPedido } from "@/lib/status";
 import { nomeDoCliente, type CanalPedido, type FormaPagamento } from "@/lib/vendas";
 
@@ -34,7 +35,36 @@ export type PedidoAdminDTO = {
   modoEntrega: ModoEntrega | null;
   /** WhatsApp da cliente (só dígitos; linkWhatsApp). Null na venda presencial e nos pedidos antigos. */
   telefone: string | null;
+  /** Pedido online PENDENTE com mais de 48 h: não abre mais link de pagamento (selo "Expirado"). */
+  expirado: boolean;
+  /** Pagamento pelo site (InfinitePay) já confirmado: método, parcelas, valor pago e alerta. Null sem cobrança aprovada. */
+  pagamento: PagamentoAdminDTO | null;
 };
+
+/** Cobranças aprovadas do pedido, na ordem em que foram pagas (para `pagamentoAdminDe`). */
+export const COBRANCAS_APROVADAS = {
+  where: { status: "APROVADO" },
+  orderBy: [{ aprovadoEm: "asc" }, { id: "asc" }],
+  select: { metodo: true, parcelas: true, valorPago: true, aprovadoEm: true },
+} satisfies Prisma.Order$pagamentosArgs;
+
+/** `expirado` e `pagamento` do painel a partir do pedido e das cobranças aprovadas. */
+export function situacaoDoPagamentoNoPainel(p: {
+  canal: CanalPedido;
+  status: StatusPedido;
+  createdAt: Date;
+  canceladoEm: Date | null;
+  pagamentos: { metodo: string | null; parcelas: number | null; valorPago: Prisma.Decimal | null; aprovadoEm: Date | null }[];
+}): { expirado: boolean; pagamento: PagamentoAdminDTO | null } {
+  return {
+    expirado: p.canal === "ONLINE" && p.status === "PENDENTE" && pedidoExpirado(p.createdAt),
+    pagamento: pagamentoAdminDe({
+      pedidoStatus: p.status,
+      canceladoEm: p.canceladoEm,
+      aprovadas: p.pagamentos.map((c) => ({ ...c, valorPago: c.valorPago?.toNumber() ?? null })),
+    }),
+  };
+}
 
 const POR_PAGINA = 50;
 
@@ -52,7 +82,11 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (pagina - 1) * POR_PAGINA,
       take: POR_PAGINA,
-      include: { user: { select: { nome: true, email: true } }, _count: { select: { items: true, kits: true } } },
+      include: {
+        user: { select: { nome: true, email: true } },
+        _count: { select: { items: true, kits: true } },
+        pagamentos: COBRANCAS_APROVADAS,
+      },
     }),
     db.order.count({ where }),
   ]);
@@ -71,15 +105,21 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
     qtdKits: p._count.kits,
     modoEntrega: p.modoEntrega,
     telefone: p.telefone,
+    ...situacaoDoPagamentoNoPainel(p),
   }));
 
   return { pedidos: dados, total, pagina, porPagina: POR_PAGINA };
 }
 
-/** Muda o status respeitando as transições do canal; atômico contra cliques simultâneos. */
+/**
+ * Muda o status respeitando as transições do canal; atômico contra cliques simultâneos. No
+ * cancelamento, guarda quando e quem cancelou (orders.cancelado_em: o painel distingue "pago depois
+ * do cancelamento" de "cancelado depois de pago").
+ */
 export async function alterarStatusPedido(
   id: string,
   novo: StatusPedido,
+  adminId?: string,
 ): Promise<{ ok: true } | { ok: false; motivo: "nao-encontrado" | "transicao-invalida" | "conflito"; atual?: StatusPedido }> {
   const pedido = await db.order.findUnique({ where: { id }, select: { status: true, canal: true } });
   if (!pedido) return { ok: false, motivo: "nao-encontrado" };
@@ -89,7 +129,7 @@ export async function alterarStatusPedido(
   // O `where` com o status lido garante que ninguém mudou o pedido no meio do caminho.
   const { count } = await db.order.updateMany({
     where: { id, status: pedido.status },
-    data: { status: novo },
+    data: novo === "CANCELADO" ? { status: novo, canceladoEm: new Date(), canceladoPorId: adminId ?? null } : { status: novo },
   });
   if (count !== 1) {
     // Alguém mudou o pedido entre a leitura e a escrita (outra aba, outro admin): não é a transição

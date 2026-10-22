@@ -3,7 +3,10 @@ import { describe, it } from "node:test";
 import {
   JANELA_CONFIRMANDO_MS,
   PRAZO_PARA_PAGAR_MS,
+  alertaDoPagamento,
   etapaDoPagamento,
+  pagamentoAdminDe,
+  type EntradaPagamentoAdmin,
   pagarAteDe,
   pedidoExpirado,
   rotuloDoMetodo,
@@ -78,6 +81,41 @@ describe("prazo e rótulos", () => {
     assert.equal(pagarAteDe(criado.toISOString()).getTime(), criado.getTime() + PRAZO_PARA_PAGAR_MS);
     assert.equal(pedidoExpirado(criado, criado.getTime() + PRAZO_PARA_PAGAR_MS), false);
     assert.equal(pedidoExpirado(criado, criado.getTime() + PRAZO_PARA_PAGAR_MS + 1), true);
+  });
+
+  it("alerta do painel: pago depois do cancelamento, cancelado depois de pago, pago em dobro", () => {
+    const t = (min: number) => new Date(criado.getTime() + min * 60_000);
+    const aprovada = (min: number | null) => ({ metodo: "pix", parcelas: 1, valorPago: 30, aprovadoEm: min === null ? null : t(min) });
+    const e = (extra: Partial<EntradaPagamentoAdmin>): EntradaPagamentoAdmin => ({
+      pedidoStatus: "PAGO",
+      canceladoEm: null,
+      aprovadas: [aprovada(10)],
+      ...extra,
+    });
+    assert.equal(alertaDoPagamento(e({})), null);
+    assert.equal(alertaDoPagamento(e({ aprovadas: [] })), null);
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "CANCELADO", canceladoEm: t(5) })), "PAGO_APOS_CANCELAMENTO");
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "CANCELADO", canceladoEm: t(20) })), null);
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "CANCELADO", canceladoEm: null })), "PAGO_APOS_CANCELAMENTO");
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "CANCELADO", canceladoEm: t(20).toISOString(), aprovadas: [aprovada(null)] })), "PAGO_APOS_CANCELAMENTO");
+    assert.equal(alertaDoPagamento(e({ aprovadas: [aprovada(10), aprovada(12)] })), "PAGO_EM_DOBRO");
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "CANCELADO", canceladoEm: t(30), aprovadas: [aprovada(10), aprovada(12)] })), "PAGO_EM_DOBRO");
+  });
+
+  it("pagamentoAdminDe: a primeira cobrança aprovada; sem aprovada, null", () => {
+    assert.equal(pagamentoAdminDe({ pedidoStatus: "PENDENTE", canceladoEm: null, aprovadas: [] }), null);
+    assert.deepEqual(
+      pagamentoAdminDe({
+        pedidoStatus: "PAGO",
+        canceladoEm: null,
+        aprovadas: [
+          { metodo: "credit_card", parcelas: 3, valorPago: 32.4, aprovadoEm: criado },
+          { metodo: "pix", parcelas: 1, valorPago: 30, aprovadoEm: criado },
+        ],
+      }),
+      { metodo: "credit_card", parcelas: 3, valorPago: 32.4, alerta: "PAGO_EM_DOBRO" },
+    );
+    assert.equal(pagamentoAdminDe({ pedidoStatus: "PAGO", canceladoEm: null, aprovadas: [{ metodo: "boleto", parcelas: null, valorPago: null, aprovadoEm: null }] })?.metodo, null);
   });
 
   it("rótulo do método", () => {

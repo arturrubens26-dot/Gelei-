@@ -130,6 +130,52 @@ export function etapaDoPagamento(e: EntradaEtapa): EtapaPagamento {
   return "PAGAR";
 }
 
+/** O que o painel precisa saber das cobranças APROVADAS de um pedido (as outras não importam aqui). */
+export type EntradaPagamentoAdmin = {
+  pedidoStatus: StatusPedido;
+  /** Quando a dona cancelou (orders.cancelado_em); null nos pedidos cancelados antes de existir o registro. */
+  canceladoEm: Date | string | null;
+  /** Cobranças APROVADAS, da mais antiga para a mais nova (aprovadoEm). */
+  aprovadas: {
+    metodo: string | null;
+    parcelas: number | null;
+    /** Reais. */
+    valorPago: number | null;
+    aprovadoEm: Date | string | null;
+  }[];
+};
+
+/**
+ * Dinheiro que entrou e precisa ser devolvido pelo app InfinitePay:
+ * - PAGO_APOS_CANCELAMENTO: pedido CANCELADO com cobrança aprovada depois do cancelamento (sem a hora
+ *   do cancelamento, não dá para saber a ordem: alerta por segurança). Pedido pago e DEPOIS cancelado
+ *   pela dona não tem alerta: o próprio cancelamento já avisou para devolver.
+ * - PAGO_EM_DOBRO: mais de uma cobrança aprovada no mesmo pedido.
+ */
+export function alertaDoPagamento(e: EntradaPagamentoAdmin): AlertaPagamento | null {
+  if (e.aprovadas.length === 0) return null;
+  if (e.pedidoStatus === "CANCELADO") {
+    const cancelado = e.canceladoEm === null ? null : ms(e.canceladoEm);
+    if (cancelado === null || e.aprovadas.some((a) => a.aprovadoEm === null || ms(a.aprovadoEm) >= cancelado)) {
+      return "PAGO_APOS_CANCELAMENTO";
+    }
+  }
+  if (e.aprovadas.length > 1) return "PAGO_EM_DOBRO";
+  return null;
+}
+
+/** `PedidoAdminDTO.pagamento`: método e valor da PRIMEIRA cobrança aprovada, mais o alerta. Sem cobrança aprovada: null. */
+export function pagamentoAdminDe(e: EntradaPagamentoAdmin): PagamentoAdminDTO | null {
+  const primeira = e.aprovadas[0];
+  if (!primeira) return null;
+  return {
+    metodo: primeira.metodo === "pix" || primeira.metodo === "credit_card" ? primeira.metodo : null,
+    parcelas: primeira.parcelas,
+    valorPago: primeira.valorPago,
+    alerta: alertaDoPagamento(e),
+  };
+}
+
 /** "PIX", "Cartão à vista", "Cartão em 3x" (painel e confirmação). */
 export function rotuloDoMetodo(metodo: MetodoPagamento | null, parcelas: number | null): string | null {
   if (metodo === "pix") return "PIX";

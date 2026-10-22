@@ -21,7 +21,7 @@ import {
 import { MAX_PEDIDOS_PENDENTES, MAX_POR_PRODUTO } from "@/lib/limites";
 import { codigoPedido, resumoDoPedido } from "@/lib/formatacao";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
-import { etapaDoPagamento, type PedidoResumoDTO } from "@/lib/pagamentos-regras";
+import { PRAZO_PARA_PAGAR_MS, etapaDoPagamento, type PedidoResumoDTO } from "@/lib/pagamentos-regras";
 import type { StatusPedido } from "@/lib/status";
 import type { EnderecoEntrada } from "@/lib/validacao";
 
@@ -234,8 +234,11 @@ export async function criarPedido(
     if (existente) return { pedido: repeticao(existente, conteudo, entrada.modoEntrega), repetido: true };
   }
 
-  // Teto de pedidos aguardando pagamento por conta (pedidos abandonados não enchem o banco).
-  const pendentes = await db.order.count({ where: { userId, status: "PENDENTE" } });
+  // Teto de pedidos aguardando pagamento por conta (pedidos abandonados não enchem o banco). Só contam
+  // os que ainda podem ser pagos (menos de 48 h): os expirados não travam a conta para sempre.
+  const pendentes = await db.order.count({
+    where: { userId, status: "PENDENTE", createdAt: { gt: new Date(Date.now() - PRAZO_PARA_PAGAR_MS) } },
+  });
   if (pendentes >= MAX_PEDIDOS_PENDENTES) {
     throw new ErroNegocio(
       429,
@@ -456,7 +459,11 @@ export async function listarPedidosDoUsuario(userId: string): Promise<PedidoResu
       modoEntrega: true,
       items: { orderBy: { productId: "asc" }, select: { quantidade: true, product: { select: { nome: true } } } },
       kits: { orderBy: { id: "asc" }, select: { quantidade: true, kit: { select: { nome: true } } } },
-      pagamentos: { orderBy: [{ criadoEm: "desc" }, { id: "desc" }], take: 1, select: { status: true } },
+      pagamentos: {
+        orderBy: [{ criadoEm: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { status: true, avisadoEm: true, avisoTransacaoNsu: true },
+      },
     },
   });
   const gatewayAtivo = pagamentoOnlineDisponivel();
@@ -470,7 +477,10 @@ export async function listarPedidosDoUsuario(userId: string): Promise<PedidoResu
       gatewayAtivo,
       pedidoStatus: p.status,
       pedidoCriadoEm: p.createdAt,
-      ultimaCobranca: p.pagamentos[0] ? { status: p.pagamentos[0].status, avisadoEm: null } : null,
+      // Mesma regra da página do pedido: "confirmando" só com um candidato gravado (retorno ou aviso).
+      ultimaCobranca: p.pagamentos[0]
+        ? { status: p.pagamentos[0].status, avisadoEm: p.pagamentos[0].avisoTransacaoNsu ? p.pagamentos[0].avisadoEm : null }
+        : null,
       agora,
     }),
     total: p.total.toNumber(),

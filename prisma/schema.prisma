@@ -190,44 +190,60 @@ model Order {
   @@map("orders")
 }
 
-/// Situação de uma cobrança PIX (traduzida do status do gateway em src/lib/mercadopago-regras.ts).
+/// Situação de uma cobrança, do nosso lado (src/lib/pagamentos-regras.ts).
 enum PaymentStatus {
   PENDENTE
   APROVADO
-  /// Expirou sem pagamento ou foi cancelada (pedido cancelado, PIX substituído por outro).
+  /// Venceu sem pagamento ou foi encerrada no nosso banco (pedido cancelado, link substituído). Na
+  /// InfinitePay o link ainda aceita pagamento até o valid_until: a confirmação vale também daqui.
   CANCELADO
   RECUSADO
-  /// Devolvida ao cliente (estorno ou contestação).
+  /// Devolvida à cliente (estorno pelo app da InfinitePay).
   ESTORNADO
 }
 
-/// Cobrança PIX de um pedido online. Um pedido pode ter várias: o PIX expira e o cliente gera outro.
-/// O pedido só vira PAGO quando o servidor CONSULTA o gateway e o valor confere (o aviso do gateway
-/// é só o gatilho da consulta). Ver src/lib/pagamentos.ts.
+/// Cobrança de um pedido online: um link do checkout da InfinitePay (PIX ou cartão até 12x). Um
+/// pedido pode ter várias: o link vence em 60 min e a cliente abre outro. O pedido só vira PAGO
+/// quando ESTE servidor confere a transação no payment_check com a própria chave (o aviso e o
+/// retorno do navegador só disparam a conferência). Ver src/lib/pagamentos.ts.
 model Pagamento {
   id                String        @id @default(cuid())
   orderId           String        @map("order_id")
-  /// "mercadopago" ou "simulado" (demonstração local).
+  /// "infinitepay" ou "simulado" (demonstração local).
   gateway           String        @db.VarChar(20)
-  /// Id da cobrança no gateway (no Mercado Pago, o id do pagamento).
+  /// order_nsu enviado à InfinitePay: ped-<pedidoId>-<n> (um por tentativa).
   referenciaExterna String        @map("referencia_externa") @db.VarChar(64)
   status            PaymentStatus @default(PENDENTE)
-  /// Status cru do gateway na última consulta (ex.: "pending", "approved"), para conferência.
+  /// O que a última conferência disse (ex.: "pago", "nao-pago", "divergente:valor"), para conferência manual.
   statusGateway     String?       @map("status_gateway") @db.VarChar(40)
-  /// Valor cobrado: o total do pedido quando a cobrança foi aberta.
+  /// Valor cobrado: o total do pedido quando o link foi aberto.
   valor             Decimal       @db.Decimal(10, 2)
-  /// Código "PIX copia e cola" e a imagem do QR Code (PNG em base64), como o gateway devolveu.
-  copiaECola        String        @map("copia_e_cola")
-  qrCodeBase64      String?       @map("qr_code_base64")
+  /// Link do checkout hospedado (null no simulado). Só https em *.infinitepay.io.
+  checkoutUrl       String?       @map("checkout_url") @db.VarChar(500)
+  /// Slug da fatura: da resposta de /links, se vier; senão, do candidato CONFIRMADO.
+  faturaSlug        String?       @map("fatura_slug") @db.VarChar(100)
+  /// Só depois do payment_check aprovado. UNIQUE: a mesma transação nunca quita duas cobranças.
+  transacaoNsu      String?       @map("transacao_nsu") @db.VarChar(100)
+  /// Último candidato recebido (aviso com token ou retorno da dona do pedido), ainda NÃO conferido.
+  avisoTransacaoNsu String?       @map("aviso_transacao_nsu") @db.VarChar(100)
+  avisoSlug         String?       @map("aviso_slug") @db.VarChar(100)
+  avisadoEm         DateTime?     @map("avisado_em")
+  /// "pix" ou "credit_card"; parcelas de 1 a 12; valor pago (com os juros do parcelado) em reais.
+  metodo            String?       @db.VarChar(20)
+  parcelas          Int?
+  valorPago         Decimal?      @map("valor_pago") @db.Decimal(10, 2)
+  /// Comprovante da InfinitePay (só https em *.infinitepay.io).
+  comprovanteUrl    String?       @map("comprovante_url") @db.VarChar(500)
   expiraEm          DateTime      @map("expira_em")
   criadoEm          DateTime      @default(now()) @map("criado_em")
-  /// Última consulta ao gateway: limita quantas vezes a tela do cliente faz o servidor perguntar.
+  /// Última conferência no gateway: limita quantas vezes a tela da cliente faz o servidor perguntar.
   consultadoEm      DateTime?     @map("consultado_em")
   aprovadoEm        DateTime?     @map("aprovado_em")
   /// Restrict: pedido com cobrança não é apagado (o histórico do dinheiro fica).
   order             Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
   @@unique([gateway, referenciaExterna])
+  @@unique([gateway, transacaoNsu])
   @@index([orderId])
   @@map("pagamentos")
 }

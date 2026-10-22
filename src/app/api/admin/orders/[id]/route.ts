@@ -26,7 +26,8 @@ export const GET = comTratamento(
 
 /**
  * PATCH /api/admin/orders/[id]  { status } — muda o status de um pedido (admin).
- * Só aceita transições válidas (ex.: PAGO → ENVIADO), não pula etapas.
+ * Só aceita transições válidas (ex.: PAGO → ENVIADO), não pula etapas. → 200 `{ id, status, aviso? }`;
+ * no cancelamento, `aviso` diz se é preciso devolver dinheiro ou se o link ainda pode ser pago.
  */
 export const PATCH = comTratamento(
   "api/admin/orders PATCH",
@@ -40,18 +41,27 @@ export const PATCH = comTratamento(
     if (!corpo.ok) return corpo.resposta;
 
     const { id } = await ctx.params;
-    const resultado = await alterarStatusPedido(id, corpo.dados.status);
+    const resultado = await alterarStatusPedido(id, corpo.dados.status, auth.usuario.id);
     if (resultado.ok) {
       console.info(`[admin] ${auth.usuario.id} mudou o pedido ${id} para ${corpo.dados.status}`);
-      // Pedido cancelado: o PIX aberto é cancelado no gateway, para o cliente não pagar um pedido cancelado.
+      // Pedido cancelado: os links abertos são encerrados no nosso banco. A InfinitePay não tem
+      // cancelamento de link pela API: o link ainda aceita pagamento até vencer (no máximo 1 hora).
       let aviso: string | undefined;
       if (corpo.dados.status === "CANCELADO") {
         try {
-          const { algumPago } = await encerrarCobrancasDoPedido(id);
-          if (algumPago) aviso = "O cliente já tinha pago o PIX deste pedido. Devolva o valor pelo painel do Mercado Pago.";
+          const { algumPago, linkAberto } = await encerrarCobrancasDoPedido(id);
+          if (algumPago) {
+            aviso = "A cliente já tinha pago este pedido. Devolva o valor pelo app InfinitePay.";
+          } else if (linkAberto) {
+            aviso =
+              "O link de pagamento ainda pode ser usado por até 1 hora. Se a cliente pagar, o pedido mostrará " +
+              "'Pago após o cancelamento': devolva pelo app InfinitePay.";
+          }
         } catch (e) {
-          registrarErro(`api/admin/orders ${id}: cancelar o PIX falhou`, e);
-          aviso = "Não foi possível cancelar o PIX no Mercado Pago agora. Confira o pagamento no painel do Mercado Pago.";
+          registrarErro(`api/admin/orders ${id}: encerrar os links de pagamento falhou`, e);
+          aviso =
+            "O pedido foi cancelado, mas não conseguimos encerrar o link de pagamento agora. Se a cliente pagar, " +
+            "o pedido mostrará 'Pago após o cancelamento': devolva pelo app InfinitePay.";
         }
       }
       return Response.json({ id, status: corpo.dados.status, ...(aviso ? { aviso } : {}) });

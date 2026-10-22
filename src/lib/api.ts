@@ -46,6 +46,21 @@ export async function lerJson(request: Request): Promise<unknown> {
   }
 }
 
+/**
+ * Corpo JSON de um aviso servidor a servidor (webhook), com o mesmo teto de tamanho, mas sem exigir o
+ * `Content-Type` exato: não há navegador nem CSRF aqui, e um tipo diferente do esperado não pode
+ * fazer o aviso ser perdido. `undefined` se não for JSON.
+ */
+export async function lerJsonDoAviso(request: Request): Promise<unknown> {
+  const corpo = await lerBytes(request, MAX_BYTES_CORPO, "Corpo da requisição grande demais.");
+  if (!corpo) return undefined;
+  try {
+    return JSON.parse(corpo.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
 /** Lê o corpo inteiro com teto de tamanho (413 acima dele, sem carregar o resto na memória). */
 async function lerBytes(request: Request, maxBytes: number, mensagem413: string): Promise<Buffer | undefined> {
   const declarado = Number(request.headers.get("content-length"));

@@ -1,7 +1,9 @@
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
+import { COBRANCAS_APROVADAS, situacaoDoPagamentoNoPainel } from "@/lib/admin";
 import { db } from "@/lib/db";
 import type { ModoEntrega } from "@/lib/entrega-regras";
+import type { PagamentoAdminDTO } from "@/lib/pagamentos-regras";
 import { potesParaSeparar, type PoteParaSeparar } from "@/lib/kits-regras";
 import type { StatusPedido } from "@/lib/status";
 import { nomeDoCliente, type CanalPedido, type FormaPagamento } from "@/lib/vendas";
@@ -29,7 +31,7 @@ export type PedidoAdminDetalheDTO = {
     cidade: string;
     estado: string;
   } | null;
-  /** Venda presencial; no pedido online (PIX pelo site) é `null`. */
+  /** Venda presencial; no pedido online (pago pelo site, ver `pagamento`) é `null`. */
   formaPagamento: FormaPagamento | null;
   observacao: string | null;
   /** Potes avulsos. Valores em reais. */
@@ -49,11 +51,16 @@ export type PedidoAdminDetalheDTO = {
   subtotal: number;
   deliveryFee: number;
   total: number;
+  /** Pedido online PENDENTE com mais de 48 h: não abre mais link de pagamento (selo "Expirado"). */
+  expirado: boolean;
+  /** Pagamento pelo site já confirmado (método, parcelas, valor pago e alerta). Null sem cobrança aprovada. */
+  pagamento: PagamentoAdminDTO | null;
 };
 
 const incluirFicha = {
   user: { select: { nome: true, email: true } },
   address: true,
+  pagamentos: COBRANCAS_APROVADAS,
   items: { orderBy: { productId: "asc" }, include: { product: { select: { nome: true, imagemUrl: true } } } },
   kits: {
     orderBy: { id: "asc" },
@@ -121,5 +128,6 @@ export async function detalhePedidoAdmin(id: string): Promise<PedidoAdminDetalhe
     subtotal: p.total.sub(p.deliveryFee).toNumber(),
     deliveryFee: p.deliveryFee.toNumber(),
     total: p.total.toNumber(),
+    ...situacaoDoPagamentoNoPainel(p),
   };
 }
