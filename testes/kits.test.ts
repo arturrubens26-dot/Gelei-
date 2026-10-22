@@ -553,7 +553,8 @@ describe("schemas", () => {
         { productId: M, quantidade: 1 },
       ],
     };
-    const comEndereco = { addressId: "endereco-1" };
+    // Desde a B6, todo pedido online diz o modo de entrega e o WhatsApp.
+    const comEndereco = { modoEntrega: "ENTREGA", telefone: "(86) 99999-1234", addressId: "endereco-1" };
 
     it("{ itens: [], kits: [k] } passa", () => {
       const r = pedidoSchema.safeParse({ ...comEndereco, itens: [], kits: [kit] });
@@ -561,9 +562,9 @@ describe("schemas", () => {
     });
 
     it("{} dá \"O carrinho está vazio.\"", () => {
-      const r = pedidoSchema.safeParse({});
-      assert.equal(r.success, false);
-      assert.ok(!r.success && r.error.issues.some((i) => i.message === "O carrinho está vazio."));
+      // {} falha já pelo modo de entrega e pelo telefone (obrigatórios desde a B6); o carrinho vazio
+      // aparece quando o resto está certo.
+      assert.equal(pedidoSchema.safeParse({}).success, false);
       const soEndereco = pedidoSchema.safeParse(comEndereco);
       assert.ok(!soEndereco.success && soEndereco.error.issues.some((i) => i.message === "O carrinho está vazio."));
     });

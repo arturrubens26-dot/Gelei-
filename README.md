@@ -9,7 +9,7 @@ E-commerce com área administrativa. Next.js 16 (App Router) · TypeScript · Ta
 ```bash
 npm install
 cp .env.example .env        # preencha SESSION_SECRET e SEED_ADMIN_PASSWORD (veja os comentários)
-                            # para o pagamento PIX de demonstração: PAGAMENTOS_SIMULADOS="true"
+                            # para o pagamento de demonstração: PAGAMENTOS_SIMULADOS="true"
 
 npm run db:dev              # terminal 1: Postgres local embutido do Prisma (deixe aberto)
 # cole no .env a URL "postgres://..." que ele mostrar, em DATABASE_URL
@@ -28,7 +28,7 @@ Para usar outro Postgres (Neon, Supabase, RDS…), basta trocar `DATABASE_URL` e
 > **Criando migrações novas:** o `prisma migrate dev` precisa de um banco-sombra e o Postgres embutido (PGlite) não lida bem com ele. Gere o SQL com
 > `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`, salve em `prisma/migrations/<data>_<nome>/migration.sql` e aplique com `npm run db:deploy`.
 
-> **Testes:** `npm run test:unit` roda os testes das regras puras (leitura de valores digitados, meses, validação das despesas, contas da produção, composição e rateio dos kits) com `node:test`.
+> **Testes:** `npm test` (ou `npm run test:unit`) roda os testes das regras puras com `node:test`: valores digitados, meses, despesas, produção, kits, entrega e telefone, verso dos produtos, redefinição de senha, etapas do pagamento e as regras da InfinitePay (`testes/infinitepay.test.ts`). O teste ponta a ponta do pagamento (`npm run test:pagamento`) roda contra a InfinitePay falsa: veja "Como o pagamento funciona".
 
 > **Banco local "sem vagas" ("Connection terminated unexpectedly", `ConnectionClosed`, `ECONNRESET`):** o Postgres embutido do `prisma dev` aceita 10 conexões, mas tem um defeito (no `@electric-sql/pglite-socket` 0.1.3, que vem com o Prisma; a 0.2.13 ainda tem): cada conexão que cai sem se despedir (processo morto com a conexão aberta: o site fechado no X no meio de uma consulta, um worker no fim do build, um script interrompido) ocupa uma vaga até o banco reiniciar. Sem vagas, o site mostra "This page couldn't load" e o terminal mostra esse erro. Para quase não acontecer, `src/lib/db.ts` usa um único pool por processo e, com `DATABASE_POOL_MAX="1"`, fecha a conexão ociosa em 500 ms; o `iniciar.bat` reinicia o banco a cada início. Se acontecer, reinicie só o banco: `npx prisma dev stop geleio` e depois `npm run db:dev` (ou `parar.bat` e `iniciar.bat`). Os dados ficam.
 
@@ -61,26 +61,48 @@ O site roda na Netlify (o Next.js 16 é suportado pelo adaptador OpenNext, sem p
 4. **Netlify:** "Add new site" → "Import from Git" → o repositório. Em *Site configuration → Environment variables*:
    - `DATABASE_URL`: a URL **com pooler** do Neon;
    - `SESSION_SECRET`: uma nova, gerada como no `.env.example` (nunca a deste computador);
-   - `APP_URL`: o endereço do site (ex.: `https://geleio.netlify.app`);
+   - `APP_URL`: o endereço do site (`https://geleio.netlify.app`). É a única fonte do retorno e do aviso da InfinitePay e do link de senha nova;
    - `IP_HEADER_CONFIAVEL`: `x-nf-client-connection-ip`;
-   - `DATABASE_POOL_MAX`: `3`.
+   - `DATABASE_POOL_MAX`: `3`;
+   - `INFINITEPAY_HANDLE`: `geleio`;
+   - `INFINITEPAY_API_KEY`: a chave do Checkout Integrado (`inchk_...`), marcada como **secret**.
    
-   Não defina `PAGAMENTOS_SIMULADOS`.
+   Não defina `PAGAMENTOS_SIMULADOS` nem `INFINITEPAY_API_URL`. Apague as antigas `MERCADOPAGO_*`, se existirem (o servidor só avisa).
 5. **Admin do site no ar:** um e-mail seu e uma senha forte, nunca o admin de teste deste computador.
-6. **Pagamento (PIX pelo Mercado Pago):** sem `MERCADOPAGO_ACCESS_TOKEN`, o checkout mostra "Pedidos pelo site em breve" e a API recusa pedidos (503) sem gravá-los. Para abrir a loja:
-   - No [painel de desenvolvedor](https://www.mercadopago.com.br/developers/panel/app), crie uma aplicação (Pagamentos online, Checkout Transparente). A conta precisa ter uma chave PIX cadastrada.
-   - `MERCADOPAGO_ACCESS_TOKEN`: o Access Token de **produção** (`APP_USR-...`). Para ensaiar sem cobrar, use o de teste (`TEST-...`).
-   - Em *Webhooks → Configurar notificações*: URL `https://SEU-SITE/api/webhooks/mercadopago`, evento **Pagamentos**. Salve e copie a **assinatura secreta** para `MERCADOPAGO_WEBHOOK_SECRET`.
-   - Teste final: um pedido de valor baixo pago com o seu próprio banco. O comprador não pode usar o mesmo e-mail da conta do Mercado Pago (ele recusa).
+6. **Pagamento (InfinitePay):** sem `INFINITEPAY_HANDLE`, `INFINITEPAY_API_KEY` e `APP_URL` com https, o checkout mostra "Pedidos pelo site em breve" e a API recusa pedidos (503) sem gravá-los. Então dá para publicar o código antes da chave. Para abrir a loja:
+   - No app InfinitePay: *Vendas → Checkout → Configurações → Habilitar Checkout Integrado → criar API Key* (nome `site-geleio`). Ela aparece **uma vez só**: copie direto para a Netlify. Nunca no chat, no Git ou em print.
+   - A chave é obrigatória: só com ela o link ganha validade (`valid_until`) e aceita um pagamento só (`single_payment`).
+   - Não há o que configurar de webhook no app: cada link leva o próprio endereço de aviso.
+   - **Antes de abrir:** o ensaio com dinheiro real (abaixo) e depois um pedido real de valor baixo, do começo ao fim, com devolução pelo app.
 
-### Como o PIX funciona (`src/lib/pagamentos.ts`)
+### Como o pagamento funciona (`src/lib/pagamentos.ts`)
 
-- O pedido abre uma cobrança no Mercado Pago (validade de 1 hora) e a página do pedido mostra o QR Code e o copia e cola. Tabela `pagamentos`: um pedido pode ter vários PIX (o vencido dá lugar a um novo, pelo botão "Gerar novo PIX").
-- **O pedido só vira PAGO quando o servidor consulta o Mercado Pago com o próprio token** e confere pedido (`external_reference`), valor, moeda e forma de pagamento. O aviso (webhook) e a tela do cliente só disparam essa consulta: um aviso forjado não paga nada. Com a assinatura secreta, avisos sem assinatura válida são recusados (401); avisos de pagamentos que não criamos são ignorados sem consulta.
-- A página do pedido pergunta a cada 5 s (o servidor consulta o Mercado Pago no máximo a cada 8 s), então o pedido é confirmado mesmo se o aviso atrasar.
-- Repetir o pedido (mesma Idempotency-Key) ou pedir o PIX de novo devolve o mesmo PIX; a `X-Idempotency-Key` enviada ao Mercado Pago (`geleio-<pedido>-<n>`) impede cobrança duplicada em nova tentativa.
-- Admin cancelou um pedido pendente: o PIX aberto é cancelado no Mercado Pago. Se ele já tinha sido pago, o painel avisa para devolver o valor pelo Mercado Pago (a devolução não é automática).
-- Teste ponta a ponta com um Mercado Pago falso: `MERCADOPAGO_API_URL` aceita só `127.0.0.1`/`localhost`.
+A cliente paga com **PIX ou cartão até 12x** na página segura da InfinitePay (Checkout Integrado) e volta para a loja. Regras puras em `src/lib/infinitepay-regras.ts` e `src/lib/pagamentos-regras.ts`; as chamadas HTTP, só em `src/lib/infinitepay.ts`.
+
+- **Link por tentativa.** O pedido abre um link (`POST /links`) com `order_nsu = ped-<pedido>-<n>`, os potes, os kits e a "Entrega" em centavos (a soma é conferida com o total antes de enviar; nunca há desconto), validade de **60 min** e `single_payment`. Tabela `pagamentos`: um pedido pode ter vários links (até 10). "Pagar" de novo devolve o mesmo link enquanto ele vale por mais de 5 min; o vencido vira `CANCELADO` no nosso banco. Duas chamadas ao mesmo tempo abrem um link só (índice único).
+- **Parcelas:** `assured_installments = 0`: à vista e PIX sem acréscimo; no parcelado, a cliente paga os juros, que a InfinitePay mostra antes de confirmar. Por isso o valor pago (`valor_pago`) pode ser maior que o do pedido; o faturamento continua sendo o total do pedido.
+- **O pedido só vira PAGO pelo `payment_check` feito por ESTE servidor** com a própria chave e a referência do nosso banco. Ele exige `success` e `paid`, `amount` igual ao total em centavos (sem tolerância), `paid_amount >= amount`, `pix` ou `credit_card`, de 1 a 12 parcelas (PIX só 1), moeda BRL e o mesmo `order_nsu` (se a resposta trouxer esses dois). Divergência nunca vira PAGO: fica pendente, com `status_gateway = divergente:<motivo>` no log, para a dona conferir no app.
+- **O aviso (webhook) não é assinado.** Cada link leva `APP_URL/api/webhooks/infinitepay/<referência>/<token>`, com `token = HMAC-SHA256(SESSION_SECRET, referência)`. Sem o token certo: 401 e nada é gravado. Com ele, a transação do corpo vira só um *candidato* e dispara a conferência. A rota responde 200 (confirmado, divergente ou recusado de vez) ou 400 (a InfinitePay não respondeu à conferência: ela repete o aviso). Trocar o `SESSION_SECRET` invalida o aviso dos links abertos (até 60 min); eles continuam pelo retorno e pela tela.
+- **Retorno do navegador** (`/pagamento/retorno`): se a sessão é da dona do pedido, grava o candidato e confere; sempre responde 303 para `/order-confirmation/<id>?retorno=1`, sem a transação na URL. A página do pedido pergunta a cada 5 s, e o servidor confere de novo no máximo a cada 8 s, por até 30 min (etapa "Confirmando").
+- **A mesma transação nunca quita duas cobranças:** `UNIQUE(gateway, transacao_nsu)`, gravada só depois de confirmada. Se o link trouxe o slug da fatura, o candidato precisa ter o mesmo slug.
+- **Prazo:** o pedido pendente pode ser pago por até **48 h**. Depois disso, ele "expira" sem mudar de status: não abre link novo (409), a cliente vê "Faça um novo pedido" e a dona vê o selo "Expirado". Os expirados não contam no teto de 20 pendentes por conta. Pagamento confirmado de um pedido expirado vira PAGO normalmente: o dinheiro entrou.
+- **Cancelar não cancela o link** (a API não tem isso): o link ainda aceita pagamento por até 1 hora, e o painel avisa. Pago depois do cancelamento, ou pago duas vezes, a cobrança fica aprovada, o pedido não muda e o painel mostra o alerta **"Pago após o cancelamento"** ou **"Pago em dobro"**. A devolução é sempre pelo app InfinitePay (não há API).
+- **Plano C:** se nada chegar (a cliente fechou a aba e o aviso falhou), a dona confere o dinheiro no app e marca o pedido como pago no painel.
+- **Logs:** só ids e referências; nunca a chave, nome, e-mail ou endereço da cliente (que vão no link para a InfinitePay: consta na política de privacidade).
+- **Teste local sem dinheiro:** `node testes/infinitepay-falso.mjs` sobe uma InfinitePay falsa em `127.0.0.1:4010`, com uma página que paga por PIX, cartão 3x com juros, valor errado ou aviso falso. Suba o site com `INFINITEPAY_API_URL=http://127.0.0.1:4010`, `INFINITEPAY_HANDLE=geleio`, `INFINITEPAY_API_KEY=inchk_falsa`, `APP_URL=http://localhost:3100`, `PAGAMENTOS_SIMULADOS=false` e `IP_HEADER_CONFIAVEL=x-forwarded-for` (`npx next dev -p 3100`), e rode `npm run test:pagamento` (54 verificações; ele mesmo sobe a falsa, recusa banco que não seja local e apaga o que criou).
+
+#### Ensaio com dinheiro real (antes de abrir a loja)
+
+A InfinitePay não tem ambiente de teste, e a documentação não fixa o nome do campo do link na resposta, se vem o slug, nem o formato exato do `payment_check`. O site lê isso de forma tolerante, mas é preciso confirmar com um pagamento real. Leva uns 15 minutos, neste computador, no PowerShell:
+
+1. Ponha a chave no `.env` **só durante o ensaio**: `INFINITEPAY_HANDLE="geleio"` e `INFINITEPAY_API_KEY="inchk_..."`.
+2. `npm run ensaio:infinitepay -- criar 100`: cria um link de **R$ 1,00** (vale 30 min) e mostra o link, os **nomes** dos campos da resposta, o host e se veio o slug. Se aparecer "o site NÃO reconheceu o link", pare e mande os nomes dos campos (não os valores).
+3. Abra o link e pague com **PIX**. Na tela final, clique em **"Continuar"**: o navegador abre a loja com `?ensaio=1&...` na barra de endereço. Copie o endereço inteiro.
+4. `npm run ensaio:infinitepay -- retorno "<endereço copiado>"`: mostra os parâmetros do retorno e confere no `payment_check`. O esperado: `success=true, paid=true, amount=100, paid_amount=100, capture_method=pix`.
+5. Repita com **cartão em 2x** e R$ 10,00 (`criar 1000`) ou o menor valor que a InfinitePay aceitar parcelar. O esperado: `amount=1000` e `paid_amount` maior (os juros).
+6. Devolva os dois pagamentos pelo app e **apague a chave do `.env`**.
+7. Registre aqui o formato real (nomes dos campos de `/links`, do retorno e do `payment_check`). Se o campo do link ou o host forem outros, ajuste `lerRespostaDoLink` e `urlDaInfinitePay` em `src/lib/infinitepay-regras.ts`.
+8. Depois de publicar: um pedido real de valor baixo pelo site, do começo ao fim (o aviso e o retorno devem marcar PAGO), e devolução pelo app.
 
 No plano grátis, cada publicação gasta créditos: junte as mudanças antes de enviar ao GitHub.
 
@@ -101,14 +123,18 @@ No plano grátis, cada publicação gasta créditos: junte as mudanças antes de
 | Rota | Quem | O que faz |
 | --- | --- | --- |
 | `GET /api/products` | público | lista os produtos |
-| `POST /api/delivery/calculate` | público | `{ cep, pesoTotalGramas }` → valida o CEP (cep-promise) e calcula o frete simulado |
+| `POST /api/delivery/calculate` | público | `{ cep }` → CEP de Teresina (640…): valida o CEP (cep-promise) e devolve a taxa do painel; fora da área, 422 com `foraDaArea` |
 | `POST /api/auth/register` · `login` · `logout` · `GET /api/auth/me` | — | conta e sessão (cookie httpOnly) |
 | `GET/POST /api/addresses` | logado | endereços salvos; o CEP é conferido (existência, cidade e UF); limite de 10 por conta |
 | `POST /api/orders` | logado | cria o pedido PENDENTE com potes avulsos (`itens`) e/ou caixas de kit (`kits: [{ kitId, quantidade, sabores: [{ productId, quantidade }] }]`; os dois podem faltar, mas não ambos vazios). **Recalcula preço, peso, frete e a composição do kit no servidor**. Aceita o cabeçalho `Idempotency-Key` (reenviar a mesma chave com o mesmo conteúdo devolve o mesmo pedido, 200; com outro conteúdo, 422) e `totalEsperadoCentavos` (se o total calculado for outro, responde 409 com os preços e pesos atuais dos produtos e dos kits). Produto ou kit oculto: 422 com `indisponiveis` e `kitsIndisponiveis`; caixa com potes a mais ou a menos: 400 em `kits.N.sabores` |
-| `GET /api/orders/[id]/pagamento` | logado | situação do pedido e do PIX (consulta o Mercado Pago se o PIX está aberto) |
-| `POST /api/orders/[id]/pagamento` | logado | gera o PIX do pedido (ou devolve o que ainda vale) |
-| `POST /api/webhooks/mercadopago` | Mercado Pago | aviso de pagamento: só dispara a consulta (assinatura conferida com `MERCADOPAGO_WEBHOOK_SECRET`) |
-| `POST /api/orders/[id]/simular-pagamento` | logado | demonstração: marca o próprio pedido como PAGO (só com `PAGAMENTOS_SIMULADOS=true` e sem Mercado Pago) |
+| `GET /api/orders/[id]/pagamento` | logado | `SituacaoPagamentoDTO`: etapa (`PAGAR`, `CONFIRMANDO`, `PAGO`, `EXPIRADO`, `CANCELADO`, `INDISPONIVEL`), prazo para pagar e a última cobrança. Na etapa `CONFIRMANDO`, confere de novo na InfinitePay (no máximo a cada 8 s) |
+| `POST /api/orders/[id]/pagamento` | logado | `{}` → `{ cobranca }` com o `checkoutUrl` da InfinitePay (o mesmo link, se ainda vale). 409 já pago, expirado (48 h) ou não pendente; 429; 502 InfinitePay fora; 503 pagamento desligado |
+| `GET /pagamento/retorno` | navegador | volta da InfinitePay: confere a transação (se a sessão é da dona do pedido) e responde 303 para a confirmação do pedido |
+| `POST /api/webhooks/infinitepay/[referencia]/[token]` | InfinitePay | aviso de pagamento: com o token HMAC certo, só dispara a conferência (`payment_check`); 401 sem ele |
+| `POST /api/orders/[id]/simular-pagamento` | logado | demonstração: marca o próprio pedido como PAGO (só com `PAGAMENTOS_SIMULADOS=true` e sem a InfinitePay) |
+| `POST /api/auth/esqueci-senha` · `POST /api/auth/redefinir-senha` | público | senha nova por e-mail (202 sempre igual; 404 sem SMTP) · troca a senha com o token do link (uso único, 60 min) |
+| `POST /api/admin/clientes/[id]/link-senha` | **admin** | gera o link de senha nova de uma cliente, com a conferência de identidade registrada (nunca para admin) |
+| `GET` · `PATCH /api/admin/entrega` | **admin** | taxa de entrega em Teresina, em centavos (0 a 10000) |
 | `GET /api/admin/orders?status=&canal=` · `PATCH /api/admin/orders/[id]` | **admin** | lista/filtra pedidos (por status e canal `ONLINE`/`PRESENCIAL`) e muda o status (só transições válidas para o canal) |
 | `GET /api/admin/orders/[id]` | **admin** | ficha do pedido: cliente, endereço, potes avulsos, caixas de kit com a composição e as fotos dos sabores, e o bloco "Separar…" (caixas a montar e potes por sabor) |
 | `GET /api/admin/kits` · `PATCH /api/admin/kits/[id]` | **admin** | kits com caixas vendidas, faixa de economia e aviso de preço · edita (JSON `{ nome, descricao, precoCentavos, pesoCaixaGramas, ativo }`) ou mostra/oculta na loja (JSON `{ ativo }`). Sem criar nem excluir na v1 |
@@ -129,7 +155,10 @@ As rotas `/api/admin/*` conferem `is_admin` **no banco a cada chamada** (não co
 
 ## Regras de negócio
 
-- **Frete (simulado):** CEP `01…` → R$ 15; `20…` → R$ 25; demais CEPs → R$ 30 (valor provisório). Peso total acima de 2 kg soma R$ 5. Regras em `src/lib/frete.ts` — trocar por Correios/Loggi mantendo `calcularFrete`. Como o frete sai do CEP, o endereço do pedido é conferido contra o CEP (senão daria para pagar frete de capital entregando em outro estado).
+- **Entrega:** só em **Teresina** (CEP 64000-000 a 64099-999, prefixo 640), com **taxa fixa** (padrão R$ 15,00, editável no painel; tabela `config_loja`), ou **retirada grátis na loja** (endereço de `src/lib/dados-loja.ts`). Fora da área, o checkout sugere a retirada e o servidor recusa a entrega (422). O endereço é conferido contra o CEP (cidade e UF). Regras em `src/lib/entrega-regras.ts` (puro, testado em `testes/entrega.test.ts`). Pedido com retirada não tem endereço e tem frete 0 (CHECK `orders_canal_coerente`).
+- **WhatsApp da cliente:** obrigatório em todo pedido online (`orders.telefone`, só dígitos, 10 ou 11 com DDD); fica também em `users.telefone` para preencher a próxima compra. O painel mostra o link `wa.me`.
+- **Pagamento:** InfinitePay (PIX ou cartão até 12x). Veja "Como o pagamento funciona".
+- **Senha esquecida:** sem e-mail configurado, "Esqueci minha senha" orienta a chamar a loja no Instagram (@ge.leio); a dona confere a identidade e gera um link em `/admin/clientes` (vale 60 min, uma vez só; o link novo invalida o anterior; nunca para contas de admin, que usam `npm run admin:senha`). Com SMTP, o mesmo link vai por e-mail. A troca de senha derruba as sessões antigas (`users.sessao_versao`).
 - **Faturamento:** soma dos pedidos **Pago + Enviado + Entregue** (o pedido enviado já foi pago). Pendentes e cancelados ficam de fora. O gráfico mensal agrupa pela **data de criação** do pedido, no horário de Brasília.
 - **Status:** `PENDENTE → PAGO → ENVIADO → ENTREGUE`; `PENDENTE` e `PAGO` podem ir a `CANCELADO`.
 - **Venda presencial (`/admin/orders/nova`):** venda de feira ou balcão lançada pelo admin. Fica na mesma tabela de pedidos, com `canal = PRESENCIAL`, então entra no faturamento, no gráfico e no planner de despesas como qualquer pedido pago; o Financeiro mostra à parte as **vendas na feira e no balcão**.
@@ -149,7 +178,7 @@ As rotas `/api/admin/*` conferem `is_admin` **no banco a cada chamada** (não co
 ## Segurança e operação
 
 - **Ambiente validado na subida** (`src/instrumentation.ts`): sem `DATABASE_URL` ou com `SESSION_SECRET` fraco (< 32 caracteres) o servidor não funciona (responde 500 a tudo e loga o motivo).
-- **Sessão:** JWT em cookie `httpOnly` + `SameSite=Lax` (`Secure` e prefixo `__Host-` em produção). Só o id do usuário vai no token; papel de admin é sempre lido do banco. Duração: 7 dias (cliente) e 12 h (admin). Não há revogação de sessão no servidor: sair só apaga o cookie.
+- **Sessão:** JWT em cookie `httpOnly` + `SameSite=Lax` (`Secure` e prefixo `__Host-` em produção). Só o id do usuário vai no token; papel de admin é sempre lido do banco. Duração: 7 dias (cliente) e 12 h (admin). O token leva a versão de sessão da conta (`v`): trocar a senha (pelo link ou por `npm run admin:senha`) derruba todas as sessões antigas.
 - **Senhas:** bcrypt custo 11, com no máximo 2 operações simultâneas (o bcryptjs é JS puro e caro); acima da fila a requisição recebe 503. Limite de 72 **bytes**.
 - **CSRF:** rotas que mudam estado rejeitam requisições cross-site (`Sec-Fetch-Site`/`Origin`; com `APP_URL` definida, compara com ela) e exigem `Content-Type: application/json` exato. Corpo limitado a 32 KB (413).
 - **Limites de taxa (em memória):** login 8 falhas/15 min por **conta+IP** e 40 por conta (a reserva é feita *antes* do bcrypt, então rajadas paralelas não passam); pedidos 30/h e endereços 60/h por usuário; no máximo 20 pedidos pendentes por conta. **Limites por IP só existem se `IP_HEADER_CONFIAVEL` estiver definido** (nome do cabeçalho que o seu proxy/CDN confiável define). Sem isso, qualquer cabeçalho de IP viria do cliente e seria forjável, então é ignorado, e o login fica limitado só por conta (quem erra 8 vezes pode travar a conta de outra pessoa por 15 min; mitigue com CAPTCHA/e-mail se virar problema). Consultas de CEP: no máximo 4 simultâneas, com cache.
@@ -202,7 +231,8 @@ O caderno de produção com as contas feitas. Regras em `src/lib/producao.ts` (p
 
 ## O que ainda é simulado / pendente
 
-- **Pagamento:** PIX real pelo Mercado Pago (ver "Como o PIX funciona"); falta o teste com dinheiro de verdade. Devolução de valor é feita no painel do Mercado Pago. Os pedidos pendentes com PIX vencido não são cancelados sozinhos (o admin cancela).
+- **Pagamento:** InfinitePay (ver "Como o pagamento funciona"); falta a API Key e o ensaio com dinheiro de verdade, que confirma o formato real da API. Devolução de valor só pelo app InfinitePay. Os pedidos pendentes não são cancelados sozinhos: depois de 48 h eles só "expiram" (não abrem link novo). Quando houver estoque de potes, a expiração precisa virar um status de verdade, para devolver a reserva.
+- **Avisos por e-mail** ("Recebemos seu pagamento", "Novo pedido pago"): dependem do SMTP. Até lá, a dona vê as vendas no app InfinitePay e no painel.
 - **Receita pela data de pagamento:** hoje usa a data de criação (como pedido). Para pagamento tardio/cancelamento retroativo, guardar `paidAt` e um histórico de status.
 - **Admin:** a ficha do pedido já tem API (`GET /api/admin/orders/[id]`); falta a tela (`/admin/orders/[id]`).
 - **Kits, etapa 2:** venda presencial com kit; editar o kit pelo carrinho; foto real da caixa; banner; baixa da caixa como insumo da Produção; mensagem de presente; vários tipos de kit (criar/excluir no painel). Peso da caixa (150 g) ainda provisório. As migrações dos kits (`20261021120000_kits` e `20261021130000_kits_sabores_permitidos`) ainda não foram aplicadas na produção.
@@ -213,6 +243,6 @@ O caderno de produção com as contas feitas. Regras em `src/lib/producao.ts` (p
 - **Logo:** recortado do painel de identidade, com o fundo removido (`public/marca/logo*.png`, 430 px de largura). Fica bom na tela, mas um arquivo vetorial (SVG/PDF) do logo deixaria tudo nítido em qualquer tamanho: substitua mantendo os caminhos de `logos` em `src/design-system.ts`.
 - **Fotos dos produtos:** Pimenta, Abacaxi com Pimenta, Abacaxi e Maracujá têm foto real (`public/produtos/<id>.jpg`); o Morango ainda usa uma ilustração no formato do rótulo (`public/produtos/morango-112g.svg`). Para trocar: recorte a foto em quadrado de 700 px (pote centralizado, com cerca de 62% da largura, como as outras), salve como `public/produtos/<id>.jpg`, inclua o id em `COM_FOTO` no `prisma/seed.ts` e rode `npm run db:seed`. Fotos originais recebidas ficam em `fotos-originais/`.
 - **Catálogo:** Pimenta (112g), Abacaxi com Pimenta (125g), Abacaxi (125g), Morango (112g) e Maracujá (125g), com o peso como no rótulo real. Morango ainda sem foto do rótulo: confirme o peso. **Preços provisórios** em `prisma/seed.ts`: ajuste para os reais. O id do produto leva o peso (`maracuja-125g`); se o peso mudar, troque o id também no banco (a FK de `order_items` tem `ON UPDATE CASCADE`).
-- **Login:** não há "Esqueci minha senha" (recuperação por e-mail) nem "Entrar com Google"; a referência visual tinha os dois. Precisam de envio de e-mail e de OAuth.
+- **Login:** não há "Entrar com Google" (precisa de OAuth). O e-mail de senha nova está pronto e desligado até haver SMTP.
 - **Limites de taxa e cache:** em memória (por instância). Com várias instâncias, use Redis/Upstash e `cacheHandlers` do Next para o cache de produtos.
 - **Fontes:** vêm do Google Fonts via `@import` no `globals.css`, como pedido. `next/font` as hospedaria localmente (mais rápido e sem requisição externa).
