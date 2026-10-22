@@ -22,6 +22,11 @@ export async function MenuUsuario() {
       <span className="hidden max-w-32 truncate sm:inline" title={usuario.email}>
         Olá, {usuario.nome.split(" ")[0]}
       </span>
+      {/* No celular, "Pedidos" (mais curto) para o cabeçalho caber em 360 px. */}
+      <Link href="/meus-pedidos" className="inline-flex min-h-11 items-center font-semibold text-secundaria underline-offset-2 hover:underline">
+        <span className="sm:hidden">Pedidos</span>
+        <span className="hidden sm:inline">Meus pedidos</span>
+      </Link>
       {usuario.isAdmin && (
         <Link href="/admin/dashboard" className="inline-flex min-h-11 items-center font-semibold text-secundaria underline-offset-2 hover:underline">
           Painel
