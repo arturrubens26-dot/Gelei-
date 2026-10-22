@@ -116,7 +116,13 @@ async function novoPedido(c) {
 const slugDe = (checkoutUrl) => new URL(checkoutUrl).pathname.split("/").pop();
 const cobrancas = (pedidoId) => sql("select * from pagamentos where order_id = $1 order by criado_em, id", [pedidoId]);
 const statusPedido = async (pedidoId) => (await sql("select status from orders where id = $1", [pedidoId]))[0]?.status;
-const tokenAviso = (ref) => createHmac("sha256", process.env.SESSION_SECRET).update(`infinitepay-aviso:${ref}`).digest("base64url");
+// O site usa INFINITEPAY_WEBHOOK_SECRET (se definida) ou o SESSION_SECRET: rode este script com o
+// mesmo INFINITEPAY_WEBHOOK_SECRET que o site recebeu.
+const SEGREDO_AVISO = process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() || process.env.SESSION_SECRET;
+const tokenCom = (segredo, ref) => createHmac("sha256", segredo).update(`infinitepay-aviso:${ref}`).digest("base64url");
+const tokenAviso = (ref) => tokenCom(SEGREDO_AVISO, ref);
+const avisar = (url, corpo) =>
+  fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: typeof corpo === "string" ? corpo : JSON.stringify(corpo) });
 
 async function main() {
   await banco.connect();
@@ -211,6 +217,9 @@ async function main() {
     await sql("update pagamentos set avisado_em = now() - interval '2 hours' where order_id = $1", [p3.pedido.id]);
     const s3b = await a.req("GET", `/api/orders/${p3.pedido.id}/pagamento`);
     confere(s3b.json?.etapa === "CONFIRMANDO", "divergência continua CONFIRMANDO depois da janela de 30 min", s3b.json?.etapa);
+    const resolve3 = await admin.req("PATCH", `/api/admin/orders/${p3.pedido.id}`, { corpo: { status: "PAGO" } });
+    const ficha3b = await admin.req("GET", `/api/admin/orders/${p3.pedido.id}`);
+    confere(resolve3.status === 200 && ficha3b.json?.pedido?.pagamento === null, "a dona marca PAGO: o alerta de divergência some", ficha3b.json?.pedido?.pagamento);
 
     console.log("5. IDOR, CSRF e retorno sem sessão");
     const idorGet = await b.req("GET", `/api/orders/${p3.pedido.id}/pagamento`);
@@ -344,9 +353,9 @@ async function main() {
       confere(r.status === 303 && (await statusPedido(alvo.pedido.id)) === "PENDENTE", `retorno ${t.rotulo}: continua PENDENTE`, r);
     }
     const [cAlvo] = await cobrancas(alvo.pedido.id);
-    confere(cAlvo.aviso_transacao_nsu === null && cAlvo.transacao_nsu === null, "banco: a transação da cliente não foi gravada", cAlvo);
+    confere(cAlvo.aviso_transacao_nsu === null && cAlvo.transacao_nsu === null && cAlvo.retorno_em !== null, "banco: a transação da cliente não foi gravada (só retorno_em)", cAlvo);
     const sAlvo = await a.req("GET", `/api/orders/${alvo.pedido.id}/pagamento`);
-    confere(sAlvo.json?.etapa === "PAGAR", "tela continua em PAGAR", sAlvo.json?.etapa);
+    confere(sAlvo.json?.etapa === "CONFIRMANDO" && sAlvo.json.pedidoStatus === "PENDENTE", "tela em CONFIRMANDO pelo retorno, sem confirmar nada", sAlvo.json);
     // O pagamento de verdade, pelo aviso, continua funcionando.
     const pgAlvo = await pagar({ slug: linkAlvo.slug, metodo: "pix" });
     confere(pgAlvo.aviso?.corpo?.resultado === "aprovado" && (await statusPedido(alvo.pedido.id)) === "PAGO", "o aviso de verdade confirma", pgAlvo.aviso);
@@ -385,17 +394,95 @@ async function main() {
 
     console.log("16. CONFIRMANDO numa cobrança que não é a última");
     const p16 = await novoPedido(a);
-    modo({ falharConferencia: 500 });
-    await pagar({ slug: slugDe(p16.pagamento.checkoutUrl), metodo: "pix" });
-    await sql("update pagamentos set expira_em = now() + interval '2 minutes', consultado_em = null where order_id = $1", [p16.pedido.id]);
+    await sql("update pagamentos set expira_em = now() + interval '2 minutes' where order_id = $1", [p16.pedido.id]);
     const novo16 = await a.req("POST", `/api/orders/${p16.pedido.id}/pagamento`, { corpo: {} });
     confere(novo16.status === 200 && (await cobrancas(p16.pedido.id)).length === 2, "abriu um segundo link", novo16.status);
+    modo({ falharConferencia: 500 });
+    await pagar({ slug: slugDe(p16.pagamento.checkoutUrl), metodo: "pix" }); // paga o PRIMEIRO link (ainda vale na InfinitePay)
     const s16 = await a.req("GET", `/api/orders/${p16.pedido.id}/pagamento`);
     confere(s16.json?.etapa === "CONFIRMANDO", "etapa CONFIRMANDO pela cobrança mais antiga com candidato", s16.json?.etapa);
+    const bloqueado16 = await a.req("POST", `/api/orders/${p16.pedido.id}/pagamento`, { corpo: {} });
+    confere(bloqueado16.status === 409 && /Não pague de novo/.test(bloqueado16.json?.erro ?? ""), "com aviso em conferência, não abre link novo", bloqueado16.json);
     modo({});
     await esperar(8_300);
     const s16b = await a.req("GET", `/api/orders/${p16.pedido.id}/pagamento`);
     confere(s16b.json?.etapa === "PAGO", "a tela reconfere essa cobrança e confirma", s16b.json?.etapa);
+
+    console.log("17. Aviso que não fecha há mais de 30 min: continua CONFIRMANDO e o painel alerta; marcar pago à mão");
+    const p17 = await novoPedido(a);
+    modo({ falharConferencia: 401 });
+    const pg17 = await pagar({ slug: slugDe(p17.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg17.aviso?.status === 400, "chave recusada (401) → aviso 400", pg17.aviso);
+    await sql("update pagamentos set avisado_em = now() - interval '40 minutes', consultado_em = null where order_id = $1", [p17.pedido.id]);
+    const s17 = await a.req("GET", `/api/orders/${p17.pedido.id}/pagamento`);
+    confere(s17.json?.etapa === "CONFIRMANDO", "depois de 30 min, continua CONFIRMANDO (não volta a PAGAR)", s17.json?.etapa);
+    const pagar17 = await a.req("POST", `/api/orders/${p17.pedido.id}/pagamento`, { corpo: {} });
+    confere(pagar17.status === 409, "não abre link novo", pagar17.status);
+    const ficha17 = await admin.req("GET", `/api/admin/orders/${p17.pedido.id}`);
+    confere(ficha17.json?.pedido?.pagamento?.alerta === "AVISO_NAO_CONFERIDO" && ficha17.json.pedido.expirado === false, "painel: AVISO_NAO_CONFERIDO", ficha17.json?.pedido?.pagamento);
+    const manual = await admin.req("PATCH", `/api/admin/orders/${p17.pedido.id}`, { corpo: { status: "PAGO" } });
+    confere(manual.status === 200 && /até 1 hora/.test(manual.json?.aviso ?? ""), "marcar PAGO à mão avisa do link aberto", manual.json);
+    confere((await cobrancas(p17.pedido.id)).every((c) => c.status !== "PENDENTE"), "marcar PAGO à mão encerra os links abertos");
+    modo({});
+    await esperar(3_100); // as reconferências acima reservaram a vez desta cobrança
+    const link17 = falsa.links.get(slugDe(p17.pagamento.checkoutUrl));
+    const tarde17 = await avisar(link17.webhook_url, pg17.corpoAviso);
+    const ficha17b = await admin.req("GET", `/api/admin/orders/${p17.pedido.id}`);
+    confere(tarde17.status === 200 && ficha17b.json?.pedido?.pagamento?.alerta === "CONFIRMADO_APOS_BAIXA_MANUAL", "confirmado depois: alerta CONFIRMADO_APOS_BAIXA_MANUAL", ficha17b.json?.pedido?.pagamento);
+
+    console.log("18. Retorno sem confirmação possível: segura CONFIRMANDO e o link novo por 30 min");
+    modo({ semOrderNsu: true });
+    const p18 = await novoPedido(a);
+    const pg18 = await pagar({ slug: slugDe(p18.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    const r18 = await a.req("GET", `/pagamento/retorno${new URL(pg18.retorno).search}`);
+    const [c18] = await cobrancas(p18.pedido.id);
+    confere(r18.status === 303 && c18.retorno_em !== null && c18.aviso_transacao_nsu === null && c18.status === "PENDENTE", "retorno grava só retorno_em", c18);
+    const s18 = await a.req("GET", `/api/orders/${p18.pedido.id}/pagamento`);
+    confere(s18.json?.etapa === "CONFIRMANDO" && s18.json.pedidoStatus === "PENDENTE", "CONFIRMANDO sem confirmar", s18.json);
+    const pagar18 = await a.req("POST", `/api/orders/${p18.pedido.id}/pagamento`, { corpo: {} });
+    confere(pagar18.status === 409 && /Aguarde/.test(pagar18.json?.erro ?? ""), "não abre link novo logo depois do retorno", pagar18.json);
+    await sql("update pagamentos set retorno_em = now() - interval '31 minutes' where order_id = $1", [p18.pedido.id]);
+    const s18b = await a.req("GET", `/api/orders/${p18.pedido.id}/pagamento`);
+    confere(s18b.json?.etapa === "PAGAR", "depois de 30 min sem aviso, volta a PAGAR", s18b.json?.etapa);
+    await esperar(3_100);
+    const aviso18 = await avisar(falsa.links.get(slugDe(p18.pagamento.checkoutUrl)).webhook_url, pg18.corpoAviso);
+    confere(aviso18.status === 200 && (await statusPedido(p18.pedido.id)) === "PAGO", "o aviso confirma", aviso18.status);
+    modo({});
+
+    console.log("19. Aviso com slug de outra fatura não apaga o candidato verdadeiro");
+    const p19 = await novoPedido(a);
+    const link19 = falsa.links.get(slugDe(p19.pagamento.checkoutUrl));
+    modo({ falharConferencia: 500 });
+    const pg19 = await pagar({ slug: link19.slug, metodo: "pix" });
+    const forjado = await avisar(link19.webhook_url, { transaction_nsu: "tx_forjada", invoice_slug: "fat_outra", order_nsu: link19.order_nsu });
+    const forjadoJson = await forjado.json();
+    const [c19] = await cobrancas(p19.pedido.id);
+    confere(forjado.status === 200 && forjadoJson.resultado === "slug-diferente" && c19.aviso_transacao_nsu === pg19.transaction_nsu, "ignorado antes de gravar; o candidato verdadeiro fica", { forjadoJson, c19: c19.aviso_transacao_nsu });
+    modo({});
+    await esperar(3_100);
+    const real19 = await avisar(link19.webhook_url, pg19.corpoAviso);
+    confere(real19.status === 200 && (await statusPedido(p19.pedido.id)) === "PAGO", "o verdadeiro confirma", real19.status);
+
+    console.log("20. Falha nossa no aviso responde 400 (a InfinitePay repete)");
+    const p20 = await novoPedido(a);
+    const link20 = falsa.links.get(slugDe(p20.pagamento.checkoutUrl));
+    const grande = await avisar(link20.webhook_url, JSON.stringify({ transaction_nsu: "tx", invoice_slug: link20.slug, lixo: "x".repeat(40_000) }));
+    confere(grande.status === 400, "corpo grande demais → 400 (não 413/500)", grande.status);
+    const ensaio = await avisar(`${BASE}/api/webhooks/infinitepay/ensaio-202610221200/ensaio`, "{}");
+    const ensaioRuim = await avisar(`${BASE}/api/webhooks/infinitepay/ensaio-x/ensaio`, "{}");
+    confere(ensaio.status === 400 && ensaioRuim.status === 401, "rota de ensaio: 400 só no formato ensaio-AAAAMMDDhhmm", [ensaio.status, ensaioRuim.status]);
+
+    console.log("21. Token do aviso com segredo próprio");
+    if (process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() && process.env.INFINITEPAY_WEBHOOK_SECRET.trim() !== process.env.SESSION_SECRET) {
+      const comSessao = await avisar(
+        `${BASE}/api/webhooks/infinitepay/${link20.order_nsu}/${tokenCom(process.env.SESSION_SECRET, link20.order_nsu)}`,
+        { transaction_nsu: "tx", invoice_slug: link20.slug },
+      );
+      confere(comSessao.status === 401, "token feito com o SESSION_SECRET → 401", comSessao.status);
+      confere(link20.webhook_url.endsWith(`/${tokenAviso(link20.order_nsu)}`), "o link leva o token do INFINITEPAY_WEBHOOK_SECRET");
+    } else {
+      console.log("  (pulado: rode com INFINITEPAY_WEBHOOK_SECRET diferente do SESSION_SECRET)");
+    }
 
     console.log("13. Meus pedidos e o teto de pendentes");
     const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);

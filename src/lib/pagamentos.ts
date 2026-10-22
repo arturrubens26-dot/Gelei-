@@ -27,9 +27,11 @@ import {
   JANELA_CONFIRMANDO_MS,
   MARCA_DIVERGENTE,
   VALIDADE_DO_LINK_MS,
+  MARCA_APOS_BAIXA_MANUAL,
   cobrancaDivergente,
   cobrancaParaEtapa,
   etapaDoPagamento,
+  retornoRecente,
   pagarAteDe,
   pedidoExpirado,
   type CobrancaDTO,
@@ -122,22 +124,41 @@ function candidatoGravado(p: Pagamento): Candidato | null {
 /** Para `cobrancaParaEtapa`: `avisadoEm` só conta com um candidato gravado. */
 const paraEtapa = (p: Pagamento) => ({ ...p, avisadoEm: candidatoGravado(p) ? p.avisadoEm : null });
 
+const maisNovasPrimeiro = (cobrancas: readonly Pagamento[]) =>
+  [...cobrancas].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime() || (a.id < b.id ? 1 : -1));
+
 /**
- * A cobrança mais recente com candidato gravado há menos de 30 min (não necessariamente a última
- * criada: a cliente pode ter aberto outro link depois de pagar). `null` se nenhuma.
+ * A cobrança mais recente com candidato do aviso ainda não resolvido, de qualquer idade (não
+ * necessariamente a última criada: a cliente pode ter aberto outro link depois de pagar). É a que
+ * a tela, o retorno e o "Pagar" reconferem. `null` se nenhuma.
  */
-function cobrancaEmConfirmacao(cobrancas: readonly Pagamento[], agora = Date.now()): Pagamento | null {
-  const maisNovasPrimeiro = [...cobrancas].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime() || (a.id < b.id ? 1 : -1));
-  const escolhida = cobrancaParaEtapa(maisNovasPrimeiro.map(paraEtapa), agora);
-  const original = escolhida && cobrancas.find((c) => c.id === escolhida.id);
-  return original && escolhida.avisadoEm && candidatoGravado(original) && (original.status === "PENDENTE" || original.status === "CANCELADO")
-    && agora - escolhida.avisadoEm.getTime() < JANELA_CONFIRMANDO_MS
-    ? original
-    : null;
+function cobrancaComAviso(cobrancas: readonly Pagamento[]): Pagamento | null {
+  return maisNovasPrimeiro(cobrancas).find((c) => (c.status === "PENDENTE" || c.status === "CANCELADO") && candidatoGravado(c)) ?? null;
+}
+
+/**
+ * Exigir que a resposta do payment_check traga o NOSSO order_nsu em TODA origem (aviso também), e
+ * não só na transação trazida pela cliente. Ligue (true) quando o ensaio com dinheiro real mostrar
+ * que a resposta traz `order_nsu` (README, "Ensaio com dinheiro real"). Com ela ligada, um "pago" sem
+ * order_nsu vindo do aviso vira divergência (a dona confere no app), nunca PAGO.
+ */
+export const EXIGIR_ORDER_NSU_NA_CONFERENCIA = false;
+
+/**
+ * Segredo do token do aviso: INFINITEPAY_WEBHOOK_SECRET (próprio, para poder trocar sem derrubar as
+ * sessões) ou, se ausente, o SESSION_SECRET. Trocar o segredo invalida o aviso dos links abertos (até
+ * 60 min); eles continuam pelo retorno, pela tela e pela confirmação manual.
+ */
+function segredoDoAviso(): string {
+  return process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() || process.env.SESSION_SECRET || "";
 }
 
 const MENSAGEM_DIVERGENCIA =
   "Recebemos um pagamento deste pedido que precisa ser conferido. Não pague de novo: fale com a loja no Instagram @ge.leio.";
+const MENSAGEM_AVISO_EM_CONFERENCIA =
+  "Recebemos o aviso do seu pagamento e estamos conferindo com a InfinitePay. Não pague de novo: se demorar, fale com a loja no Instagram @ge.leio.";
+const MENSAGEM_RETORNO_RECENTE =
+  "Você acabou de voltar da página de pagamento: estamos confirmando. Aguarde alguns minutos antes de tentar pagar de novo.";
 
 // --- confirmação (a única porta para PAGO) ----------------------------------------------------
 
@@ -283,11 +304,21 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
   const resultado = classificarConferencia(conferencia, valorCentavos, p.referenciaExterna);
   // A transação da cliente só vale se a RESPOSTA disser que é deste order_nsu (cenário: ela pagou outro
   // link da loja, de mesmo valor, e apresenta aquela transação aqui). Nada é gravado nem marcado.
-  if (daCliente && !conferenciaAmarrada(conferencia, p.referenciaExterna)) {
+  const amarrada = conferenciaAmarrada(conferencia, p.referenciaExterna);
+  if (daCliente && !amarrada) {
     if (resultado.tipo === "APROVADO" || resultado.tipo === "DIVERGENTE") {
       console.info(`[pagamentos] cobrança ${p.id}: transação do retorno sem order_nsu na conferência; aguarda o aviso`);
     }
     return "NAO_AMARRADO";
+  }
+  // Com a exigência ligada, nem o aviso confirma sem o order_nsu: vira divergência (conferir no app).
+  if (EXIGIR_ORDER_NSU_NA_CONFERENCIA && !amarrada && resultado.tipo === "APROVADO") {
+    console.error(`[pagamentos] cobrança ${p.id}: "pago" sem order_nsu na conferência; confira no app InfinitePay`);
+    await db.pagamento.updateMany({
+      where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
+      data: { statusGateway: `${MARCA_DIVERGENTE}sem-order-nsu` },
+    });
+    return "DIVERGENTE";
   }
   if (resultado.tipo === "INVALIDO") {
     if (daCliente) return "INVALIDO";
@@ -366,7 +397,10 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
         `${outrasAprovadas > 0 ? " e já pago por outra cobrança" : ""}: devolva o valor pelo app InfinitePay (o painel mostra o alerta).`,
     );
   } else {
-    console.info(`[pagamentos] cobrança ${p.id} confirmada; o pedido ${p.orderId} já estava ${pedido?.status ?? "?"} (marcado à mão?)`);
+    // A dona marcou PAGO à mão antes: o painel mostra CONFIRMADO_APOS_BAIXA_MANUAL para ela conferir
+    // no app se a cliente não pagou duas vezes (por fora e pelo site).
+    await db.pagamento.updateMany({ where: { id: p.id, status: "APROVADO" }, data: { statusGateway: MARCA_APOS_BAIXA_MANUAL } });
+    console.warn(`[pagamentos] cobrança ${p.id} confirmada depois de o pedido ${p.orderId} ser marcado ${pedido?.status ?? "?"} à mão`);
   }
   return "APROVADO";
 }
@@ -389,8 +423,7 @@ const PEDIDO_PARA_COBRAR = {
 
 /** URL do aviso com o token da cobrança no caminho. */
 function urlDoAviso(origem: string, referencia: string): string {
-  const segredo = process.env.SESSION_SECRET ?? "";
-  return `${origem}/api/webhooks/infinitepay/${referencia}/${tokenDoAviso(segredo, referencia)}`;
+  return `${origem}/api/webhooks/infinitepay/${referencia}/${tokenDoAviso(segredoDoAviso(), referencia)}`;
 }
 
 /**
@@ -413,12 +446,19 @@ export async function abrirLinkDePagamento(pedidoId: string, userId: string): Pr
   if (pedido.status !== "PENDENTE") throw new ErroNegocio(409, "Este pedido não está aguardando pagamento.");
   // Já entrou dinheiro com divergência: um link novo só faria a cliente pagar de novo.
   if (pedido.pagamentos.some(cobrancaDivergente)) throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA);
-  // Um aviso em conferência (em qualquer cobrança, não só na última): pode ser que já tenha sido pago.
-  const emAndamento = cobrancaEmConfirmacao(pedido.pagamentos);
-  if (emAndamento) {
-    const r = await confirmarCobranca(emAndamento, candidatoGravado(emAndamento)!, "gravado").catch(() => "TRANSITORIO" as const);
+  // Um aviso de pagamento não resolvido (em qualquer cobrança, de qualquer idade): reconfere; se não
+  // fechar, NÃO abre link novo (o dinheiro pode ter entrado). Só sai disso com o candidato recusado de
+  // vez, ou com a dona marcando pago ou cancelando.
+  const comAviso = cobrancaComAviso(pedido.pagamentos);
+  if (comAviso) {
+    const r = await confirmarCobranca(comAviso, candidatoGravado(comAviso)!, "gravado").catch(() => "TRANSITORIO" as const);
     if (r === "APROVADO") throw new ErroNegocio(409, "O pagamento deste pedido acabou de ser confirmado.");
     if (r === "DIVERGENTE") throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA);
+    if (r !== "INVALIDO") throw new ErroNegocio(409, MENSAGEM_AVISO_EM_CONFERENCIA);
+  }
+  // Voltou da InfinitePay há pouco: espera o aviso antes de abrir outro link.
+  if (pedido.pagamentos.some((c) => (c.status === "PENDENTE" || c.status === "CANCELADO") && retornoRecente(c.retornoEm))) {
+    throw new ErroNegocio(409, MENSAGEM_RETORNO_RECENTE);
   }
   if (pedidoExpirado(pedido.createdAt)) throw new ErroNegocio(409, "Este pedido expirou. Faça um novo pedido.");
   const gateway = gatewayAtivo();
@@ -469,18 +509,27 @@ export async function abrirLinkDePagamento(pedidoId: string, userId: string): Pr
   }
 
   try {
-    const registro = await db.pagamento.create({
-      data: {
-        orderId: pedido.id,
-        gateway,
-        referenciaExterna: referencia,
-        status: "PENDENTE",
-        statusGateway: "aberto",
-        valor: pedido.total,
-        checkoutUrl,
-        faturaSlug,
-        expiraEm,
-      },
+    // A criação do link levou até 10 s: o pedido pode ter sido cancelado ou marcado pago nesse meio
+    // tempo. A linha do pedido fica travada (FOR UPDATE) enquanto o link é gravado, então o
+    // cancelamento ou espera e encerra este link, ou já aconteceu e o link não é gravado.
+    const registro = await db.$transaction(async (tx) => {
+      const [atual] = await tx.$queryRaw<{ status: string }[]>`SELECT "status"::text AS "status" FROM "orders" WHERE "id" = ${pedido.id} FOR UPDATE`;
+      if (atual?.status !== "PENDENTE") {
+        throw new ErroNegocio(409, atual?.status === "CANCELADO" ? "Este pedido foi cancelado." : "Este pedido não está mais aguardando pagamento.");
+      }
+      return tx.pagamento.create({
+        data: {
+          orderId: pedido.id,
+          gateway,
+          referenciaExterna: referencia,
+          status: "PENDENTE",
+          statusGateway: "aberto",
+          valor: pedido.total,
+          checkoutUrl,
+          faturaSlug,
+          expiraEm,
+        },
+      });
     });
     console.info(`[pagamentos] link ${registro.id} aberto para o pedido ${pedido.id} (${gateway}, ${referencia})`);
     return paraCobrancaDTO(registro);
@@ -501,7 +550,7 @@ export type RespostaDoAviso = { status: 200 | 400 | 401; resultado: string };
 
 /** O token do caminho é o desta referência? (HMAC com o SESSION_SECRET; comparação em tempo constante.) */
 export function avisoAutentico(referencia: string, token: string): boolean {
-  return referencia.length <= 64 && conferirTokenDoAviso(process.env.SESSION_SECRET ?? "", referencia, token);
+  return referencia.length <= 64 && conferirTokenDoAviso(segredoDoAviso(), referencia, token);
 }
 
 /**
@@ -520,6 +569,11 @@ export async function processarAvisoDaInfinitePay(referencia: string, token: str
   const aviso = lerAviso(corpo, { origemLocal: origemDaApiDeTeste() });
   if (!aviso) return { status: 200, resultado: "sem-candidato" };
   if (aviso.referencia && aviso.referencia !== referencia) return { status: 200, resultado: "referencia-diferente" };
+  // Slug de outra fatura: recusado ANTES de gravar, para um aviso falso não tomar o lugar do verdadeiro.
+  if (p.faturaSlug && p.faturaSlug !== aviso.slug) {
+    console.warn(`[pagamentos] cobrança ${p.id}: aviso com slug de outra fatura, ignorado`);
+    return { status: 200, resultado: "slug-diferente" };
+  }
 
   p = await registrarCandidato(p, aviso);
   const r = await confirmarCobranca(p, aviso, "aviso");
@@ -549,6 +603,11 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
 
   if (p.status === "PENDENTE" || p.status === "CANCELADO") {
     try {
+      // A cliente diz que pagou: segura a tela em "confirmando" e o link novo por 30 min, sem
+      // confirmar nada (a transação da query não é gravada).
+      if (candidato) {
+        await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { retornoEm: new Date() } });
+      }
       const gravado = candidatoGravado(p);
       const r = gravado ? await confirmarCobranca(p, gravado, "gravado") : null;
       if (r !== "APROVADO" && r !== "DIVERGENTE" && candidato) {
@@ -587,7 +646,7 @@ function montarSituacao(pedido: NonNullable<Awaited<ReturnType<typeof lerSituaca
       gatewayAtivo: pagamentoOnlineDisponivel(),
       pedidoStatus: pedido.status,
       pedidoCriadoEm: pedido.createdAt,
-      ultimaCobranca: decide ? { status: decide.status, avisadoEm: decide.avisadoEm } : null,
+      ultimaCobranca: decide ? { status: decide.status, avisadoEm: decide.avisadoEm, retornoEm: decide.retornoEm } : null,
       pagamentoDivergente: pedido.pagamentos.some(cobrancaDivergente),
       agora,
     }),
@@ -609,7 +668,7 @@ export async function obterSituacaoPagamento(pedidoId: string, userId: string): 
 export async function situacaoComConferencia(pedidoId: string, userId: string): Promise<SituacaoPagamentoDTO | null> {
   let pedido = await lerSituacao(pedidoId, userId);
   if (!pedido) return null;
-  const emAndamento = cobrancaEmConfirmacao(pedido.pagamentos);
+  const emAndamento = cobrancaComAviso(pedido.pagamentos);
   if (pedido.status === "PENDENTE" && emAndamento && infinitePayConfigurado()) {
     try {
       await confirmarCobranca(emAndamento, candidatoGravado(emAndamento)!, "gravado");

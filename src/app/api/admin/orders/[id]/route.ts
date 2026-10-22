@@ -63,6 +63,19 @@ export const PATCH = comTratamento(
             "O pedido foi cancelado, mas não conseguimos encerrar o link de pagamento agora. Se a cliente pagar, " +
             "o pedido mostrará 'Pago após o cancelamento': devolva pelo app InfinitePay.";
         }
+      } else if (corpo.dados.status === "PAGO") {
+        // Marcado como pago à mão (plano C): os links abertos são encerrados no nosso banco. Se a
+        // cliente ainda pagar um deles (até 1 hora), o painel mostra "Confirmado após marcar como pago".
+        try {
+          const { linkAberto } = await encerrarCobrancasDoPedido(id);
+          if (linkAberto) {
+            aviso =
+              "Os links de pagamento abertos foram encerrados no site, mas ainda aceitam pagamento na InfinitePay por até 1 hora. " +
+              "Se a cliente pagar, o painel avisará: confira no app se ela não pagou duas vezes.";
+          }
+        } catch (e) {
+          registrarErro(`api/admin/orders ${id}: encerrar os links de pagamento falhou`, e);
+        }
       }
       return Response.json({ id, status: corpo.dados.status, ...(aviso ? { aviso } : {}) });
     }

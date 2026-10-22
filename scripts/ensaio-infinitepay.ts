@@ -2,9 +2,10 @@
  * Ensaio com DINHEIRO REAL na InfinitePay (não há sandbox), para confirmar o formato da API antes de
  * abrir a loja. Roda neste computador, no PowerShell, com a chave no .env só durante o ensaio:
  *
- *   npx tsx scripts/ensaio-infinitepay.ts criar 100
- *       cria um link de R$ 1,00 (order_nsu ensaio-<data>, vale 30 min, single_payment) e mostra o
- *       link para pagar, os NOMES dos campos da resposta, o host do link e se veio o slug.
+ *   npx tsx scripts/ensaio-infinitepay.ts criar 100 [--minutos 2..60] [--aviso]
+ *       cria um link de R$ 1,00 (order_nsu ensaio-<data>, vale 30 min ou --minutos, single_payment) e
+ *       mostra o link para pagar, os NOMES dos campos da resposta, o host do link e se veio o slug.
+ *       --aviso: manda o aviso para a rota de ensaio do site publicado (só log, responde 400).
  *   npx tsx scripts/ensaio-infinitepay.ts retorno "<endereço inteiro copiado da barra do navegador>"
  *       lê os parâmetros do retorno (order_nsu, transaction_nsu, slug...) e confere no payment_check.
  *   npx tsx scripts/ensaio-infinitepay.ts conferir <order_nsu> <transaction_nsu> <slug>
@@ -31,7 +32,8 @@ try {
 const API = origemDeTesteDe(process.env.INFINITEPAY_API_URL) ?? "https://api.checkout.infinitepay.io";
 const handle = process.env.INFINITEPAY_HANDLE?.trim() ?? "";
 const chave = process.env.INFINITEPAY_API_KEY?.trim() ?? "";
-const RETORNO_DO_ENSAIO = "https://geleio.netlify.app/?ensaio=1";
+const SITE_PUBLICADO = "https://geleio.netlify.app";
+const RETORNO_DO_ENSAIO = `${SITE_PUBLICADO}/?ensaio=1`;
 
 function sair(mensagem: string): never {
   console.error(mensagem);
@@ -70,19 +72,26 @@ async function chamar(caminho: string, corpo: unknown): Promise<{ status: number
   return { status: r.status, json };
 }
 
-async function criar(centavosTexto: string | undefined) {
+async function criar(centavosTexto: string | undefined, opcoes: string[]) {
   const centavos = Number(centavosTexto ?? "100");
   if (!Number.isInteger(centavos) || centavos < 100 || centavos > 5000) sair("Valor em centavos, de 100 (R$ 1,00) a 5000.");
+  const iMinutos = opcoes.indexOf("--minutos");
+  const minutos = iMinutos >= 0 ? Number(opcoes[iMinutos + 1]) : 30;
+  if (!Number.isInteger(minutos) || minutos < 2 || minutos > 60) sair("--minutos: de 2 a 60.");
   const agora = new Date();
   const orderNsu = `ensaio-${dataComFusoDeBrasilia(agora).slice(0, 16).replace(/\D/g, "")}`;
+  // --aviso: o aviso vai para o site publicado, numa rota de ensaio que só registra no log da Netlify e
+  // responde 400 (para ver se e quando a InfinitePay repete). Não grava nada no banco.
+  const urlAviso = opcoes.includes("--aviso") ? `${SITE_PUBLICADO}/api/webhooks/infinitepay/${orderNsu}/ensaio` : null;
   const corpo = {
     handle,
     order_nsu: orderNsu,
     items: [{ description: "Ensaio Geleiô (será devolvido)", quantity: 1, price: centavos }],
     redirect_url: RETORNO_DO_ENSAIO,
+    ...(urlAviso ? { webhook_url: urlAviso } : {}),
     options: {
       single_payment: true,
-      valid_until: dataComFusoDeBrasilia(new Date(agora.getTime() + 30 * 60_000)),
+      valid_until: dataComFusoDeBrasilia(new Date(agora.getTime() + minutos * 60_000)),
       assured_installments: 0,
       require_delivery_address: false,
       payment_methods_enabled: ["credit_card", "pix"],
@@ -99,7 +108,8 @@ async function criar(centavosTexto: string | undefined) {
     process.exit(1);
   }
   console.log(`\nO site reconheceu o link. Host: ${new URL(lido.url).host}. Slug na resposta: ${lido.slug ? "SIM" : "NÃO"}.`);
-  console.log(`\nAbra e pague (vale 30 min):\n${lido.url}\n`);
+  console.log(`order_nsu: ${orderNsu}${urlAviso ? `\nAviso de ensaio em: ${urlAviso}\n(procure "ensaio" na página de pagamento: esse endereço NÃO pode aparecer lá)` : ""}`);
+  console.log(`\nAbra e pague (vale ${minutos} min):\n${lido.url}\n`);
   console.log("Depois de pagar, clique em \"Continuar\": o navegador abre a loja com ?ensaio=1&... na barra de endereço.");
   console.log('Copie o endereço INTEIRO e rode:  npx tsx scripts/ensaio-infinitepay.ts retorno "<endereço>"');
 }
@@ -136,7 +146,7 @@ async function retorno(endereco?: string) {
 
 const [comando, ...args] = process.argv.slice(2);
 const acoes: Record<string, () => Promise<void>> = {
-  criar: () => criar(args[0]),
+  criar: () => criar(args[0], args.slice(1)),
   conferir: () => conferir(args[0], args[1], args[2]),
   retorno: () => retorno(args[0]),
 };

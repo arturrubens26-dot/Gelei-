@@ -56,6 +56,10 @@ export function validarAmbiente(): void {
   if (handle && chaveInfinitePay && !origemPublicaDe(process.env.APP_URL)) {
     console.warn("[ambiente] InfinitePay sem APP_URL válida (https): o pagamento pelo site fica desligado.");
   }
+  const segredoAviso = process.env.INFINITEPAY_WEBHOOK_SECRET?.trim();
+  if (segredoAviso !== undefined && segredoAviso !== "" && segredoAviso.length < 32) {
+    problemas.push("INFINITEPAY_WEBHOOK_SECRET curta demais (mínimo 32 caracteres aleatórios; sem ela, vale o SESSION_SECRET).");
+  }
   // O servidor falso dos testes nunca vale no site publicado (APP_URL https).
   if (process.env.INFINITEPAY_API_URL?.trim() && process.env.NODE_ENV === "production" && process.env.APP_URL?.trim().startsWith("https://")) {
     problemas.push("INFINITEPAY_API_URL é só para testes neste computador: remova-a do site publicado.");

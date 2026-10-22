@@ -1,6 +1,6 @@
 import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
-import { COBRANCAS_APROVADAS, CONTAR_DIVERGENTES, situacaoDoPagamentoNoPainel } from "@/lib/admin";
+import { COBRANCAS_DO_PAINEL, situacaoDoPagamentoNoPainel } from "@/lib/admin";
 import { db } from "@/lib/db";
 import type { ModoEntrega } from "@/lib/entrega-regras";
 import type { PagamentoAdminDTO } from "@/lib/pagamentos-regras";
@@ -60,8 +60,7 @@ export type PedidoAdminDetalheDTO = {
 const incluirFicha = {
   user: { select: { nome: true, email: true } },
   address: true,
-  pagamentos: COBRANCAS_APROVADAS,
-  _count: { select: CONTAR_DIVERGENTES },
+  pagamentos: COBRANCAS_DO_PAINEL,
   items: { orderBy: { productId: "asc" }, include: { product: { select: { nome: true, imagemUrl: true } } } },
   kits: {
     orderBy: { id: "asc" },

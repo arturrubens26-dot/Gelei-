@@ -11,13 +11,7 @@ import {
 } from "@/lib/despesas";
 import { codigoPedido } from "@/lib/formatacao";
 import type { ModoEntrega } from "@/lib/entrega-regras";
-import {
-  MARCA_DIVERGENTE,
-  PRAZO_PARA_PAGAR_MS,
-  pagamentoAdminDe,
-  pedidoExpirado,
-  type PagamentoAdminDTO,
-} from "@/lib/pagamentos-regras";
+import { PRAZO_PARA_PAGAR_MS, painelDoPagamento, type PagamentoAdminDTO } from "@/lib/pagamentos-regras";
 import { STATUS_PAGOS, transicoesPermitidas, type StatusPedido } from "@/lib/status";
 import { nomeDoCliente, type CanalPedido, type FormaPagamento } from "@/lib/vendas";
 
@@ -41,44 +35,55 @@ export type PedidoAdminDTO = {
   modoEntrega: ModoEntrega | null;
   /** WhatsApp da cliente (só dígitos; linkWhatsApp). Null na venda presencial e nos pedidos antigos. */
   telefone: string | null;
-  /** Pedido online PENDENTE com mais de 48 h: não abre mais link de pagamento (selo "Expirado"). */
+  /** Pedido online PENDENTE com mais de 48 h e nada em conferência: não abre mais link (selo "Expirado"). */
   expirado: boolean;
-  /** Pagamento pelo site (InfinitePay) já confirmado: método, parcelas, valor pago e alerta. Null sem cobrança aprovada. */
+  /**
+   * Pagamento pelo site (InfinitePay): método, parcelas e valor pago da cobrança aprovada, mais o
+   * `alerta` (ver AlertaPagamento). Sem cobrança aprovada, só com alerta: método, parcelas e valor
+   * nulos. Sem nada: null.
+   */
   pagamento: PagamentoAdminDTO | null;
 };
 
-/** Cobranças aprovadas do pedido, na ordem em que foram pagas (para `pagamentoAdminDe`). */
-export const COBRANCAS_APROVADAS = {
-  where: { status: "APROVADO" },
-  orderBy: [{ aprovadoEm: "asc" }, { id: "asc" }],
-  select: { metodo: true, parcelas: true, valorPago: true, aprovadoEm: true },
+/** Todas as cobranças do pedido (no máximo 10), só os campos que o painel usa: um select por lista, sem N+1. */
+export const COBRANCAS_DO_PAINEL = {
+  select: {
+    status: true,
+    statusGateway: true,
+    metodo: true,
+    parcelas: true,
+    valorPago: true,
+    aprovadoEm: true,
+    avisadoEm: true,
+    avisoTransacaoNsu: true,
+  },
 } satisfies Prisma.Order$pagamentosArgs;
 
-/** Contagem das cobranças pagas com divergência e não resolvidas (`_count` filtrado, sem consulta por pedido). */
-export const CONTAR_DIVERGENTES = {
-  pagamentos: { where: { status: { in: ["PENDENTE", "CANCELADO"] }, statusGateway: { startsWith: MARCA_DIVERGENTE } } },
-} satisfies Prisma.OrderCountOutputTypeSelect;
+type CobrancaLida = Prisma.PagamentoGetPayload<typeof COBRANCAS_DO_PAINEL>;
 
-/** `expirado` e `pagamento` do painel a partir do pedido, das cobranças aprovadas e das divergentes. */
+/** `expirado` e `pagamento` do painel (regra pura em `painelDoPagamento`). */
 export function situacaoDoPagamentoNoPainel(p: {
   canal: CanalPedido;
   status: StatusPedido;
   createdAt: Date;
   canceladoEm: Date | null;
-  pagamentos: { metodo: string | null; parcelas: number | null; valorPago: Prisma.Decimal | null; aprovadoEm: Date | null }[];
-  _count: { pagamentos: number };
+  pagamentos: CobrancaLida[];
 }): { expirado: boolean; pagamento: PagamentoAdminDTO | null } {
-  const divergente = p._count.pagamentos > 0;
-  return {
-    // Com pagamento divergente, o dinheiro entrou: não é "expirado", é "conferir".
-    expirado: p.canal === "ONLINE" && p.status === "PENDENTE" && !divergente && pedidoExpirado(p.createdAt),
-    pagamento: pagamentoAdminDe({
-      pedidoStatus: p.status,
-      canceladoEm: p.canceladoEm,
-      aprovadas: p.pagamentos.map((c) => ({ ...c, valorPago: c.valorPago?.toNumber() ?? null })),
-      divergente,
-    }),
-  };
+  return painelDoPagamento({
+    canal: p.canal,
+    pedidoStatus: p.status,
+    createdAt: p.createdAt,
+    canceladoEm: p.canceladoEm,
+    cobrancas: p.pagamentos.map((c) => ({
+      status: c.status,
+      statusGateway: c.statusGateway,
+      metodo: c.metodo,
+      parcelas: c.parcelas,
+      valorPago: c.valorPago?.toNumber() ?? null,
+      aprovadoEm: c.aprovadoEm,
+      avisadoEm: c.avisoTransacaoNsu ? c.avisadoEm : null,
+    })),
+  });
 }
 
 const POR_PAGINA = 50;
@@ -99,8 +104,8 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
       take: POR_PAGINA,
       include: {
         user: { select: { nome: true, email: true } },
-        _count: { select: { items: true, kits: true, ...CONTAR_DIVERGENTES } },
-        pagamentos: COBRANCAS_APROVADAS,
+        _count: { select: { items: true, kits: true } },
+        pagamentos: COBRANCAS_DO_PAINEL,
       },
     }),
     db.order.count({ where }),

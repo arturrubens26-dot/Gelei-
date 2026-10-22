@@ -228,6 +228,9 @@ model Pagamento {
   avisoTransacaoNsu String?       @map("aviso_transacao_nsu") @db.VarChar(100)
   avisoSlug         String?       @map("aviso_slug") @db.VarChar(100)
   avisadoEm         DateTime?     @map("avisado_em")
+  /// A dona do pedido voltou da InfinitePay por esta cobrança (retorno do navegador). Não confirma
+  /// nada: só segura a tela em "confirmando" e bloqueia link novo por 30 min, enquanto o aviso chega.
+  retornoEm         DateTime?     @map("retorno_em")
   /// "pix" ou "credit_card"; parcelas de 1 a 12; valor pago (com os juros do parcelado) em reais.
   metodo            String?       @db.VarChar(20)
   parcelas          Int?

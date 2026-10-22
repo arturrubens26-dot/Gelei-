@@ -468,7 +468,7 @@ export async function listarPedidosDoUsuario(userId: string): Promise<PedidoResu
       // Todas as cobranças (no máximo 10 por pedido): a etapa olha a mais recente COM candidato e a divergência.
       pagamentos: {
         orderBy: [{ criadoEm: "desc" }, { id: "desc" }],
-        select: { status: true, avisadoEm: true, avisoTransacaoNsu: true, statusGateway: true },
+        select: { status: true, avisadoEm: true, avisoTransacaoNsu: true, statusGateway: true, retornoEm: true },
       },
     },
   });
@@ -486,7 +486,7 @@ export async function listarPedidosDoUsuario(userId: string): Promise<PedidoResu
       // Mesma regra da página do pedido: "confirmando" só com um candidato gravado, na cobrança mais
       // recente que tenha um; e com pagamento divergente, nunca volta a "pagar".
       ultimaCobranca: cobrancaParaEtapa(
-        p.pagamentos.map((c) => ({ status: c.status, avisadoEm: c.avisoTransacaoNsu ? c.avisadoEm : null })),
+        p.pagamentos.map((c) => ({ status: c.status, avisadoEm: c.avisoTransacaoNsu ? c.avisadoEm : null, retornoEm: c.retornoEm })),
         agora,
       ),
       pagamentoDivergente: p.pagamentos.some(cobrancaDivergente),
