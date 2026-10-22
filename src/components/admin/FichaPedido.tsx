@@ -3,16 +3,54 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { LinkWhatsApp } from "@/components/admin/LinkWhatsApp";
+import { EXPLICACAO_ALERTA, ROTULO_ALERTA, SelosPagamento, type PagamentoDoPedidoAdmin } from "@/components/admin/SelosPagamento";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import { FotoDoPote } from "@/components/FotoDoPote";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { formatarBRL } from "@/lib/dinheiro";
 import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
+import { rotuloDoMetodo } from "@/lib/pagamentos-regras";
 import type { PedidoAdminDetalheDTO } from "@/lib/pedidos-admin";
 import { separarNome } from "@/lib/produtos-regras";
 import { ROTULO_CANAL, ROTULO_FORMA_PAGAMENTO } from "@/lib/vendas";
 
 const sabor = (nome: string) => separarNome(nome).sabor;
+
+/**
+ * Pagamento pelo site (InfinitePay): como a cliente pagou, quanto saiu do bolso dela (com os juros do
+ * parcelado) e, se for o caso, o dinheiro a devolver pelo app.
+ */
+function PagamentoOnline({ pedido }: { pedido: Pick<PedidoAdminDetalheDTO, "status" | "total"> & PagamentoDoPedidoAdmin }) {
+  const p = pedido.pagamento ?? null;
+  const metodo = p ? rotuloDoMetodo(p.metodo, p.parcelas) : null;
+  const situacao =
+    metodo ??
+    (pedido.status === "PENDENTE"
+      ? pedido.expirado
+        ? "Prazo para pagar terminou (48 h)"
+        : "Aguardando a cliente pagar"
+      : pedido.status === "CANCELADO"
+        ? "Não pago"
+        : "Pelo site (InfinitePay)");
+  return (
+    <div className="mt-4 flex flex-col gap-2 border-t border-accent2/60 pt-3 text-sm">
+      <p>
+        Pagamento: <strong>{situacao}</strong>
+      </p>
+      {p?.valorPago != null && p.valorPago > pedido.total && (
+        <p className="text-primaria/85">
+          A cliente pagou {formatarBRL(p.valorPago)}, com os juros do parcelamento.
+        </p>
+      )}
+      {p?.alerta && (
+        <p className="rounded-lg border-2 border-secundaria bg-secundaria/5 p-3 font-medium">
+          <strong className="block text-secundaria">{ROTULO_ALERTA[p.alerta]}</strong>
+          {EXPLICACAO_ALERTA[p.alerta]}
+        </p>
+      )}
+    </div>
+  );
+}
 const potes = (n: number) => `${n} ${n === 1 ? "pote" : "potes"}`;
 
 /**
@@ -21,7 +59,7 @@ const potes = (n: number) => `${n} ${n === 1 ? "pote" : "potes"}`;
  * valores. Os dados vêm de GET /api/admin/orders/[id], que confere o admin a cada chamada.
  */
 export function FichaPedido({ id }: { id: string }) {
-  const [pedido, setPedido] = useState<PedidoAdminDetalheDTO | null>(null);
+  const [pedido, setPedido] = useState<(PedidoAdminDetalheDTO & PagamentoDoPedidoAdmin) | null>(null);
   const [erro, setErro] = useState<{ id: string; mensagem: string } | null>(null);
   const [tentativa, setTentativa] = useState(0);
 
@@ -86,6 +124,7 @@ export function FichaPedido({ id }: { id: string }) {
             <span aria-hidden="true">·</span>
             <span>{ROTULO_CANAL[pedido.canal]}</span>
             <EtiquetaStatus status={pedido.status} />
+            <SelosPagamento status={pedido.status} expirado={pedido.expirado} pagamento={pedido.pagamento} />
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
@@ -257,6 +296,7 @@ export function FichaPedido({ id }: { id: string }) {
             <dt className="border-t border-accent2/60 pt-1 text-base font-bold">Total</dt>
             <dd className="border-t border-accent2/60 pt-1 text-right text-base font-bold tabular-nums">{formatarBRL(pedido.total)}</dd>
           </dl>
+          {pedido.canal === "ONLINE" && <PagamentoOnline pedido={pedido} />}
         </section>
       </div>
     </article>

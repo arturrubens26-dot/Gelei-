@@ -5,18 +5,20 @@ import { useEffect, useState } from "react";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import type { PedidoAdminDTO } from "@/lib/admin";
 import { LinkWhatsApp } from "@/components/admin/LinkWhatsApp";
+import { SelosPagamento, type PagamentoDoPedidoAdmin } from "@/components/admin/SelosPagamento";
 import { hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import { ROTULO_STATUS, codigoPedido, formatarDataHora } from "@/lib/formatacao";
 import { TODOS_STATUS, transicoesPermitidas, type StatusPedido } from "@/lib/status";
 import { ROTULO_CANAL, ROTULO_FORMA_PAGAMENTO, TODOS_CANAIS, type CanalPedido } from "@/lib/vendas";
 
-type Resposta = { pedidos: PedidoAdminDTO[]; total: number; pagina: number; porPagina: number };
+type PedidoDaLista = PedidoAdminDTO & PagamentoDoPedidoAdmin;
+type Resposta = { pedidos: PedidoDaLista[]; total: number; pagina: number; porPagina: number };
 type Filtro = StatusPedido | "TODOS";
 type FiltroCanal = CanalPedido | "TODOS";
 
 /** Rótulo do botão de cancelar: a venda presencial já entregue é "estornada" (lançamento errado). */
-function rotuloAcao(p: PedidoAdminDTO, destino: StatusPedido): string {
+function rotuloAcao(p: Pick<PedidoAdminDTO, "canal" | "status">, destino: StatusPedido): string {
   if (destino !== "CANCELADO" || p.canal !== "PRESENCIAL") return ACAO[destino];
   return p.status === "ENTREGUE" ? "Estornar venda" : "Cancelar venda";
 }
@@ -78,12 +80,22 @@ export function PedidosAdmin() {
   const erro = !carregando ? consulta?.erro : undefined;
   const totalPaginas = dados ? Math.max(1, Math.ceil(dados.total / dados.porPagina)) : 1;
 
-  async function alterar(pedido: PedidoAdminDTO, novo: StatusPedido) {
+  async function alterar(pedido: PedidoDaLista, novo: StatusPedido) {
     const pergunta =
       pedido.canal === "PRESENCIAL"
         ? `${rotuloAcao(pedido, novo)} ${codigoPedido(pedido.id)} (${formatarBRL(pedido.total)})? Ela sai do faturamento e isso não pode ser desfeito.`
-        : `Cancelar o pedido ${codigoPedido(pedido.id)}? Isso não pode ser desfeito.`;
+        : `Cancelar o pedido ${codigoPedido(pedido.id)}? Isso não pode ser desfeito. Se a cliente estiver com o link de pagamento aberto, ela ainda consegue pagar por até 1 hora: aí o pedido mostra "Pago após o cancelamento" e você devolve pelo app InfinitePay.`;
     if (novo === "CANCELADO" && !window.confirm(pergunta)) {
+      return;
+    }
+    // Pedido online marcado como pago à mão (a confirmação da InfinitePay não chegou): só com o dinheiro na conta.
+    if (
+      novo === "PAGO" &&
+      pedido.canal === "ONLINE" &&
+      !window.confirm(
+        `Marcar o pedido ${codigoPedido(pedido.id)} (${formatarBRL(pedido.total)}) como pago? Só marque como pago se o dinheiro já aparece no app InfinitePay.`,
+      )
+    ) {
       return;
     }
     setOcupado(pedido.id);
@@ -98,7 +110,7 @@ export function PedidosAdmin() {
       if (!resposta.ok) {
         setMensagem(json?.erro ?? "Não foi possível alterar o status.");
       } else {
-        // `aviso`: ao cancelar, o PIX do pedido já estava pago (ou não deu para cancelá-lo no Mercado Pago).
+        // `aviso`: ao cancelar, o pedido já tinha sido pago, ou o link de pagamento ainda vale (a InfinitePay não cancela link).
         setMensagem(
           `Pedido ${codigoPedido(pedido.id)} agora está como ${ROTULO_STATUS[novo]}.${json?.aviso ? ` Atenção: ${json.aviso}` : ""}`,
         );
@@ -258,7 +270,12 @@ export function PedidosAdmin() {
                   )}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums">{formatarBRL(p.total)}</td>
-                <td className="px-4 py-3"><EtiquetaStatus status={p.status} /></td>
+                <td className="px-4 py-3">
+                  <span className="flex flex-col items-start gap-1">
+                    <EtiquetaStatus status={p.status} />
+                    <SelosPagamento status={p.status} expirado={p.expirado} pagamento={p.pagamento} />
+                  </span>
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-col items-start gap-2">
                     {transicoesPermitidas(p.status, p.canal).length === 0 && <span className="text-xs text-primaria/70">—</span>}
