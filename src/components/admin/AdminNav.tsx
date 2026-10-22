@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/admin/dashboard", rotulo: "Dashboard" },
   { href: "/admin/orders", rotulo: "Pedidos" },
+  { href: "/admin/clientes", rotulo: "Clientes" },
   { href: "/admin/financial", rotulo: "Financeiro" },
   { href: "/admin/expenses", rotulo: "Despesas" },
   { href: "/admin/production", rotulo: "Produção" },
