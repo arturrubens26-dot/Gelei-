@@ -16,8 +16,6 @@ import {
 
 /** De quanto em quanto tempo a tela pergunta ao servidor (que confere na InfinitePay). */
 const INTERVALO_CONSULTA_MS = 5_000;
-/** Voltou da InfinitePay sem confirmação ainda: pergunta por 2 min antes de sossegar. */
-const ESPERA_DEPOIS_DO_RETORNO_MS = 2 * 60_000;
 /** Pagamento de demonstração (gateway simulado): "paga" sozinho depois desta contagem. */
 const SEGUNDOS_DA_SIMULACAO = 5;
 
@@ -49,21 +47,20 @@ function ehSituacao(json: unknown): json is SituacaoPagamentoDTO {
 type Props = {
   pedidoId: string;
   situacaoInicial: SituacaoPagamentoDTO;
-  /** Chegou de volta da InfinitePay (`?retorno=1`): a confirmação pode estar a caminho. */
-  voltouDoPagamento: boolean;
 };
 
 /**
  * Pagamento do pedido (página de confirmação), por etapa:
  * - PAGAR: botão que abre (ou reaproveita) o link e leva à página da InfinitePay (PIX ou cartão até
- *   12x). De volta de lá sem confirmação ainda, pergunta ao servidor a cada 5 s por 2 min;
- * - CONFIRMANDO: o retorno ou o aviso chegou e o servidor confere na InfinitePay; pergunta a cada 5 s,
- *   com a aba visível, por até 30 min;
+ *   12x). Pagamento a caminho (aviso não resolvido, retorno recente): o servidor responde 409 com
+ *   "Não pague de novo…" ou "Aguarde alguns minutos…", e a tela mostra o texto e passa a confirmar;
+ * - CONFIRMANDO: o servidor mantém a etapa enquanto há aviso não resolvido e por 30 min depois do
+ *   retorno da InfinitePay; a tela pergunta a cada 5 s, com a aba visível, por até 30 min;
  * - PAGO (com o método e o comprovante), EXPIRADO, CANCELADO e INDISPONIVEL: só informam.
  * DEMONSTRAÇÃO (gateway simulado): conta 5 s e "paga" sozinho. A mudança de etapa é anunciada
  * (aria-live) e a voltar pelo "voltar" do navegador (bfcache) a tela pergunta de novo.
  */
-export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }: Props) {
+export function StatusPagamento({ pedidoId, situacaoInicial }: Props) {
   const [situacao, setSituacao] = useState(situacaoInicial);
   // A página do servidor foi renderizada de novo (navegação, refresh): os dados dela são os mais novos.
   const [inicialAnterior, setInicialAnterior] = useState(situacaoInicial);
@@ -77,7 +74,8 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
   const [abrindo, setAbrindo] = useState(false);
   const [indoPagar, setIndoPagar] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
-  const [esperaEsgotada, setEsperaEsgotada] = useState<"RETORNO" | "CONFIRMANDO" | null>(null);
+  // "Confirmando" há mais de 30 min nesta tela: para de perguntar e orienta falar com a loja.
+  const [esperaEsgotada, setEsperaEsgotada] = useState(false);
   const [restante, setRestante] = useState(SEGUNDOS_DA_SIMULACAO);
   const simulou = useRef(false);
   const abrindoRef = useRef(false);
@@ -87,9 +85,9 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
   const { etapa, cobranca, pagarAte, pedidoStatus } = situacao;
   const simulado = cobranca?.gateway === "simulado";
   const simulando = etapa === "PAGAR" && simulado && cobranca?.status === "PENDENTE";
-  const esperandoRetorno = etapa === "PAGAR" && voltouDoPagamento && !simulado && esperaEsgotada === null && !passouPorConfirmando;
+  const demorando = etapa === "CONFIRMANDO" && esperaEsgotada;
   // Voltou a "pagar" depois de "confirmando" (a InfinitePay não confirmou), ou a espera acabou.
-  const semConfirmacao = (passouPorConfirmando && etapa === "PAGAR") || (etapa === "CONFIRMANDO" && esperaEsgotada === "CONFIRMANDO");
+  const semConfirmacao = (passouPorConfirmando && etapa === "PAGAR") || demorando;
 
   const consultar = useCallback(async () => {
     const numero = ++ultimaConsulta.current;
@@ -103,22 +101,21 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
     }
   }, [pedidoId]);
 
-  // Consulta periódica: "confirmando" (até 30 min) ou logo depois de voltar da InfinitePay (até 2 min).
-  const janela = etapa === "CONFIRMANDO" && esperaEsgotada !== "CONFIRMANDO" ? JANELA_CONFIRMANDO_MS : esperandoRetorno ? ESPERA_DEPOIS_DO_RETORNO_MS : 0;
-  const motivoDaJanela = etapa === "CONFIRMANDO" ? "CONFIRMANDO" : "RETORNO";
+  // Consulta periódica enquanto "confirmando" (até 30 min nesta tela).
+  const consultando = etapa === "CONFIRMANDO" && !esperaEsgotada;
   useEffect(() => {
-    if (!janela) return;
-    const fim = Date.now() + janela;
+    if (!consultando) return;
+    const fim = Date.now() + JANELA_CONFIRMANDO_MS;
     const repeticao = setInterval(() => {
       if (Date.now() >= fim) {
         clearInterval(repeticao);
-        setEsperaEsgotada(motivoDaJanela);
+        setEsperaEsgotada(true);
         return;
       }
       if (document.visibilityState === "visible") void consultar();
     }, INTERVALO_CONSULTA_MS);
     return () => clearInterval(repeticao);
-  }, [janela, motivoDaJanela, consultar]);
+  }, [consultando, consultar]);
 
   // Voltou para a aba, ou voltou da InfinitePay pelo "voltar" do navegador (página restaurada do
   // bfcache, ainda com "Levando você para o pagamento…"): pergunta de novo.
@@ -193,8 +190,7 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
     }
   }
 
-  const anuncio =
-    etapa === "CONFIRMANDO" && esperaEsgotada === "CONFIRMANDO"
+  const anuncio = demorando
       ? "A confirmação do pagamento está demorando. Não pague de novo."
       : semConfirmacao
         ? "Ainda não recebemos a confirmação do pagamento."
@@ -223,12 +219,6 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
         <div className="mt-4 flex flex-col gap-3 text-sm leading-relaxed">
           {etapa === "PAGAR" && (
             <>
-              {esperandoRetorno && (
-                <Quadro>
-                  <Rodinha />
-                  <span>Se você acabou de pagar, aguarde: a confirmação pode levar alguns minutos. Esta página se atualiza sozinha.</span>
-                </Quadro>
-              )}
               {semConfirmacao && <SemConfirmacao />}
               {simulando ? (
                 <p className="flex items-start gap-2 text-primaria/85">
@@ -251,7 +241,7 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
                       type="button"
                       onClick={pagar}
                       aria-disabled={abrindo || undefined}
-                      className={`${esperandoRetorno ? "btn-secundario" : "btn-primario"} aria-disabled:cursor-not-allowed aria-disabled:opacity-60`}
+                      className="btn-primario aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
                     >
                       {abrindo ? "Abrindo o pagamento…" : "Pagar com PIX ou cartão"}
                     </button>
@@ -263,7 +253,7 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
           )}
 
           {etapa === "CONFIRMANDO" &&
-            (esperaEsgotada === "CONFIRMANDO" ? (
+            (demorando ? (
               <SemConfirmacao demorando />
             ) : (
               <Quadro>

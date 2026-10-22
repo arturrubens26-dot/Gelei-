@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { LinkWhatsApp } from "@/components/admin/LinkWhatsApp";
-import { EXPLICACAO_ALERTA, ROTULO_ALERTA, SelosPagamento, type PagamentoDoPedidoAdmin } from "@/components/admin/SelosPagamento";
+import { ALERTA_INFORMATIVO, EXPLICACAO_ALERTA, ROTULO_ALERTA, SelosPagamento, type PagamentoDoPedidoAdmin } from "@/components/admin/SelosPagamento";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import { FotoDoPote } from "@/components/FotoDoPote";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
@@ -25,7 +25,7 @@ function PagamentoOnline({ pedido }: { pedido: Pick<PedidoAdminDetalheDTO, "stat
   const metodo = p ? rotuloDoMetodo(p.metodo, p.parcelas) : null;
   const situacao =
     metodo ??
-    (p?.alerta === "PAGO_COM_DIVERGENCIA"
+    (p?.alerta === "PAGO_COM_DIVERGENCIA" || p?.alerta === "AVISO_NAO_CONFERIDO"
       ? "A conferir no app InfinitePay"
       : pedido.status === "PENDENTE"
       ? pedido.expirado
@@ -45,8 +45,12 @@ function PagamentoOnline({ pedido }: { pedido: Pick<PedidoAdminDetalheDTO, "stat
         </p>
       )}
       {p?.alerta && (
-        <p className="rounded-lg border-2 border-secundaria bg-secundaria/5 p-3 font-medium">
-          <strong className="block text-secundaria">{ROTULO_ALERTA[p.alerta]}</strong>
+        <p
+          className={`rounded-lg border-2 p-3 font-medium ${
+            ALERTA_INFORMATIVO.has(p.alerta) ? "border-accent2 bg-accent2/10" : "border-secundaria bg-secundaria/5"
+          }`}
+        >
+          <strong className={`block ${ALERTA_INFORMATIVO.has(p.alerta) ? "text-primaria" : "text-secundaria"}`}>{ROTULO_ALERTA[p.alerta]}</strong>
           {EXPLICACAO_ALERTA[p.alerta]}
         </p>
       )}

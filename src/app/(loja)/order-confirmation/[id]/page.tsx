@@ -54,7 +54,7 @@ async function DadosDoPedido({ params, searchParams }: Pick<Props, "params" | "s
         </p>
       </header>
 
-      {situacao && <StatusPagamento pedidoId={pedido.id} situacaoInicial={situacao} voltouDoPagamento={voltouDoPagamento} />}
+      {situacao && <StatusPagamento pedidoId={pedido.id} situacaoInicial={situacao} />}
 
       <section aria-labelledby="titulo-itens" className="cartao p-5">
         <h2 id="titulo-itens" className="mb-3 text-2xl font-bold">

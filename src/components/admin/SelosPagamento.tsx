@@ -19,7 +19,12 @@ export const ROTULO_ALERTA: Record<AlertaPagamento, string> = {
   PAGO_APOS_CANCELAMENTO: "Pago após o cancelamento: devolver",
   PAGO_EM_DOBRO: "Pago em dobro: devolver",
   PAGO_COM_DIVERGENCIA: "Pago com divergência: conferir no app",
+  AVISO_NAO_CONFERIDO: "Aviso de pagamento recebido, não conferido: confira no app",
+  CONFIRMADO_APOS_BAIXA_MANUAL: "Pagamento do site confirmado depois de marcado como pago: confira se não pagou duas vezes",
 };
+
+/** Alertas só informativos: tom de aviso (Dourado), e não de erro (Carmesim). */
+export const ALERTA_INFORMATIVO: ReadonlySet<AlertaPagamento> = new Set<AlertaPagamento>(["CONFIRMADO_APOS_BAIXA_MANUAL"]);
 
 export const EXPLICACAO_ALERTA: Record<AlertaPagamento, string> = {
   PAGO_APOS_CANCELAMENTO:
@@ -27,6 +32,10 @@ export const EXPLICACAO_ALERTA: Record<AlertaPagamento, string> = {
   PAGO_EM_DOBRO: "Este pedido recebeu dois pagamentos. Confira no app InfinitePay e devolva um deles por lá.",
   PAGO_COM_DIVERGENCIA:
     "A InfinitePay informou um pagamento, mas o valor, o método ou as parcelas não conferem, e o pedido continua pendente. Confira no app InfinitePay: se estiver tudo certo, marque o pedido como pago.",
+  AVISO_NAO_CONFERIDO:
+    "A InfinitePay avisou um pagamento, mas a conferência não fecha há mais de 30 minutos. Confira no app InfinitePay: se o dinheiro entrou, marque o pedido como pago; se não, cancele.",
+  CONFIRMADO_APOS_BAIXA_MANUAL:
+    "O pedido foi marcado como pago à mão e depois a InfinitePay confirmou um pagamento pelo site. Confira no app se a cliente não pagou duas vezes; se pagou, devolva um deles por lá.",
 };
 
 const selo = "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold";
@@ -49,7 +58,11 @@ export function SelosPagamento({ status, expirado, pagamento }: { status: Status
       )}
       {metodo && <span className={`${selo} border-accent3 bg-accent3/15 text-primaria`}>{metodo}</span>}
       {alerta && (
-        <span className={`${selo} border-secundaria bg-secundaria font-bold text-destaque`}>
+        <span
+          className={`${selo} font-bold ${
+            ALERTA_INFORMATIVO.has(alerta) ? "border-accent2 bg-accent2/25 text-primaria" : "border-secundaria bg-secundaria text-destaque"
+          }`}
+        >
           <span aria-hidden="true" className="mr-1">!</span>
           {ROTULO_ALERTA[alerta]}
         </span>
