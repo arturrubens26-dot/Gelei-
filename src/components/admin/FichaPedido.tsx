@@ -25,7 +25,9 @@ function PagamentoOnline({ pedido }: { pedido: Pick<PedidoAdminDetalheDTO, "stat
   const metodo = p ? rotuloDoMetodo(p.metodo, p.parcelas) : null;
   const situacao =
     metodo ??
-    (pedido.status === "PENDENTE"
+    (p?.alerta === "PAGO_COM_DIVERGENCIA"
+      ? "A conferir no app InfinitePay"
+      : pedido.status === "PENDENTE"
       ? pedido.expirado
         ? "Prazo para pagar terminou (48 h)"
         : "Aguardando a cliente pagar"

@@ -193,7 +193,12 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
     }
   }
 
-  const anuncio = semConfirmacao ? "Ainda não recebemos a confirmação do pagamento." : ANUNCIO[etapa];
+  const anuncio =
+    etapa === "CONFIRMANDO" && esperaEsgotada === "CONFIRMANDO"
+      ? "A confirmação do pagamento está demorando. Não pague de novo."
+      : semConfirmacao
+        ? "Ainda não recebemos a confirmação do pagamento."
+        : ANUNCIO[etapa];
 
   return (
     <section aria-labelledby="titulo-pagamento" className="cartao p-5">
@@ -259,7 +264,7 @@ export function StatusPagamento({ pedidoId, situacaoInicial, voltouDoPagamento }
 
           {etapa === "CONFIRMANDO" &&
             (esperaEsgotada === "CONFIRMANDO" ? (
-              <SemConfirmacao />
+              <SemConfirmacao demorando />
             ) : (
               <Quadro>
                 <Rodinha />
@@ -334,10 +339,17 @@ function Pago({ pedidoStatus, cobranca }: { pedidoStatus: SituacaoPagamentoDTO["
   );
 }
 
-function SemConfirmacao() {
+/**
+ * `demorando`: ainda em "confirmando" depois de 30 min (inclusive pagamento que a loja precisa
+ * conferir à mão): não pagar de novo. Sem ele: voltou a "pagar" sem a InfinitePay confirmar.
+ */
+function SemConfirmacao({ demorando = false }: { demorando?: boolean }) {
   return (
     <p className="rounded-lg border-2 border-secundaria bg-white p-3 font-medium">
-      Ainda não recebemos a confirmação. Se você pagou, fale com a gente no Instagram <LinkInstagram />.
+      {demorando
+        ? "A confirmação está demorando mais que o normal. Não pague de novo: fale com a gente no Instagram "
+        : "Ainda não recebemos a confirmação. Se você pagou, fale com a gente no Instagram "}
+      <LinkInstagram />.
     </p>
   );
 }

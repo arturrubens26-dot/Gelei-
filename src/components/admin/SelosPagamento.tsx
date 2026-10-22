@@ -11,16 +11,22 @@ export type PagamentoDoPedidoAdmin = {
   pagamento?: PagamentoAdminDTO | null;
 };
 
-/** Dinheiro que entrou e precisa voltar para a cliente pelo app InfinitePay. */
+/**
+ * Dinheiro que precisa da dona: devolver pelo app InfinitePay (pago após o cancelamento, em dobro) ou
+ * conferir no app antes de marcar como pago (divergência de valor, método ou parcelas).
+ */
 export const ROTULO_ALERTA: Record<AlertaPagamento, string> = {
   PAGO_APOS_CANCELAMENTO: "Pago após o cancelamento: devolver",
   PAGO_EM_DOBRO: "Pago em dobro: devolver",
+  PAGO_COM_DIVERGENCIA: "Pago com divergência: conferir no app",
 };
 
 export const EXPLICACAO_ALERTA: Record<AlertaPagamento, string> = {
   PAGO_APOS_CANCELAMENTO:
     "A cliente pagou depois que o pedido foi cancelado. Confira no app InfinitePay e devolva o valor por lá.",
   PAGO_EM_DOBRO: "Este pedido recebeu dois pagamentos. Confira no app InfinitePay e devolva um deles por lá.",
+  PAGO_COM_DIVERGENCIA:
+    "A InfinitePay informou um pagamento, mas o valor, o método ou as parcelas não conferem, e o pedido continua pendente. Confira no app InfinitePay: se estiver tudo certo, marque o pedido como pago.",
 };
 
 const selo = "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold";
