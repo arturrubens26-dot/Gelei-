@@ -1,0 +1,347 @@
+// Teste ponta a ponta do pagamento pela InfinitePay, contra a InfinitePay FALSA (testes/infinitepay-falso.mjs).
+//
+// 1. Banco local ligado (npm run db:dev). NUNCA rode contra o Neon: o script recusa host que não seja local.
+// 2. Suba o site com a InfinitePay falsa (PowerShell):
+//      $env:PAGAMENTOS_SIMULADOS='false'; $env:INFINITEPAY_HANDLE='geleio'; $env:INFINITEPAY_API_KEY='inchk_falsa_e2e'
+//      $env:INFINITEPAY_API_URL='http://127.0.0.1:4010'; $env:APP_URL='http://localhost:3100'
+//      $env:IP_HEADER_CONFIAVEL='x-forwarded-for'; npx next dev -p 3100      (ou next start, depois do build)
+// 3. node testes/infinitepay-e2e.mjs        (este script sobe a InfinitePay falsa na porta 4010)
+//
+// O admin vem de E2E_ADMIN_EMAIL / E2E_ADMIN_SENHA ou do ACESSO-LOCAL.txt. Tudo o que o teste cria
+// (contas e-mail e2e-infinitepay-*, pedidos e cobranças delas) é apagado no fim, mesmo se falhar.
+import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { iniciarInfinitePayFalsa } from "./infinitepay-falso.mjs";
+
+const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BASE = process.env.E2E_BASE ?? "http://localhost:3100";
+process.loadEnvFile(path.join(RAIZ, ".env"));
+const { Client } = createRequire(import.meta.url)(path.join(RAIZ, "node_modules", "pg"));
+
+const urlBanco = new URL(process.env.DATABASE_URL);
+if (!["localhost", "127.0.0.1"].includes(urlBanco.hostname)) {
+  console.error("Recusado: a DATABASE_URL do .env não é o banco local.");
+  process.exit(2);
+}
+const banco = new Client({ connectionString: process.env.DATABASE_URL });
+const sql = async (texto, valores = []) => (await banco.query(texto, valores)).rows;
+
+let ok = 0;
+let falhas = 0;
+function confere(condicao, rotulo, extra) {
+  if (condicao) {
+    ok++;
+    console.log(`  ok   ${rotulo}`);
+  } else {
+    falhas++;
+    console.log(`  FALHA ${rotulo}${extra === undefined ? "" : ` → ${JSON.stringify(extra).slice(0, 400)}`}`);
+  }
+}
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- cliente HTTP com cookie ------------------------------------------------------------------
+let ipSeq = 10;
+function cliente() {
+  let cookie = "";
+  const ip = `10.77.0.${ipSeq++}`;
+  return {
+    async req(metodo, caminho, { corpo, cabecalhos = {}, seguir = false } = {}) {
+      const r = await fetch(BASE + caminho, {
+        method: metodo,
+        redirect: seguir ? "follow" : "manual",
+        headers: {
+          ...(corpo !== undefined ? { "Content-Type": "application/json" } : {}),
+          ...(cookie ? { Cookie: cookie } : {}),
+          "X-Forwarded-For": ip,
+          ...cabecalhos,
+        },
+        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+      });
+      for (const c of r.headers.getSetCookie?.() ?? []) {
+        const [par] = c.split(";");
+        if (par.includes("sessao")) cookie = par.endsWith("=") ? "" : par;
+      }
+      const texto = await r.text();
+      let json = null;
+      try {
+        json = JSON.parse(texto);
+      } catch {
+        // não é JSON (redirecionamento, HTML)
+      }
+      return { status: r.status, json, local: r.headers.get("location") };
+    },
+  };
+}
+
+const marca = Date.now().toString(36);
+const contas = [];
+const pedidos = [];
+
+async function novaConta(rotulo) {
+  const c = cliente();
+  const email = `e2e-infinitepay-${marca}-${rotulo}@teste.local`;
+  const r = await c.req("POST", "/api/auth/register", { corpo: { nome: `E2E ${rotulo}`, email, senha: "Senha-E2E-123" } });
+  if (r.status !== 201 && r.status !== 200) throw new Error(`cadastro ${rotulo}: ${r.status} ${JSON.stringify(r.json)}`);
+  const [u] = await sql("select id from users where email = $1", [email]);
+  contas.push(u.id);
+  return c;
+}
+
+function credenciaisAdmin() {
+  if (process.env.E2E_ADMIN_EMAIL && process.env.E2E_ADMIN_SENHA) return { email: process.env.E2E_ADMIN_EMAIL, senha: process.env.E2E_ADMIN_SENHA };
+  const texto = readFileSync(path.join(RAIZ, "ACESSO-LOCAL.txt"), "utf8");
+  const bloco = texto.slice(texto.indexOf("LOGIN DO ADMINISTRADOR"));
+  const email = /E-mail \.+\s*(\S+)/.exec(bloco)?.[1];
+  const senha = /Senha \.+\s*(\S+)/.exec(bloco)?.[1];
+  if (!email || !senha) throw new Error("admin: defina E2E_ADMIN_EMAIL e E2E_ADMIN_SENHA");
+  return { email, senha };
+}
+
+let produto;
+async function novoPedido(c) {
+  const r = await c.req("POST", "/api/orders", {
+    corpo: { itens: [{ productId: produto, quantidade: 2 }], modoEntrega: "RETIRADA", telefone: "(86) 99999-1234" },
+    cabecalhos: { "Idempotency-Key": `e2e-${marca}-${pedidos.length}-${Math.random().toString(36).slice(2, 8)}` },
+  });
+  if (r.status !== 201) throw new Error(`pedido: ${r.status} ${JSON.stringify(r.json)}`);
+  pedidos.push(r.json.pedido.id);
+  return r.json;
+}
+
+const slugDe = (checkoutUrl) => new URL(checkoutUrl).pathname.split("/").pop();
+const cobrancas = (pedidoId) => sql("select * from pagamentos where order_id = $1 order by criado_em, id", [pedidoId]);
+const statusPedido = async (pedidoId) => (await sql("select status from orders where id = $1", [pedidoId]))[0]?.status;
+const tokenAviso = (ref) => createHmac("sha256", process.env.SESSION_SECRET).update(`infinitepay-aviso:${ref}`).digest("base64url");
+
+async function main() {
+  await banco.connect();
+  const falsa = await iniciarInfinitePayFalsa({ porta: 4010, silencioso: true });
+  const pagar = (corpo) => falsa.pagar(corpo);
+  const modo = (m) => Object.assign(falsa.modo, { falharConferencia: 0, falharLinks: 0, semSlug: false, naoAmarraPedido: false }, m);
+
+  try {
+    const produtos = await cliente().req("GET", "/api/products");
+    produto = (produtos.json?.produtos ?? produtos.json)?.find?.((p) => p.ativo !== false)?.id;
+    if (!produto) throw new Error(`sem produto ativo: ${JSON.stringify(produtos.json).slice(0, 200)}`);
+
+    const a = await novaConta("a");
+    const b = await novaConta("b");
+    const admin = cliente();
+    const login = await admin.req("POST", "/api/auth/login", { corpo: credenciaisAdmin() });
+    if (login.status !== 200) throw new Error(`login admin: ${login.status}`);
+
+    console.log("1. PIX confirmado pelo aviso");
+    const p1 = await novoPedido(a);
+    confere(p1.pagamento?.gateway === "infinitepay" && p1.pagamento.checkoutUrl?.startsWith(falsa.origem), "pedido abre o link", p1.pagamento);
+    confere(p1.pagamento?.status === "PENDENTE" && p1.pagamento.metodo === null, "cobrança pendente, sem método");
+    const link1 = falsa.links.get(slugDe(p1.pagamento.checkoutUrl));
+    confere(link1.amount === Math.round(p1.pedido.total * 100) && link1.single_payment && /-03:00$/.test(link1.valid_until), "link: valor, single_payment e validade com fuso", link1);
+    confere(link1.webhook_url.startsWith(`${BASE}/api/webhooks/infinitepay/ped-${p1.pedido.id}-1/`), "webhook com referência e token no caminho");
+    const pg1 = await pagar({ slug: link1.slug, metodo: "pix" });
+    confere(pg1.aviso?.status === 200 && pg1.aviso.corpo?.resultado === "aprovado", "aviso → 200 aprovado", pg1.aviso);
+    const s1 = await a.req("GET", `/api/orders/${p1.pedido.id}/pagamento`);
+    confere(s1.json?.etapa === "PAGO" && s1.json.pedidoStatus === "PAGO", "etapa PAGO", s1.json);
+    confere(s1.json?.cobranca?.metodo === "pix" && s1.json.cobranca.parcelas === 1 && s1.json.cobranca.valorPago === p1.pedido.total, "método, parcelas e valor pago");
+    confere(s1.json?.cobranca?.comprovanteUrl?.startsWith(`${falsa.origem}/recibo/`) && s1.json.cobranca.checkoutUrl === null, "comprovante e sem link");
+    const rep = await fetch(link1.webhook_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pg1.corpoAviso) });
+    confere(rep.status === 200 && (await rep.json()).resultado === "ja-aprovada", "aviso repetido → 200 ja-aprovada");
+    const [c1] = await cobrancas(p1.pedido.id);
+    confere(c1.transacao_nsu === pg1.transaction_nsu && c1.aviso_transacao_nsu === null && c1.status === "APROVADO", "banco: transação gravada, candidato limpo");
+    const pago = await a.req("POST", `/api/orders/${p1.pedido.id}/pagamento`, { corpo: {} });
+    confere(pago.status === 409, "POST pagamento de pedido pago → 409", pago);
+
+    console.log("2. Cartão 3x com juros confirmado pelo retorno (sem aviso)");
+    const p2 = await novoPedido(a);
+    const pg2 = await pagar({ slug: slugDe(p2.pagamento.checkoutUrl), metodo: "credit_card", parcelas: 3, aviso: false });
+    const ret = new URL(pg2.retorno);
+    const r2 = await a.req("GET", `/pagamento/retorno${ret.search}`);
+    confere(r2.status === 303 && r2.local === `${BASE}/order-confirmation/${p2.pedido.id}?retorno=1`, "retorno → 303 para a confirmação limpa", r2);
+    const s2 = await a.req("GET", `/api/orders/${p2.pedido.id}/pagamento`);
+    confere(s2.json?.etapa === "PAGO" && s2.json.cobranca.parcelas === 3 && s2.json.cobranca.valorPago > s2.json.cobranca.valor, "PAGO com valor pago maior (juros)", s2.json?.cobranca);
+
+    console.log("3. Aviso sem token, token errado e aviso falso");
+    const p3 = await novoPedido(a);
+    const link3 = falsa.links.get(slugDe(p3.pagamento.checkoutUrl));
+    const ref3 = `ped-${p3.pedido.id}-1`;
+    const semToken = await fetch(`${BASE}/api/webhooks/infinitepay/${ref3}`, { method: "POST", body: "{}" });
+    confere(semToken.status === 404 || semToken.status === 405, "sem token no caminho → rota não existe", semToken.status);
+    const tokenErrado = await fetch(`${BASE}/api/webhooks/infinitepay/${ref3}/${"A".repeat(43)}`, {
+      method: "POST",
+      body: JSON.stringify({ transaction_nsu: "tx_x", invoice_slug: link3.slug }),
+    });
+    confere(tokenErrado.status === 401, "token errado → 401", tokenErrado.status);
+    const outroToken = await fetch(`${BASE}/api/webhooks/infinitepay/${ref3}/${tokenAviso(`ped-${p1.pedido.id}-1`)}`, {
+      method: "POST",
+      body: JSON.stringify({ transaction_nsu: "tx_x", invoice_slug: link3.slug }),
+    });
+    confere(outroToken.status === 401, "token de outra cobrança → 401", outroToken.status);
+    confere((await cobrancas(p3.pedido.id))[0].aviso_transacao_nsu === null, "banco: nada gravado");
+    const falso = await pagar({ slug: link3.slug, metodo: "pix", avisoFalso: true });
+    confere(falso.aviso?.status === 200 && falso.aviso.corpo?.resultado === "invalido", "aviso com transação inexistente → 200 invalido", falso.aviso);
+    const [c3] = await cobrancas(p3.pedido.id);
+    confere((await statusPedido(p3.pedido.id)) === "PENDENTE" && c3.aviso_transacao_nsu === null && c3.status === "PENDENTE", "continua PENDENTE e o candidato foi apagado", c3);
+    const desconhecida = await fetch(`${BASE}/api/webhooks/infinitepay/ped-naoexiste${marca}-1/${tokenAviso(`ped-naoexiste${marca}-1`)}`, {
+      method: "POST",
+      body: JSON.stringify({ transaction_nsu: "tx_x", invoice_slug: "s" }),
+    });
+    confere(desconhecida.status === 200 && (await desconhecida.json()).resultado === "desconhecida", "cobrança desconhecida com token certo → 200 sem efeito");
+
+    console.log("4. Valor diferente");
+    await esperar(3_100); // o aviso anterior reservou a vez desta cobrança por 3 s
+    const errado = await pagar({ slug: link3.slug, metodo: "pix", valorErrado: true });
+    confere(errado.aviso?.status === 200 && errado.aviso.corpo?.resultado === "divergente", "aviso → 200 divergente", errado.aviso);
+    const [c3b] = await cobrancas(p3.pedido.id);
+    confere((await statusPedido(p3.pedido.id)) === "PENDENTE" && c3b.status_gateway === "divergente:valor" && c3b.transacao_nsu === null, "NÃO vira PAGO; marca divergente:valor", c3b);
+
+    console.log("5. IDOR, CSRF e retorno sem sessão");
+    const idorGet = await b.req("GET", `/api/orders/${p3.pedido.id}/pagamento`);
+    const idorPost = await b.req("POST", `/api/orders/${p3.pedido.id}/pagamento`, { corpo: {} });
+    confere(idorGet.status === 404 && idorPost.status === 404, "outra conta → 404 no GET e no POST", [idorGet.status, idorPost.status]);
+    const p5 = await novoPedido(a);
+    const link5 = falsa.links.get(slugDe(p5.pagamento.checkoutUrl));
+    const q5 = new URLSearchParams({ order_nsu: link5.order_nsu, transaction_nsu: "tx_forjada", slug: link5.slug });
+    const idorRet = await b.req("GET", `/pagamento/retorno?${q5}`);
+    confere(idorRet.status === 303 && idorRet.local === `${BASE}/meus-pedidos`, "retorno de outra conta → /meus-pedidos", idorRet);
+    const semSessao = await cliente().req("GET", `/pagamento/retorno?${q5}`);
+    confere(semSessao.status === 303 && semSessao.local === `${BASE}/order-confirmation/${p5.pedido.id}?retorno=1`, "retorno sem sessão → confirmação (pede login)", semSessao);
+    confere((await cobrancas(p5.pedido.id))[0].aviso_transacao_nsu === null, "banco: nenhum candidato gravado por outra conta ou sem sessão");
+    const desconhecido = await a.req("GET", "/pagamento/retorno?order_nsu=ped-x-1&transaction_nsu=t&slug=s");
+    confere(desconhecido.status === 303 && desconhecido.local === `${BASE}/meus-pedidos`, "retorno de referência desconhecida → /meus-pedidos");
+    const csrf = await a.req("POST", `/api/orders/${p5.pedido.id}/pagamento`, { corpo: {}, cabecalhos: { Origin: "https://evil.example" } });
+    const csrf2 = await a.req("POST", `/api/orders/${p5.pedido.id}/pagamento`, { corpo: {}, cabecalhos: { "Sec-Fetch-Site": "cross-site" } });
+    confere(csrf.status === 403 && csrf2.status === 403, "CSRF → 403", [csrf.status, csrf2.status]);
+    const mesmo = await a.req("POST", `/api/orders/${p5.pedido.id}/pagamento`, { corpo: {} });
+    confere(mesmo.status === 200 && mesmo.json?.cobranca?.checkoutUrl === p5.pagamento.checkoutUrl, "POST com link valendo devolve o mesmo link", mesmo.json);
+
+    console.log("6. InfinitePay fora do ar: 400 para repetir, tela em CONFIRMANDO até voltar");
+    const p6 = await novoPedido(a);
+    modo({ falharConferencia: 500 });
+    const pg6 = await pagar({ slug: slugDe(p6.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg6.aviso?.status === 400 && pg6.aviso.corpo?.resultado === "transitorio", "aviso → 400 transitorio", pg6.aviso);
+    const s6 = await a.req("GET", `/api/orders/${p6.pedido.id}/pagamento`);
+    confere(s6.json?.etapa === "CONFIRMANDO", "etapa CONFIRMANDO", s6.json?.etapa);
+    modo({});
+    await esperar(8_300);
+    const s6b = await a.req("GET", `/api/orders/${p6.pedido.id}/pagamento`);
+    confere(s6b.json?.etapa === "PAGO", "a tela confirma quando a InfinitePay volta", s6b.json?.etapa);
+
+    console.log("7. Tempo esgotado no aviso e a repetição da InfinitePay");
+    const p7 = await novoPedido(a);
+    modo({ falharConferencia: "tempo" });
+    const inicio = Date.now();
+    const pg7 = await pagar({ slug: slugDe(p7.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg7.aviso?.status === 400 && Date.now() - inicio < 9_000, "aviso → 400 em ~5 s", { aviso: pg7.aviso, ms: Date.now() - inicio });
+    modo({});
+    await esperar(3_100);
+    const link7 = falsa.links.get(slugDe(p7.pagamento.checkoutUrl));
+    const repete = await fetch(link7.webhook_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pg7.corpoAviso) });
+    confere(repete.status === 200 && (await statusPedido(p7.pedido.id)) === "PAGO", "repetição do aviso → PAGO", repete.status);
+
+    console.log("8. A mesma transação para duas cobranças (API que não amarra pedido, link sem slug)");
+    modo({ semSlug: true, naoAmarraPedido: true });
+    const p8a = await novoPedido(a);
+    const p8b = await novoPedido(a);
+    const pg8 = await pagar({ slug: slugDe(p8a.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg8.aviso?.corpo?.resultado === "aprovado", "primeira cobrança aprovada", pg8.aviso);
+    const link8b = falsa.links.get(slugDe(p8b.pagamento.checkoutUrl));
+    const reuso = await fetch(link8b.webhook_url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...pg8.corpoAviso, order_nsu: link8b.order_nsu }),
+    });
+    const reusoJson = await reuso.json();
+    const [c8b] = await cobrancas(p8b.pedido.id);
+    confere(reuso.status === 200 && reusoJson.resultado === "invalido", "segunda cobrança recusada (UNIQUE da transação)", reusoJson);
+    confere((await statusPedido(p8b.pedido.id)) === "PENDENTE" && c8b.status_gateway === "transacao-ja-usada", "o segundo pedido continua PENDENTE", c8b);
+    modo({});
+
+    console.log("9. Cancelado pela dona e depois pago: alerta no painel");
+    const p9 = await novoPedido(a);
+    const cancela = await admin.req("PATCH", `/api/admin/orders/${p9.pedido.id}`, { corpo: { status: "CANCELADO" } });
+    confere(cancela.status === 200 && /até 1 hora/.test(cancela.json?.aviso ?? ""), "cancelar avisa que o link ainda vale", cancela.json);
+    confere((await cobrancas(p9.pedido.id))[0].status === "CANCELADO", "cobrança encerrada no banco");
+    const pg9 = await pagar({ slug: slugDe(p9.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg9.aviso?.corpo?.resultado === "aprovado" && (await statusPedido(p9.pedido.id)) === "CANCELADO", "pago depois: cobrança aprovada, pedido continua CANCELADO", pg9.aviso);
+    const ficha9 = await admin.req("GET", `/api/admin/orders/${p9.pedido.id}`);
+    confere(ficha9.json?.pedido?.pagamento?.alerta === "PAGO_APOS_CANCELAMENTO", "ficha: PAGO_APOS_CANCELAMENTO", ficha9.json?.pedido?.pagamento);
+    const s9 = await a.req("GET", `/api/orders/${p9.pedido.id}/pagamento`);
+    confere(s9.json?.etapa === "CANCELADO", "cliente vê CANCELADO");
+
+    console.log("10. Link quase vencendo, link novo, e os dois pagos: pago em dobro");
+    const p10 = await novoPedido(a);
+    await sql("update pagamentos set expira_em = now() + interval '2 minutes' where order_id = $1", [p10.pedido.id]);
+    const novo = await a.req("POST", `/api/orders/${p10.pedido.id}/pagamento`, { corpo: {} });
+    confere(novo.status === 200 && novo.json?.cobranca?.checkoutUrl && novo.json.cobranca.checkoutUrl !== p10.pagamento.checkoutUrl, "link vencendo dá lugar a outro", novo.json);
+    const c10 = await cobrancas(p10.pedido.id);
+    confere(c10.length === 2 && c10[0].status === "CANCELADO" && c10[1].referencia_externa === `ped-${p10.pedido.id}-2`, "o antigo vira CANCELADO; o novo é ped-<id>-2");
+    await pagar({ slug: slugDe(p10.pagamento.checkoutUrl), metodo: "pix" });
+    await pagar({ slug: slugDe(novo.json.cobranca.checkoutUrl), metodo: "credit_card", parcelas: 2 });
+    const ficha10 = await admin.req("GET", `/api/admin/orders/${p10.pedido.id}`);
+    confere(ficha10.json?.pedido?.pagamento?.alerta === "PAGO_EM_DOBRO" && ficha10.json.pedido.pagamento.metodo === "pix", "ficha: PAGO_EM_DOBRO com o método do primeiro", ficha10.json?.pedido?.pagamento);
+    const lista = await admin.req("GET", "/api/admin/orders?status=PAGO");
+    const naLista = lista.json?.pedidos?.find((p) => p.id === p10.pedido.id);
+    confere(naLista?.pagamento?.alerta === "PAGO_EM_DOBRO" && naLista.expirado === false, "lista do painel: pagamento e expirado", naLista);
+
+    console.log("11. Pedido com mais de 48 h");
+    const p11 = await novoPedido(a);
+    await sql("update orders set created_at = now() - interval '49 hours' where id = $1", [p11.pedido.id]);
+    await sql("update pagamentos set expira_em = now() - interval '1 minute' where order_id = $1", [p11.pedido.id]);
+    const exp = await a.req("POST", `/api/orders/${p11.pedido.id}/pagamento`, { corpo: {} });
+    confere(exp.status === 409 && /expirou/.test(exp.json?.erro ?? ""), "POST → 409 expirou", exp.json);
+    const s11 = await a.req("GET", `/api/orders/${p11.pedido.id}/pagamento`);
+    confere(s11.json?.etapa === "EXPIRADO" && s11.json.cobranca.checkoutUrl === null, "etapa EXPIRADO, sem link", s11.json);
+    const ficha11 = await admin.req("GET", `/api/admin/orders/${p11.pedido.id}`);
+    confere(ficha11.json?.pedido?.expirado === true && ficha11.json.pedido.pagamento === null, "ficha: expirado, sem pagamento");
+
+    console.log("12. InfinitePay falha ao criar o pedido; dois 'Pagar' ao mesmo tempo abrem um link só");
+    modo({ falharLinks: 500 });
+    const p12 = await novoPedido(a);
+    confere(p12.pagamento === null, "pedido criado com pagamento null", p12.pagamento);
+    const falhou = await a.req("POST", `/api/orders/${p12.pedido.id}/pagamento`, { corpo: {} });
+    confere(falhou.status === 502, "POST pagamento com a InfinitePay fora → 502", falhou.status);
+    modo({});
+    const [x, y] = await Promise.all([
+      a.req("POST", `/api/orders/${p12.pedido.id}/pagamento`, { corpo: {} }),
+      a.req("POST", `/api/orders/${p12.pedido.id}/pagamento`, { corpo: {} }),
+    ]);
+    confere(x.status === 200 && y.status === 200 && x.json.cobranca.checkoutUrl === y.json.cobranca.checkoutUrl, "os dois recebem o mesmo link", [x.json, y.json]);
+    confere((await cobrancas(p12.pedido.id)).length === 1, "banco: uma cobrança só");
+
+    console.log("13. Meus pedidos e o teto de pendentes");
+    const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);
+    confere(meus[0].n < 20, "pendentes recentes abaixo do teto (o expirado não conta)", meus[0]);
+  } finally {
+    await falsa.fechar();
+  }
+}
+
+async function limpar() {
+  if (pedidos.length > 0) {
+    await sql("delete from pagamentos where order_id = any($1)", [pedidos]);
+    await sql("delete from orders where id = any($1) and user_id = any($2)", [pedidos, contas]);
+  }
+  if (contas.length > 0) {
+    // Só as contas criadas aqui (e-mail com a marca deste teste).
+    await sql("delete from users where id = any($1) and email like $2", [contas, `e2e-infinitepay-${marca}-%`]);
+  }
+}
+
+try {
+  await main();
+} catch (e) {
+  falhas++;
+  console.log(`ERRO: ${e.stack ?? e}`);
+} finally {
+  try {
+    await limpar();
+    console.log(`limpeza: ${pedidos.length} pedidos e ${contas.length} contas de teste apagados`);
+  } catch (e) {
+    console.log(`limpeza falhou: ${e.message}`);
+  }
+  await banco.end();
+  console.log(`\n${ok} ok, ${falhas} falhas`);
+  process.exit(falhas === 0 ? 0 : 1);
+}

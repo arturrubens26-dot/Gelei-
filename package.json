@@ -19,7 +19,10 @@
     "admin:senha": "tsx scripts/redefinir-senha-admin.ts",
     "dados:salvar": "node scripts/dados.mjs salvar --commit",
     "dados:salvar:producao": "node scripts/dados.mjs salvar --producao --commit",
-    "test:unit": "tsx --test testes/*.test.ts"
+    "test": "npm run test:unit",
+    "test:unit": "tsx --test testes/*.test.ts",
+    "test:pagamento": "node testes/infinitepay-e2e.mjs",
+    "ensaio:infinitepay": "tsx scripts/ensaio-infinitepay.ts"
   },
   "dependencies": {
     "@neon/config": "^1.9.2",
