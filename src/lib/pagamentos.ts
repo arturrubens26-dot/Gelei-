@@ -14,6 +14,7 @@ import {
 } from "@/lib/infinitepay";
 import {
   classificarConferencia,
+  conferenciaAmarrada,
   conferirTokenDoAviso,
   itensDoLink,
   lerAviso,
@@ -24,7 +25,10 @@ import {
 } from "@/lib/infinitepay-regras";
 import {
   JANELA_CONFIRMANDO_MS,
+  MARCA_DIVERGENTE,
   VALIDADE_DO_LINK_MS,
+  cobrancaDivergente,
+  cobrancaParaEtapa,
   etapaDoPagamento,
   pagarAteDe,
   pedidoExpirado,
@@ -115,15 +119,25 @@ function candidatoGravado(p: Pagamento): Candidato | null {
     : null;
 }
 
-/** Ainda na janela de "confirmando" (30 min desde o candidato) e não aprovada. */
-function emConfirmacao(p: Pagamento, agora = Date.now()): boolean {
-  return (
-    (p.status === "PENDENTE" || p.status === "CANCELADO") &&
-    Boolean(candidatoGravado(p)) &&
-    p.avisadoEm !== null &&
-    agora - p.avisadoEm.getTime() < JANELA_CONFIRMANDO_MS
-  );
+/** Para `cobrancaParaEtapa`: `avisadoEm` só conta com um candidato gravado. */
+const paraEtapa = (p: Pagamento) => ({ ...p, avisadoEm: candidatoGravado(p) ? p.avisadoEm : null });
+
+/**
+ * A cobrança mais recente com candidato gravado há menos de 30 min (não necessariamente a última
+ * criada: a cliente pode ter aberto outro link depois de pagar). `null` se nenhuma.
+ */
+function cobrancaEmConfirmacao(cobrancas: readonly Pagamento[], agora = Date.now()): Pagamento | null {
+  const maisNovasPrimeiro = [...cobrancas].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime() || (a.id < b.id ? 1 : -1));
+  const escolhida = cobrancaParaEtapa(maisNovasPrimeiro.map(paraEtapa), agora);
+  const original = escolhida && cobrancas.find((c) => c.id === escolhida.id);
+  return original && escolhida.avisadoEm && candidatoGravado(original) && (original.status === "PENDENTE" || original.status === "CANCELADO")
+    && agora - escolhida.avisadoEm.getTime() < JANELA_CONFIRMANDO_MS
+    ? original
+    : null;
 }
+
+const MENSAGEM_DIVERGENCIA =
+  "Recebemos um pagamento deste pedido que precisa ser conferido. Não pague de novo: fale com a loja no Instagram @ge.leio.";
 
 // --- confirmação (a única porta para PAGO) ----------------------------------------------------
 
@@ -133,18 +147,46 @@ function emConfirmacao(p: Pagamento, agora = Date.now()): boolean {
  * - DIVERGENTE: pago, mas o valor, a moeda, o método ou as parcelas não conferem: o pedido NÃO vira
  *   PAGO e a dona confere no app InfinitePay (repetir a consulta não muda nada);
  * - INVALIDO: candidato recusado de vez (transação de outro link ou pedido, slug diferente, já usada);
- * - TRANSITORIO: a InfinitePay não respondeu direito (o webhook responde 400 para ela repetir);
- * - ADIADO: conferida há instantes (a próxima tentativa confere).
+ * - TRANSITORIO: a InfinitePay não respondeu direito, ou ainda não acha a transação (HTTP 4xx logo
+ *   depois do pagamento): o webhook responde 400 para ela repetir;
+ * - ADIADO: conferida há instantes (a próxima tentativa confere);
+ * - NAO_AMARRADO: transação trazida pela cliente (retorno) que a resposta não amarra a esta cobrança:
+ *   não confirma sozinha (pode ser de outro link da loja de mesmo valor); vale o aviso.
  */
-export type ResultadoConfirmacao = "APROVADO" | "PENDENTE" | "DIVERGENTE" | "INVALIDO" | "TRANSITORIO" | "ADIADO";
+export type ResultadoConfirmacao =
+  | "APROVADO"
+  | "PENDENTE"
+  | "DIVERGENTE"
+  | "INVALIDO"
+  | "TRANSITORIO"
+  | "ADIADO"
+  | "NAO_AMARRADO";
 
-/** Grava o candidato (ainda não conferido). Não mexe em cobrança aprovada. */
+/**
+ * De onde veio o candidato:
+ * - "aviso": corpo do webhook, que só chega pela URL com o token desta cobrança;
+ * - "gravado": o candidato guardado no banco (só o aviso grava), reconferido pela tela ou pelo retorno;
+ * - "retorno": a query do redirect_url, ou seja, dado da CLIENTE. Só confirma se o slug da fatura
+ *   (da criação do link) e o order_nsu da resposta do payment_check amarrarem a transação a esta cobrança.
+ */
+type OrigemCandidato = "aviso" | "gravado" | "retorno";
+
+/** Não apaga a marca de divergência: ela segura a etapa em "confirmando" até a dona resolver. */
+const SEM_DIVERGENCIA = { NOT: { statusGateway: { startsWith: MARCA_DIVERGENTE } } } satisfies Prisma.PagamentoWhereInput;
+
+/**
+ * Grava o candidato do AVISO (ainda não conferido). Não mexe em cobrança aprovada. O mesmo candidato
+ * repetido (a InfinitePay reenvia o aviso) não renova `avisadoEm`: a janela de 30 min conta do primeiro.
+ */
 async function registrarCandidato(p: Pagamento, c: Candidato): Promise<Pagamento> {
   if (p.status !== "PENDENTE" && p.status !== "CANCELADO") return p;
+  const mesmo = p.avisoTransacaoNsu === c.transacaoNsu && p.avisoSlug === c.slug && p.avisadoEm !== null;
   // updateMany com o status no filtro: se outra conferência aprovou no meio do caminho, nada muda.
   await db.pagamento.updateMany({
     where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
-    data: { avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug, avisadoEm: new Date(), comprovanteUrl: c.comprovanteUrl },
+    data: mesmo
+      ? { comprovanteUrl: c.comprovanteUrl }
+      : { avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug, avisadoEm: new Date(), comprovanteUrl: c.comprovanteUrl },
   });
   return (await db.pagamento.findUnique({ where: { id: p.id } })) ?? p;
 }
@@ -158,10 +200,21 @@ async function descartarCandidato(p: Pagamento, c: Candidato, motivo: string): P
     where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] }, avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug },
     data: { avisoTransacaoNsu: null, avisoSlug: null, avisadoEm: null, comprovanteUrl: null },
   });
+  await marcar(p, motivo);
+}
+
+/** Grava o que a última conferência disse, sem apagar uma divergência pendente. */
+async function marcar(p: Pagamento, marca: string): Promise<void> {
   await db.pagamento.updateMany({
-    where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
-    data: { statusGateway: motivo.slice(0, 40) },
+    where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] }, ...SEM_DIVERGENCIA },
+    data: { statusGateway: marca.slice(0, 40) },
   });
+}
+
+/** O candidato `c` é o gravado e chegou há menos de 30 min? (Janela para a InfinitePay "achar" a transação.) */
+function dentroDaJanela(p: Pagamento, c: Candidato, agora = Date.now()): boolean {
+  if (p.avisoTransacaoNsu !== c.transacaoNsu || p.avisoSlug !== c.slug || !p.avisadoEm) return true; // recém-chegado
+  return agora - p.avisadoEm.getTime() < JANELA_CONFIRMANDO_MS;
 }
 
 /**
@@ -173,15 +226,16 @@ async function descartarCandidato(p: Pagamento, c: Candidato, motivo: string): P
  * dinheiro entrou. Pago com o pedido já cancelado, ou com outra cobrança dele já aprovada: a cobrança
  * fica APROVADO e o pedido não muda (o painel mostra o alerta para devolver pelo app InfinitePay).
  */
-export async function confirmarCobranca(
-  p: Pagamento,
-  c: Candidato,
-  origem: "aviso" | "retorno" | "tela",
-): Promise<ResultadoConfirmacao> {
+export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: OrigemCandidato): Promise<ResultadoConfirmacao> {
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return "APROVADO";
   if (p.gateway !== "infinitepay" || (p.status !== "PENDENTE" && p.status !== "CANCELADO")) return "INVALIDO";
+  const daCliente = origem === "retorno";
+  // Transação trazida pela cliente só vale com a fatura amarrada desde a criação do link (slug). Sem
+  // isso, nem consulta: o aviso (com token) é que confirma.
+  if (daCliente && !p.faturaSlug) return "NAO_AMARRADO";
   // O slug que veio na criação do link amarra a fatura: outro slug é de outra fatura.
   if (p.faturaSlug && p.faturaSlug !== c.slug) {
+    if (daCliente) return "NAO_AMARRADO";
     await descartarCandidato(p, c, "slug-diferente");
     console.warn(`[pagamentos] cobrança ${p.id}: candidato com slug de outra fatura, descartado`);
     return "INVALIDO";
@@ -212,24 +266,41 @@ export async function confirmarCobranca(
       console.error(`[pagamentos] payment_check da cobrança ${p.id} falhou (${(e as Error).message})`);
       return "TRANSITORIO";
     }
+    // Outro 4xx ("transação não encontrada"): logo depois do pagamento a InfinitePay pode ainda não
+    // ter a transação. Dentro da janela de 30 min é passageiro (o aviso volta com 400 e ela repete);
+    // depois disso, o candidato é recusado de vez. O da cliente nunca é gravado: só não confirma.
+    if (daCliente) return "PENDENTE";
+    if (dentroDaJanela(p, c)) {
+      console.warn(`[pagamentos] cobrança ${p.id}: payment_check ainda não acha a transação (HTTP ${status}); tenta de novo`);
+      return "TRANSITORIO";
+    }
     await descartarCandidato(p, c, `invalido:http-${status}`);
-    console.warn(`[pagamentos] cobrança ${p.id}: payment_check recusou o candidato (HTTP ${status})`);
+    console.warn(`[pagamentos] cobrança ${p.id}: payment_check recusou o candidato (HTTP ${status}) depois da janela`);
     return "INVALIDO";
   }
 
   const valorCentavos = centavosDe(p.valor);
   const resultado = classificarConferencia(conferencia, valorCentavos, p.referenciaExterna);
+  // A transação da cliente só vale se a RESPOSTA disser que é deste order_nsu (cenário: ela pagou outro
+  // link da loja, de mesmo valor, e apresenta aquela transação aqui). Nada é gravado nem marcado.
+  if (daCliente && !conferenciaAmarrada(conferencia, p.referenciaExterna)) {
+    if (resultado.tipo === "APROVADO" || resultado.tipo === "DIVERGENTE") {
+      console.info(`[pagamentos] cobrança ${p.id}: transação do retorno sem order_nsu na conferência; aguarda o aviso`);
+    }
+    return "NAO_AMARRADO";
+  }
   if (resultado.tipo === "INVALIDO") {
+    if (daCliente) return "INVALIDO";
     await descartarCandidato(p, c, "invalido");
     console.warn(`[pagamentos] cobrança ${p.id}: payment_check não reconheceu a transação para este pedido`);
     return "INVALIDO";
   }
   if (resultado.tipo === "NAO_PAGO") {
-    await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { statusGateway: "nao-pago" } });
+    await marcar(p, "nao-pago");
     return "PENDENTE";
   }
   if (resultado.tipo === "DIVERGENTE") {
-    const marca = `divergente:${resultado.motivo}`.slice(0, 40);
+    const marca = `${MARCA_DIVERGENTE}${resultado.motivo}`.slice(0, 40);
     if (p.statusGateway !== marca) {
       console.error(
         `[pagamentos] cobrança ${p.id} do pedido ${p.orderId} paga com divergência (${resultado.motivo}): ` +
@@ -268,7 +339,8 @@ export async function confirmarCobranca(
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       // Esta transação já quitou outra cobrança: não paga duas.
-      await descartarCandidato(p, c, "transacao-ja-usada");
+      if (daCliente) await marcar(p, "transacao-ja-usada");
+      else await descartarCandidato(p, c, "transacao-ja-usada");
       console.error(`[pagamentos] cobrança ${p.id}: a transação informada já quitou outra cobrança; recusada`);
       return "INVALIDO";
     }
@@ -339,16 +411,17 @@ export async function abrirLinkDePagamento(pedidoId: string, userId: string): Pr
     throw new ErroNegocio(409, "Este pedido já foi pago.");
   }
   if (pedido.status !== "PENDENTE") throw new ErroNegocio(409, "Este pedido não está aguardando pagamento.");
+  // Já entrou dinheiro com divergência: um link novo só faria a cliente pagar de novo.
+  if (pedido.pagamentos.some(cobrancaDivergente)) throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA);
+  // Um aviso em conferência (em qualquer cobrança, não só na última): pode ser que já tenha sido pago.
+  const emAndamento = cobrancaEmConfirmacao(pedido.pagamentos);
+  if (emAndamento) {
+    const r = await confirmarCobranca(emAndamento, candidatoGravado(emAndamento)!, "gravado").catch(() => "TRANSITORIO" as const);
+    if (r === "APROVADO") throw new ErroNegocio(409, "O pagamento deste pedido acabou de ser confirmado.");
+    if (r === "DIVERGENTE") throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA);
+  }
   if (pedidoExpirado(pedido.createdAt)) throw new ErroNegocio(409, "Este pedido expirou. Faça um novo pedido.");
   const gateway = gatewayAtivo();
-
-  // Um retorno ou aviso em conferência: pode ser que já tenha sido pago.
-  const ultima = pedido.pagamentos.at(-1);
-  const candidato = ultima ? candidatoGravado(ultima) : null;
-  if (ultima && candidato && emConfirmacao(ultima)) {
-    const r = await confirmarCobranca(ultima, candidato, "tela").catch(() => "TRANSITORIO" as const);
-    if (r === "APROVADO") throw new ErroNegocio(409, "O pagamento deste pedido acabou de ser confirmado.");
-  }
 
   const agora = Date.now();
   const abertas = pedido.pagamentos.filter((p) => p.status === "PENDENTE");
@@ -456,8 +529,10 @@ export async function processarAvisoDaInfinitePay(referencia: string, token: str
 
 /**
  * Retorno do navegador (redirect_url): acha a cobrança pela referência e, se a sessão é da dona do
- * pedido, grava o candidato e confere (erro não derruba: a tela confere de novo). Devolve o caminho
- * para onde redirecionar: nunca uma URL vinda da query.
+ * pedido, serve de GATILHO: reconfere o candidato que o aviso gravou e, só com a fatura amarrada
+ * (slug da criação do link + order_nsu na resposta), confere a transação da query. A transação da
+ * query nunca é gravada: é dado da cliente. Erro não derruba (a tela confere de novo). Devolve o
+ * caminho para onde redirecionar: nunca uma URL vinda da query.
  */
 export async function processarRetorno(parametros: URLSearchParams, usuarioId: string | null): Promise<string> {
   const { referencia, candidato } = lerRetorno(parametros, { origemLocal: origemDaApiDeTeste() });
@@ -472,10 +547,14 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
   // De outra conta: não revela nem grava nada.
   if (p.order.userId !== usuarioId) return "/meus-pedidos";
 
-  if (candidato && (p.status === "PENDENTE" || p.status === "CANCELADO")) {
+  if (p.status === "PENDENTE" || p.status === "CANCELADO") {
     try {
-      const atual = await registrarCandidato(p, candidato);
-      await confirmarCobranca(atual, candidato, "retorno");
+      const gravado = candidatoGravado(p);
+      const r = gravado ? await confirmarCobranca(p, gravado, "gravado") : null;
+      if (r !== "APROVADO" && r !== "DIVERGENTE" && candidato) {
+        const atual = (await db.pagamento.findUnique({ where: { id: p.id } })) ?? p;
+        await confirmarCobranca(atual, candidato, "retorno");
+      }
     } catch (e) {
       console.error(`[pagamentos] conferência no retorno da cobrança ${p.id} falhou: ${e instanceof Error ? e.name : "erro"}`);
     }
@@ -489,20 +568,27 @@ async function lerSituacao(pedidoId: string, userId: string) {
   if (pedidoId.length === 0 || pedidoId.length > 100) return null;
   return db.order.findFirst({
     where: { id: pedidoId, userId, canal: "ONLINE" },
-    select: { status: true, createdAt: true, pagamentos: { orderBy: [{ criadoEm: "desc" }, { id: "desc" }], take: 1 } },
+    // Todas (no máximo 10 por pedido): a etapa olha a mais recente COM candidato, não só a última.
+    select: {
+      status: true,
+      createdAt: true,
+      pagamentos: { orderBy: [{ criadoEm: "desc" }, { id: "desc" }], take: MAX_COBRANCAS_POR_PEDIDO + 2 },
+    },
   });
 }
 
 function montarSituacao(pedido: NonNullable<Awaited<ReturnType<typeof lerSituacao>>>): SituacaoPagamentoDTO {
   const agora = Date.now();
   const ultima = pedido.pagamentos[0] ?? null;
+  const decide = cobrancaParaEtapa(pedido.pagamentos.map(paraEtapa), agora);
   return {
     pedidoStatus: pedido.status,
     etapa: etapaDoPagamento({
       gatewayAtivo: pagamentoOnlineDisponivel(),
       pedidoStatus: pedido.status,
       pedidoCriadoEm: pedido.createdAt,
-      ultimaCobranca: ultima ? { status: ultima.status, avisadoEm: candidatoGravado(ultima) ? ultima.avisadoEm : null } : null,
+      ultimaCobranca: decide ? { status: decide.status, avisadoEm: decide.avisadoEm } : null,
+      pagamentoDivergente: pedido.pagamentos.some(cobrancaDivergente),
       agora,
     }),
     pagarAte: pedido.status === "PENDENTE" ? pagarAteDe(pedido.createdAt).toISOString() : null,
@@ -523,14 +609,13 @@ export async function obterSituacaoPagamento(pedidoId: string, userId: string): 
 export async function situacaoComConferencia(pedidoId: string, userId: string): Promise<SituacaoPagamentoDTO | null> {
   let pedido = await lerSituacao(pedidoId, userId);
   if (!pedido) return null;
-  const ultima = pedido.pagamentos[0];
-  const candidato = ultima ? candidatoGravado(ultima) : null;
-  if (pedido.status === "PENDENTE" && ultima && candidato && emConfirmacao(ultima) && infinitePayConfigurado()) {
+  const emAndamento = cobrancaEmConfirmacao(pedido.pagamentos);
+  if (pedido.status === "PENDENTE" && emAndamento && infinitePayConfigurado()) {
     try {
-      await confirmarCobranca(ultima, candidato, "tela");
+      await confirmarCobranca(emAndamento, candidatoGravado(emAndamento)!, "gravado");
       pedido = (await lerSituacao(pedidoId, userId)) ?? pedido;
     } catch (e) {
-      console.error(`[pagamentos] conferência da cobrança ${ultima.id} falhou: ${e instanceof Error ? e.name : "erro"}`);
+      console.error(`[pagamentos] conferência da cobrança ${emAndamento.id} falhou: ${e instanceof Error ? e.name : "erro"}`);
     }
   }
   return montarSituacao(pedido);

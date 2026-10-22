@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   FORMATO_HANDLE,
   classificarConferencia,
+  conferenciaAmarrada,
   conferirTokenDoAviso,
   corpoDoLink,
   dataComFusoDeBrasilia,
@@ -271,6 +272,33 @@ describe("payment_check", () => {
     assert.equal(divergenciaDaConferencia(c({ capture_method: "credit_card", installments: 0 }), 3000), "parcelas");
     assert.equal(divergenciaDaConferencia(c({ installments: 2 }), 3000), "parcelas", "PIX não parcela");
     assert.deepEqual(classificarConferencia(c({ amount: 2999 }), 3000, REF), { tipo: "DIVERGENTE", motivo: "valor" });
+  });
+
+  it("campos nulos não quebram a leitura; no PIX, parcelas 0 ou nulas valem 1", () => {
+    const nula = lerConferencia({ success: true, paid: false, amount: null, paid_amount: null, installments: null, capture_method: null });
+    assert.ok(nula, "lê com nulos");
+    assert.deepEqual(classificarConferencia(nula!, 3000, REF), { tipo: "NAO_PAGO" });
+    assert.equal(divergenciaDaConferencia(c({ amount: null }), 3000), "valor");
+    assert.equal(divergenciaDaConferencia(c({ paid_amount: null }), 3000), "valor-pago");
+    assert.equal(divergenciaDaConferencia(c({ capture_method: null }), 3000), "metodo");
+    for (const installments of [0, null, "0"]) {
+      assert.deepEqual(classificarConferencia(c({ installments }), 3000, REF), {
+        tipo: "APROVADO",
+        metodo: "pix",
+        parcelas: 1,
+        valorPagoCentavos: 3000,
+      }, String(installments));
+    }
+    assert.equal(divergenciaDaConferencia(c({ capture_method: "credit_card", installments: 0 }), 3000), "parcelas", "cartão com 0 parcelas não");
+    assert.equal(classificarConferencia(c({ capture_method: "credit_card", installments: null }), 3000, REF).tipo, "APROVADO");
+  });
+
+  it("conferenciaAmarrada: só com o nosso order_nsu na resposta", () => {
+    assert.equal(conferenciaAmarrada(c({ order_nsu: REF }), REF), true);
+    assert.equal(conferenciaAmarrada(c(), REF), false);
+    assert.equal(conferenciaAmarrada(c({ order_nsu: null }), REF), false);
+    assert.equal(conferenciaAmarrada(c({ order_nsu: "" }), REF), false);
+    assert.equal(conferenciaAmarrada(c({ order_nsu: referenciaDoPedido(PEDIDO, 2) }), REF), false);
   });
 
   it("success: false ou transação de outro pedido: INVALIDO; paid: false: NAO_PAGO", () => {

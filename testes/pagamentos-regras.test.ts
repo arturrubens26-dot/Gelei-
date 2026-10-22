@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   JANELA_CONFIRMANDO_MS,
+  MARCA_DIVERGENTE,
   PRAZO_PARA_PAGAR_MS,
   alertaDoPagamento,
+  cobrancaDivergente,
+  cobrancaParaEtapa,
   etapaDoPagamento,
   pagamentoAdminDe,
   type EntradaPagamentoAdmin,
@@ -72,6 +75,52 @@ describe("etapaDoPagamento", () => {
       "CONFIRMANDO",
     );
     assert.equal(etapaDoPagamento(base({ agora: limite + 1, gatewayAtivo: false })), "INDISPONIVEL");
+  });
+});
+
+describe("divergência e cobrança que decide a etapa", () => {
+  it("pago com divergência: CONFIRMANDO sem prazo, mesmo expirado ou com o gateway desligado; pago e cancelado mandam", () => {
+    const limite = criado.getTime() + PRAZO_PARA_PAGAR_MS;
+    assert.equal(etapaDoPagamento(base({ pagamentoDivergente: true })), "CONFIRMANDO");
+    assert.equal(etapaDoPagamento(base({ pagamentoDivergente: true, agora: limite + 10 * 24 * 3600_000 })), "CONFIRMANDO");
+    assert.equal(etapaDoPagamento(base({ pagamentoDivergente: true, gatewayAtivo: false })), "CONFIRMANDO");
+    assert.equal(etapaDoPagamento(base({ pagamentoDivergente: true, pedidoStatus: "PAGO" })), "PAGO");
+    assert.equal(etapaDoPagamento(base({ pagamentoDivergente: true, pedidoStatus: "CANCELADO" })), "CANCELADO");
+  });
+
+  it("cobrancaDivergente: marca divergente:* e ainda não aprovada", () => {
+    assert.equal(cobrancaDivergente({ status: "PENDENTE", statusGateway: `${MARCA_DIVERGENTE}valor` }), true);
+    assert.equal(cobrancaDivergente({ status: "CANCELADO", statusGateway: `${MARCA_DIVERGENTE}parcelas` }), true);
+    assert.equal(cobrancaDivergente({ status: "APROVADO", statusGateway: `${MARCA_DIVERGENTE}valor` }), false);
+    assert.equal(cobrancaDivergente({ status: "PENDENTE", statusGateway: "nao-pago" }), false);
+    assert.equal(cobrancaDivergente({ status: "PENDENTE", statusGateway: null }), false);
+  });
+
+  it("cobrancaParaEtapa: a mais recente COM candidato na janela; senão, a mais recente", () => {
+    const agora = criado.getTime() + 60 * 60_000;
+    const nova = { id: "nova", status: "PENDENTE" as const, avisadoEm: null };
+    const antigaComCandidato = { id: "antiga", status: "CANCELADO" as const, avisadoEm: new Date(agora - 60_000) };
+    const velhaForaDaJanela = { id: "velha", status: "CANCELADO" as const, avisadoEm: new Date(agora - JANELA_CONFIRMANDO_MS - 1) };
+    assert.equal(cobrancaParaEtapa([nova, antigaComCandidato, velhaForaDaJanela], agora)?.id, "antiga");
+    assert.equal(cobrancaParaEtapa([nova, velhaForaDaJanela], agora)?.id, "nova");
+    // Cobrança aprovada não está "em confirmação": volta a valer a mais recente.
+    assert.equal(cobrancaParaEtapa([nova, { ...antigaComCandidato, status: "APROVADO" as const }], agora)?.id, "nova");
+    assert.equal(cobrancaParaEtapa([], agora), null);
+    const etapa = etapaDoPagamento(base({ agora, ultimaCobranca: cobrancaParaEtapa([nova, antigaComCandidato], agora) }));
+    assert.equal(etapa, "CONFIRMANDO");
+  });
+
+  it("alerta PAGO_COM_DIVERGENCIA: sozinho, ou depois dos de devolução", () => {
+    assert.deepEqual(pagamentoAdminDe({ pedidoStatus: "PENDENTE", canceladoEm: null, aprovadas: [], divergente: true }), {
+      metodo: null,
+      parcelas: null,
+      valorPago: null,
+      alerta: "PAGO_COM_DIVERGENCIA",
+    });
+    const aprovada = { metodo: "pix", parcelas: 1, valorPago: 30, aprovadoEm: criado };
+    assert.equal(alertaDoPagamento({ pedidoStatus: "PAGO", canceladoEm: null, aprovadas: [aprovada], divergente: true }), "PAGO_COM_DIVERGENCIA");
+    assert.equal(alertaDoPagamento({ pedidoStatus: "PAGO", canceladoEm: null, aprovadas: [aprovada, aprovada], divergente: true }), "PAGO_EM_DOBRO");
+    assert.equal(alertaDoPagamento({ pedidoStatus: "PAGO", canceladoEm: null, aprovadas: [aprovada], divergente: false }), null);
   });
 });
 

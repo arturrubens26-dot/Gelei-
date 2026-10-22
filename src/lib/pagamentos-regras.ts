@@ -43,8 +43,21 @@ export type SituacaoPagamentoDTO = {
   cobranca: CobrancaDTO | null;
 };
 
-/** Alerta do painel: dinheiro que entrou e precisa ser devolvido pelo app InfinitePay. */
-export type AlertaPagamento = "PAGO_APOS_CANCELAMENTO" | "PAGO_EM_DOBRO";
+/**
+ * Alerta do painel: dinheiro que entrou e precisa de ação no app InfinitePay.
+ * - PAGO_APOS_CANCELAMENTO e PAGO_EM_DOBRO: devolver;
+ * - PAGO_COM_DIVERGENCIA: a InfinitePay diz "pago", mas o valor, o método ou as parcelas não
+ *   conferem; o pedido NÃO virou PAGO. Conferir no app e, se o dinheiro estiver certo, marcar como pago.
+ */
+export type AlertaPagamento = "PAGO_APOS_CANCELAMENTO" | "PAGO_EM_DOBRO" | "PAGO_COM_DIVERGENCIA";
+
+/** Prefixo de `pagamentos.status_gateway` quando a conferência achou divergência. */
+export const MARCA_DIVERGENTE = "divergente:";
+
+/** Cobrança paga com divergência e ainda não resolvida (não aprovada). */
+export function cobrancaDivergente(c: { status: StatusCobranca; statusGateway: string | null }): boolean {
+  return (c.status === "PENDENTE" || c.status === "CANCELADO") && Boolean(c.statusGateway?.startsWith(MARCA_DIVERGENTE));
+}
 
 /** Resumo do pagamento na lista e na ficha do painel (`PedidoAdminDTO.pagamento`). */
 export type PagamentoAdminDTO = {
@@ -98,27 +111,49 @@ export type EntradaEtapa = {
   gatewayAtivo: boolean;
   pedidoStatus: StatusPedido;
   pedidoCriadoEm: Date | string;
-  /** A cobrança mais recente do pedido. */
+  /** A cobrança que decide a etapa: a mais recente COM candidato na janela, senão a mais recente (`cobrancaParaEtapa`). */
   ultimaCobranca: {
     status: StatusCobranca;
     /** Quando chegou o último candidato (aviso com token ou retorno), ainda não conferido. */
     avisadoEm: Date | string | null;
   } | null;
+  /** Alguma cobrança do pedido foi paga com divergência (`cobrancaDivergente`). */
+  pagamentoDivergente?: boolean;
   agora?: number;
 };
 
 /**
+ * Qual cobrança decide a etapa (lista da mais nova para a mais antiga): a mais recente que tem um
+ * candidato gravado há menos de 30 min; sem nenhuma, a mais recente. Assim, um link novo aberto
+ * depois de pagar o anterior não esconde a confirmação em andamento.
+ */
+export function cobrancaParaEtapa<T extends { status: StatusCobranca; avisadoEm: Date | string | null }>(
+  cobrancas: readonly T[],
+  agora: number = Date.now(),
+): T | null {
+  const emJanela = cobrancas.find((c) => {
+    if (!c.avisadoEm || (c.status !== "PENDENTE" && c.status !== "CANCELADO")) return false;
+    const desde = agora - ms(c.avisadoEm);
+    return desde >= 0 && desde < JANELA_CONFIRMANDO_MS;
+  });
+  return emJanela ?? cobrancas[0] ?? null;
+}
+
+/**
  * Etapa mostrada à cliente, na ordem:
  * 1. pedido PAGO, ENVIADO ou ENTREGUE → PAGO; CANCELADO → CANCELADO;
- * 2. pedido PENDENTE com o gateway desligado → INDISPONIVEL;
- * 3. última cobrança aberta com candidato gravado há menos de 30 min → CONFIRMANDO (vem antes do
- *    prazo: quem pagou no fim das 48 h não vê "expirou" enquanto a conferência anda);
- * 4. mais de 48 h desde o pedido → EXPIRADO;
- * 5. o resto → PAGAR.
+ * 2. pago com divergência → CONFIRMANDO ("fale com a loja"), sem prazo: NUNCA volta a PAGAR, para
+ *    a cliente não pagar de novo enquanto a dona confere;
+ * 3. pedido PENDENTE com o gateway desligado → INDISPONIVEL;
+ * 4. cobrança com candidato gravado há menos de 30 min → CONFIRMANDO (vem antes do prazo: quem
+ *    pagou no fim das 48 h não vê "expirou" enquanto a conferência anda);
+ * 5. mais de 48 h desde o pedido → EXPIRADO;
+ * 6. o resto → PAGAR.
  */
 export function etapaDoPagamento(e: EntradaEtapa): EtapaPagamento {
   if (e.pedidoStatus === "PAGO" || e.pedidoStatus === "ENVIADO" || e.pedidoStatus === "ENTREGUE") return "PAGO";
   if (e.pedidoStatus === "CANCELADO") return "CANCELADO";
+  if (e.pagamentoDivergente) return "CONFIRMANDO";
   if (!e.gatewayAtivo) return "INDISPONIVEL";
   const agora = e.agora ?? Date.now();
   const c = e.ultimaCobranca;
@@ -143,6 +178,8 @@ export type EntradaPagamentoAdmin = {
     valorPago: number | null;
     aprovadoEm: Date | string | null;
   }[];
+  /** Alguma cobrança foi paga com divergência e não foi aprovada (`cobrancaDivergente`). */
+  divergente?: boolean;
 };
 
 /**
@@ -150,10 +187,12 @@ export type EntradaPagamentoAdmin = {
  * - PAGO_APOS_CANCELAMENTO: pedido CANCELADO com cobrança aprovada depois do cancelamento (sem a hora
  *   do cancelamento, não dá para saber a ordem: alerta por segurança). Pedido pago e DEPOIS cancelado
  *   pela dona não tem alerta: o próprio cancelamento já avisou para devolver.
- * - PAGO_EM_DOBRO: mais de uma cobrança aprovada no mesmo pedido.
+ * - PAGO_EM_DOBRO: mais de uma cobrança aprovada no mesmo pedido;
+ * - PAGO_COM_DIVERGENCIA: alguma cobrança paga com divergência (vem por último: os de cima já pedem
+ *   para olhar o app).
  */
 export function alertaDoPagamento(e: EntradaPagamentoAdmin): AlertaPagamento | null {
-  if (e.aprovadas.length === 0) return null;
+  if (e.aprovadas.length === 0) return e.divergente ? "PAGO_COM_DIVERGENCIA" : null;
   if (e.pedidoStatus === "CANCELADO") {
     const cancelado = e.canceladoEm === null ? null : ms(e.canceladoEm);
     if (cancelado === null || e.aprovadas.some((a) => a.aprovadoEm === null || ms(a.aprovadoEm) >= cancelado)) {
@@ -161,13 +200,17 @@ export function alertaDoPagamento(e: EntradaPagamentoAdmin): AlertaPagamento | n
     }
   }
   if (e.aprovadas.length > 1) return "PAGO_EM_DOBRO";
-  return null;
+  return e.divergente ? "PAGO_COM_DIVERGENCIA" : null;
 }
 
-/** `PedidoAdminDTO.pagamento`: método e valor da PRIMEIRA cobrança aprovada, mais o alerta. Sem cobrança aprovada: null. */
+/**
+ * `PedidoAdminDTO.pagamento`: método e valor da PRIMEIRA cobrança aprovada, mais o alerta. Só com
+ * divergência (nenhuma aprovada): método, parcelas e valor nulos e o alerta PAGO_COM_DIVERGENCIA.
+ * Sem nada disso: null.
+ */
 export function pagamentoAdminDe(e: EntradaPagamentoAdmin): PagamentoAdminDTO | null {
   const primeira = e.aprovadas[0];
-  if (!primeira) return null;
+  if (!primeira) return e.divergente ? { metodo: null, parcelas: null, valorPago: null, alerta: "PAGO_COM_DIVERGENCIA" } : null;
   return {
     metodo: primeira.metodo === "pix" || primeira.metodo === "credit_card" ? primeira.metodo : null,
     parcelas: primeira.parcelas,

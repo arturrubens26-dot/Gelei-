@@ -239,10 +239,11 @@ const booleano = z.union([z.boolean(), z.enum(["true", "false"]).transform((v) =
 const conferenciaSchema = z.object({
   success: booleano,
   paid: booleano.optional().default(false),
-  amount: centavos.optional(),
-  paid_amount: centavos.optional(),
-  installments: z.union([z.number(), z.string().regex(/^\d{1,2}$/).transform(Number)]).pipe(z.number().int()).optional(),
-  capture_method: z.string().max(40).optional(),
+  // nullish: "não veio" e null valem o mesmo (a conferência recusa o que faltar, sem quebrar a leitura).
+  amount: centavos.nullish(),
+  paid_amount: centavos.nullish(),
+  installments: z.union([z.number(), z.string().regex(/^\d{1,2}$/).transform(Number)]).pipe(z.number().int()).nullish(),
+  capture_method: z.string().max(40).nullish(),
   // A documentação não traz estes dois; se a resposta trouxer, eles também são conferidos.
   order_nsu: z.string().max(200).nullish(),
   currency: z.string().max(10).nullish(),
@@ -271,13 +272,29 @@ export type Classificacao =
  * `amount`, e isso é aceito.
  */
 export function divergenciaDaConferencia(c: Conferencia, valorCentavos: number): string | null {
-  if (c.amount === undefined || c.amount !== valorCentavos) return "valor";
-  if (c.paid_amount === undefined || c.paid_amount < c.amount) return "valor-pago";
+  if (c.amount == null || c.amount !== valorCentavos) return "valor";
+  if (c.paid_amount == null || c.paid_amount < c.amount) return "valor-pago";
   if (c.currency && c.currency.trim().toUpperCase() !== "BRL") return "moeda";
   if (c.capture_method !== "pix" && c.capture_method !== "credit_card") return "metodo";
-  const parcelas = c.installments ?? 1;
+  const parcelas = parcelasDe(c);
   if (parcelas < 1 || parcelas > MAX_PARCELAS || (c.capture_method === "pix" && parcelas !== 1)) return "parcelas";
   return null;
+}
+
+/**
+ * A resposta do payment_check AMARRA a transação a esta cobrança? Só se trouxer o nosso order_nsu.
+ * Sem isso (a documentação não garante), uma transação apresentada pela própria cliente (retorno do
+ * navegador) não basta para confirmar: ela pode ser de outro link da loja de mesmo valor.
+ */
+export function conferenciaAmarrada(c: Conferencia, referencia: string): boolean {
+  return typeof c.order_nsu === "string" && c.order_nsu === referencia;
+}
+
+/** Parcelas informadas; ausente vale 1, e no PIX 0 também vale 1 (à vista). */
+function parcelasDe(c: Conferencia): number {
+  if (c.installments == null) return 1;
+  if (c.capture_method === "pix" && c.installments === 0) return 1;
+  return c.installments;
 }
 
 /**
@@ -294,7 +311,7 @@ export function classificarConferencia(c: Conferencia, valorCentavos: number, re
   return {
     tipo: "APROVADO",
     metodo: c.capture_method as MetodoPagamento,
-    parcelas: c.installments ?? 1,
+    parcelas: parcelasDe(c),
     valorPagoCentavos: c.paid_amount!,
   };
 }

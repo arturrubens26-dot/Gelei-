@@ -11,7 +11,9 @@
 //                        paga, manda o aviso (webhook) e leva o navegador ao redirect_url.
 // Controle dos testes (não existe na API real):
 //   POST /__teste/pagar  { slug, metodo?, parcelas?, valorErrado?, aviso? } → { transaction_nsu, slug, order_nsu, retorno, aviso }
-//   POST /__teste/modo   { falharConferencia?: 0|500|"tempo", falharLinks?: 0|500, semSlug?, naoAmarraPedido? }
+//   POST /__teste/modo   { falharConferencia?: 0|500|"tempo", falharLinks?: 0|500, semSlug?, naoAmarraPedido?,
+//                          semOrderNsu?, conferencia404? }
+//   (por padrão o payment_check devolve também o order_nsu da transação, amarrando-a ao pedido)
 //   GET  /__teste/estado → links e transações
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
@@ -22,7 +24,7 @@ const JUROS_POR_PARCELA = 0.03; // só para o "cartão com juros" ficar maior qu
 export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", silencioso = false } = {}) {
   const links = new Map(); // slug → { slug, order_nsu, amount, redirect_url, webhook_url, valid_until, single_payment, pagoPor }
   const transacoes = new Map(); // transaction_nsu → { slug, order_nsu, amount, paid_amount, installments, capture_method }
-  const modo = { falharConferencia: 0, falharLinks: 0, semSlug: false, naoAmarraPedido: false };
+  const modo = { falharConferencia: 0, falharLinks: 0, semSlug: false, naoAmarraPedido: false, semOrderNsu: false, conferencia404: false };
   const chamadas = { links: 0, payment_check: 0 };
   const log = (...a) => silencioso || console.log("[infinitepay-falsa]", ...a);
 
@@ -156,6 +158,7 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
         }
         if (modo.falharConferencia) return json(res, modo.falharConferencia, { message: "falha simulada" });
         const b = await lerCorpo(req);
+        if (modo.conferencia404) return json(res, 404, { message: "transaction not found" });
         const t = b && transacoes.get(b.transaction_nsu);
         const confere = t && (modo.naoAmarraPedido || (t.order_nsu === b.order_nsu && t.slug === b.slug));
         if (!confere) return json(res, 200, { success: false, paid: false });
@@ -166,6 +169,8 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
           paid_amount: t.paid_amount,
           installments: t.installments,
           capture_method: t.capture_method,
+          // A API real pode não trazer: com semOrderNsu, a resposta não amarra a transação ao pedido.
+          ...(modo.semOrderNsu ? {} : { order_nsu: t.order_nsu }),
         });
       }
 

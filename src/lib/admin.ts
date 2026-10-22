@@ -11,7 +11,13 @@ import {
 } from "@/lib/despesas";
 import { codigoPedido } from "@/lib/formatacao";
 import type { ModoEntrega } from "@/lib/entrega-regras";
-import { pagamentoAdminDe, pedidoExpirado, type PagamentoAdminDTO } from "@/lib/pagamentos-regras";
+import {
+  MARCA_DIVERGENTE,
+  PRAZO_PARA_PAGAR_MS,
+  pagamentoAdminDe,
+  pedidoExpirado,
+  type PagamentoAdminDTO,
+} from "@/lib/pagamentos-regras";
 import { STATUS_PAGOS, transicoesPermitidas, type StatusPedido } from "@/lib/status";
 import { nomeDoCliente, type CanalPedido, type FormaPagamento } from "@/lib/vendas";
 
@@ -48,20 +54,29 @@ export const COBRANCAS_APROVADAS = {
   select: { metodo: true, parcelas: true, valorPago: true, aprovadoEm: true },
 } satisfies Prisma.Order$pagamentosArgs;
 
-/** `expirado` e `pagamento` do painel a partir do pedido e das cobranças aprovadas. */
+/** Contagem das cobranças pagas com divergência e não resolvidas (`_count` filtrado, sem consulta por pedido). */
+export const CONTAR_DIVERGENTES = {
+  pagamentos: { where: { status: { in: ["PENDENTE", "CANCELADO"] }, statusGateway: { startsWith: MARCA_DIVERGENTE } } },
+} satisfies Prisma.OrderCountOutputTypeSelect;
+
+/** `expirado` e `pagamento` do painel a partir do pedido, das cobranças aprovadas e das divergentes. */
 export function situacaoDoPagamentoNoPainel(p: {
   canal: CanalPedido;
   status: StatusPedido;
   createdAt: Date;
   canceladoEm: Date | null;
   pagamentos: { metodo: string | null; parcelas: number | null; valorPago: Prisma.Decimal | null; aprovadoEm: Date | null }[];
+  _count: { pagamentos: number };
 }): { expirado: boolean; pagamento: PagamentoAdminDTO | null } {
+  const divergente = p._count.pagamentos > 0;
   return {
-    expirado: p.canal === "ONLINE" && p.status === "PENDENTE" && pedidoExpirado(p.createdAt),
+    // Com pagamento divergente, o dinheiro entrou: não é "expirado", é "conferir".
+    expirado: p.canal === "ONLINE" && p.status === "PENDENTE" && !divergente && pedidoExpirado(p.createdAt),
     pagamento: pagamentoAdminDe({
       pedidoStatus: p.status,
       canceladoEm: p.canceladoEm,
       aprovadas: p.pagamentos.map((c) => ({ ...c, valorPago: c.valorPago?.toNumber() ?? null })),
+      divergente,
     }),
   };
 }
@@ -84,7 +99,7 @@ export async function listarPedidosAdmin(opcoes: { status?: StatusPedido; canal?
       take: POR_PAGINA,
       include: {
         user: { select: { nome: true, email: true } },
-        _count: { select: { items: true, kits: true } },
+        _count: { select: { items: true, kits: true, ...CONTAR_DIVERGENTES } },
         pagamentos: COBRANCAS_APROVADAS,
       },
     }),
@@ -140,15 +155,19 @@ export async function alterarStatusPedido(
   return { ok: true };
 }
 
-/** Números rápidos da tela inicial do painel (uma consulta agrupada por status). */
+/**
+ * Números rápidos da tela inicial do painel (uma consulta agrupada por status). "Pendentes" são só os
+ * que ainda podem ser pagos: o pedido online com mais de 48 h expirou e não conta.
+ */
 export async function resumoDashboard() {
-  const [porStatus, recentes] = await Promise.all([
+  const [porStatus, recentes, expirados] = await Promise.all([
     db.order.groupBy({ by: ["status"], _count: { _all: true }, _sum: { total: true } }),
     db.order.findMany({
       orderBy: { createdAt: "desc" },
       take: 5,
       include: { user: { select: { nome: true } } },
     }),
+    db.order.count({ where: { status: "PENDENTE", canal: "ONLINE", createdAt: { lte: new Date(Date.now() - PRAZO_PARA_PAGAR_MS) } } }),
   ]);
 
   const contagem = (s: StatusPedido) => porStatus.find((l) => l.status === s)?._count._all ?? 0;
@@ -159,7 +178,9 @@ export async function resumoDashboard() {
   const pedidosPagos = pagos.reduce((soma, l) => soma + l._count._all, 0);
 
   return {
-    pendentes: contagem("PENDENTE"),
+    pendentes: Math.max(0, contagem("PENDENTE") - expirados),
+    /** Pedidos online pendentes há mais de 48 h (não abrem mais link de pagamento). */
+    expirados,
     aEnviar: contagem("PAGO"),
     faturamentoBruto,
     pedidosPagos,

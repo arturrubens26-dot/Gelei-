@@ -25,6 +25,7 @@ export const POST = comTratamento(
       conferencia: corpo.dados.conferencia,
       observacao: corpo.dados.observacao,
     });
-    return Response.json(gerado, { status: 201 });
+    // O link é uma credencial de uso único: nunca em cache (o comTratamento também marca, mas aqui é explícito).
+    return Response.json(gerado, { status: 201, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } });
   },
 );
