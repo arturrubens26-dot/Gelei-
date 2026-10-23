@@ -215,53 +215,65 @@ enum PaymentStatus {
   ESTORNADO
 }
 
-/// Cobrança de um pedido online: um link do checkout da InfinitePay (PIX ou cartão até 12x). Um
-/// pedido pode ter várias: o link vence em 60 min e a cliente abre outro. O pedido só vira PAGO
-/// quando ESTE servidor confere a transação no payment_check com a própria chave (o aviso e o
-/// retorno do navegador só disparam a conferência). Ver src/lib/pagamentos.ts.
+/// Cobrança de um pedido online OU de uma parcela de encomenda de lembrancinhas: um link do checkout
+/// da InfinitePay (PIX ou cartão até 12x). Cada pedido ou parcela pode ter várias: o link vence em
+/// 60 min e a cliente abre outro. Só vale como paga quando ESTE servidor confere a transação no
+/// payment_check com a própria chave (o aviso e o retorno do navegador só disparam a conferência).
+/// Uma tabela só para os dois: o UNIQUE(gateway, transacao_nsu) vale entre pedidos E encomendas, e
+/// uma transação nunca quita duas cobranças. O "alvo" é exatamente um de `orderId` e `encomendaId`
+/// (CHECK `pagamentos_alvo`), e a encomenda sempre com a parcela. Ver src/lib/pagamentos.ts.
 model Pagamento {
-  id                String        @id @default(cuid())
-  orderId           String        @map("order_id")
+  id                String               @id @default(cuid())
+  /// Alvo pedido (nulo na cobrança de encomenda).
+  orderId           String?              @map("order_id")
+  /// Alvo encomenda de lembrancinhas, com a parcela (ENTRADA ou RESTANTE). Nulos na cobrança de pedido.
+  encomendaId       String?              @map("encomenda_id")
+  parcela           ParcelaEncomenda?
   /// "infinitepay" ou "simulado" (demonstração local).
-  gateway           String        @db.VarChar(20)
-  /// order_nsu enviado à InfinitePay: ped-<pedidoId>-<n> (um por tentativa).
-  referenciaExterna String        @map("referencia_externa") @db.VarChar(64)
-  status            PaymentStatus @default(PENDENTE)
+  gateway           String               @db.VarChar(20)
+  /// order_nsu enviado à InfinitePay, um por tentativa: ped-<pedidoId>-<n>, ou
+  /// enc-<encomendaId>-<ENTRADA|RESTANTE>-<n> (CHECK: confere com a encomenda e a parcela da linha).
+  referenciaExterna String               @map("referencia_externa") @db.VarChar(64)
+  status            PaymentStatus        @default(PENDENTE)
   /// O que a última conferência disse (ex.: "pago", "nao-pago", "divergente:valor"), para conferência manual.
-  statusGateway     String?       @map("status_gateway") @db.VarChar(40)
+  statusGateway     String?              @map("status_gateway") @db.VarChar(40)
   /// Valor cobrado: o total do pedido quando o link foi aberto.
-  valor             Decimal       @db.Decimal(10, 2)
+  valor             Decimal              @db.Decimal(10, 2)
   /// Link do checkout hospedado (null no simulado). Só https em *.infinitepay.io.
-  checkoutUrl       String?       @map("checkout_url") @db.VarChar(500)
+  checkoutUrl       String?              @map("checkout_url") @db.VarChar(500)
   /// Slug da fatura: da resposta de /links, se vier; senão, do candidato CONFIRMADO.
-  faturaSlug        String?       @map("fatura_slug") @db.VarChar(100)
+  faturaSlug        String?              @map("fatura_slug") @db.VarChar(100)
   /// Só depois do payment_check aprovado. UNIQUE: a mesma transação nunca quita duas cobranças.
-  transacaoNsu      String?       @map("transacao_nsu") @db.VarChar(100)
+  transacaoNsu      String?              @map("transacao_nsu") @db.VarChar(100)
   /// Último candidato recebido (aviso com token ou retorno da dona do pedido), ainda NÃO conferido.
-  avisoTransacaoNsu String?       @map("aviso_transacao_nsu") @db.VarChar(100)
-  avisoSlug         String?       @map("aviso_slug") @db.VarChar(100)
-  avisadoEm         DateTime?     @map("avisado_em")
+  avisoTransacaoNsu String?              @map("aviso_transacao_nsu") @db.VarChar(100)
+  avisoSlug         String?              @map("aviso_slug") @db.VarChar(100)
+  avisadoEm         DateTime?            @map("avisado_em")
   /// A dona do pedido voltou da InfinitePay por esta cobrança (retorno do navegador): segura a tela em
   /// "confirmando" e bloqueia link novo por 30 min. O retorno também confere a transação no
   /// payment_check (com o canário de amarração) e pode confirmar; recusado, só esta hora fica gravada.
-  retornoEm         DateTime?     @map("retorno_em")
+  retornoEm         DateTime?            @map("retorno_em")
   /// "pix" ou "credit_card"; parcelas de 1 a 12; valor pago (com os juros do parcelado) em reais.
-  metodo            String?       @db.VarChar(20)
+  metodo            String?              @db.VarChar(20)
   parcelas          Int?
-  valorPago         Decimal?      @map("valor_pago") @db.Decimal(10, 2)
+  valorPago         Decimal?             @map("valor_pago") @db.Decimal(10, 2)
   /// Comprovante da InfinitePay (só https em *.infinitepay.io).
-  comprovanteUrl    String?       @map("comprovante_url") @db.VarChar(500)
-  expiraEm          DateTime      @map("expira_em")
-  criadoEm          DateTime      @default(now()) @map("criado_em")
+  comprovanteUrl    String?              @map("comprovante_url") @db.VarChar(500)
+  expiraEm          DateTime             @map("expira_em")
+  criadoEm          DateTime             @default(now()) @map("criado_em")
   /// Última conferência no gateway: limita quantas vezes a tela da cliente faz o servidor perguntar.
-  consultadoEm      DateTime?     @map("consultado_em")
-  aprovadoEm        DateTime?     @map("aprovado_em")
-  /// Restrict: pedido com cobrança não é apagado (o histórico do dinheiro fica).
-  order             Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  consultadoEm      DateTime?            @map("consultado_em")
+  aprovadoEm        DateTime?            @map("aprovado_em")
+  /// Restrict: pedido ou encomenda com cobrança não é apagado (o histórico do dinheiro fica).
+  order             Order?               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  encomenda         Encomenda?           @relation(fields: [encomendaId], references: [id], onDelete: Restrict)
+  /// Devoluções de encomenda originadas por esta cobrança (paga tarde ou em duplicidade).
+  devolucoes        EncomendaDevolucao[]
 
   @@unique([gateway, referenciaExterna])
   @@unique([gateway, transacaoNsu])
   @@index([orderId])
+  @@index([encomendaId, parcela])
   @@map("pagamentos")
 }
 
@@ -668,7 +680,8 @@ model Encomenda {
   address                 Address?             @relation(fields: [addressId], references: [id], onDelete: Restrict)
   restanteRegistradoPor   User?                @relation("RestantesRegistrados", fields: [restanteRegistradoPorId], references: [id], onDelete: SetNull)
   itens                   EncomendaItem[]
-  pagamentos              EncomendaPagamento[]
+  /// Cobranças da ENTRADA e do RESTANTE (tabela `pagamentos`, a mesma dos pedidos).
+  pagamentos              Pagamento[]
   devolucoes              EncomendaDevolucao[]
 
   @@unique([userId, idempotencyKey])
@@ -700,57 +713,27 @@ model EncomendaItem {
   @@map("encomenda_itens")
 }
 
-/// Cobranças PIX de uma encomenda: as mesmas colunas de `pagamentos`, mais a parcela. Cada parcela
-/// tem o seu `external_reference` ("enc-<id>-ENTRADA" / "enc-<id>-RESTANTE"): um PIX do restante
-/// nunca quita a entrada, mesmo com o mesmo valor.
-model EncomendaPagamento {
-  id                String               @id @default(cuid())
-  encomendaId       String               @map("encomenda_id")
-  parcela           ParcelaEncomenda
-  /// "mercadopago" ou "simulado" (demonstração local).
-  gateway           String               @db.VarChar(20)
-  /// Id da cobrança no gateway (no Mercado Pago, o id do pagamento).
-  referenciaExterna String               @map("referencia_externa") @db.VarChar(64)
-  status            PaymentStatus        @default(PENDENTE)
-  statusGateway     String?              @map("status_gateway") @db.VarChar(40)
-  valor             Decimal              @db.Decimal(10, 2)
-  copiaECola        String               @map("copia_e_cola")
-  qrCodeBase64      String?              @map("qr_code_base64")
-  expiraEm          DateTime             @map("expira_em")
-  criadoEm          DateTime             @default(now()) @map("criado_em")
-  consultadoEm      DateTime?            @map("consultado_em")
-  /// Quando o dinheiro entrou: o Financeiro conta a parcela por esta data.
-  aprovadoEm        DateTime?            @map("aprovado_em")
-  /// Restrict: encomenda com cobrança não se apaga (o histórico do dinheiro fica).
-  encomenda         Encomenda            @relation(fields: [encomendaId], references: [id], onDelete: Restrict)
-  devolucoes        EncomendaDevolucao[]
-
-  @@unique([gateway, referenciaExterna])
-  @@index([encomendaId, parcela])
-  @@index([status, aprovadoEm])
-  @@map("encomenda_pagamentos")
-}
-
 /// Dinheiro a devolver à cliente. Uma linha por motivo (a desistência, um PIX pago tarde…): o
 /// Financeiro tira cada devolução da receita no mês em que ela foi FEITA, e uma devolução nova não
-/// muda um mês já fechado. Na v1 a dona devolve pelo app do Mercado Pago e marca no painel; o aviso
-/// de estorno do Mercado Pago também fecha a devolução sozinho.
+/// muda um mês já fechado. Na v1 a devolução é 100% manual: a dona devolve pelo app da InfinitePay e
+/// marca no painel (a InfinitePay não avisa estorno pelo webhook_url).
 model EncomendaDevolucao {
-  id              String              @id @default(cuid())
-  encomendaId     String              @map("encomenda_id")
-  /// O PIX que originou a devolução (pago tarde ou em duplicidade); nulo na desistência e no cancelamento.
-  pagamentoId     String?             @map("pagamento_id")
+  id              String          @id @default(cuid())
+  encomendaId     String          @map("encomenda_id")
+  /// A cobrança (tabela `pagamentos`) que originou a devolução (paga tarde ou em duplicidade); nula na
+  /// desistência e no cancelamento.
+  pagamentoId     String?         @map("pagamento_id")
   motivo          DevolucaoMotivo
-  valor           Decimal             @db.Decimal(10, 2)
-  status          DevolucaoStatus     @default(PENDENTE)
-  criadaEm        DateTime            @default(now()) @map("criada_em")
-  feitaEm         DateTime?           @map("feita_em")
-  observacao      String?             @db.VarChar(300)
-  /// Quem marcou como feita; nulo quando foi o aviso de estorno do Mercado Pago. SetNull: fica o registro.
-  registradaPorId String?             @map("registrada_por_id")
-  encomenda       Encomenda           @relation(fields: [encomendaId], references: [id], onDelete: Restrict)
-  pagamento       EncomendaPagamento? @relation(fields: [pagamentoId], references: [id], onDelete: Restrict)
-  registradaPor   User?               @relation("DevolucoesRegistradas", fields: [registradaPorId], references: [id], onDelete: SetNull)
+  valor           Decimal         @db.Decimal(10, 2)
+  status          DevolucaoStatus @default(PENDENTE)
+  criadaEm        DateTime        @default(now()) @map("criada_em")
+  feitaEm         DateTime?       @map("feita_em")
+  observacao      String?         @db.VarChar(300)
+  /// Quem marcou como feita. SetNull: fica o registro se a conta do admin sair.
+  registradaPorId String?         @map("registrada_por_id")
+  encomenda       Encomenda       @relation(fields: [encomendaId], references: [id], onDelete: Restrict)
+  pagamento       Pagamento?      @relation(fields: [pagamentoId], references: [id], onDelete: Restrict)
+  registradaPor   User?           @relation("DevolucoesRegistradas", fields: [registradaPorId], references: [id], onDelete: SetNull)
 
   @@index([encomendaId])
   @@index([status, feitaEm])

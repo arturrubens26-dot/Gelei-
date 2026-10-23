@@ -1,32 +1,40 @@
 -- Encomendas de lembrancinhas (potinhos mini de 40 ml): a cliente solicita de 15 a 50 potinhos para
--- uma festa, a dona aprova, a cliente paga a ENTRADA por PIX (50% dos potinhos) e o RESTANTE (com o
--- frete) até a entrega ou retirada. Entidade própria: NÃO é um `Order`.
+-- uma festa, a dona aprova, a cliente paga a ENTRADA (50% dos potinhos) e o RESTANTE (com o frete)
+-- pelo checkout da InfinitePay até a entrega ou retirada. Entidade própria: NÃO é um `Order`.
 --
--- Só ACRESCENTA: seis tipos, cinco tabelas novas e a coluna `products.disponivel_em_mini` (default
--- false). Nada existente muda de comportamento: o código antigo continua funcionando com o banco novo.
+-- Vem DEPOIS de 20261022220000_pagamento_retorno: as cobranças das encomendas ficam na MESMA tabela
+-- `pagamentos` dos pedidos (plano 2026-10-21, seção 2.8), para o UNIQUE(gateway, transacao_nsu) valer
+-- entre pedidos e encomendas: uma transação nunca quita as duas coisas. Em `pagamentos`:
+--   - `order_id` passa a ser opcional; entram `encomenda_id` (FK) e `parcela` (ENTRADA | RESTANTE);
+--   - CHECK `pagamentos_alvo`: exatamente um de order_id e encomenda_id, e `parcela` junto com a encomenda;
+--   - CHECK `pagamentos_referencia_da_parcela`: a cobrança de encomenda tem o order_nsu
+--     enc-<encomenda_id>-<parcela>-<n> da PRÓPRIA linha (o restante nunca quita a entrada).
+-- O tipo "ModoEntrega" já existe (20261021230000_entrega_telefone) e é reaproveitado.
+--
+-- O resto só ACRESCENTA: cinco tipos, quatro tabelas e `products.disponivel_em_mini` (default false).
+-- Os pedidos continuam funcionando igual: toda cobrança existente tem order_id.
 -- Gerada com `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`;
 -- as CHECKs e o INSERT da configuração, no fim, foram escritos à mão.
 --
--- O recurso nasce DESATIVADO (config_lembrancinhas.ativo = false, com preço e pesos provisórios) e
--- nenhum sabor nasce marcado como "disponível em mini": a dona confere e ativa no painel. O painel
--- só deixa ativar depois que o CNPJ/CPF e o e-mail de contato estiverem em src/lib/dados-loja.ts
--- (Decreto 7.962/2013, art. 2º).
+-- O recurso nasce DESATIVADO (config_lembrancinhas.ativo = false, com preço e pesos provisórios), sem
+-- sabor marcado como mini, e o servidor recusa solicitações enquanto src/lib/dados-loja.ts não tiver
+-- CNPJ/CPF e e-mail de contato (Decreto 7.962/2013, art. 2º; decisão D13).
 --
--- Desfazer, SÓ enquanto nenhuma encomenda existir (apagar encomendas apagaria dinheiro recebido do
--- histórico e do Financeiro):
+-- Desfazer, SÓ enquanto nenhuma encomenda existir (apagar encomendas apagaria dinheiro recebido):
 --   BEGIN;
 --   SELECT count(*) FROM "encomendas";   -- precisa dar 0; se não der, ROLLBACK
---   DROP TABLE "encomenda_devolucoes", "encomenda_pagamentos", "encomenda_itens", "encomendas", "config_lembrancinhas";
---   DROP TYPE "EncomendaStatus", "ModoEntrega", "ParcelaEncomenda", "AtorEncomenda", "DevolucaoStatus", "DevolucaoMotivo";
+--   ALTER TABLE "pagamentos" DROP CONSTRAINT "pagamentos_alvo", DROP CONSTRAINT "pagamentos_referencia_da_parcela";
+--   DROP TABLE "encomenda_devolucoes";
+--   ALTER TABLE "pagamentos" DROP COLUMN "encomenda_id", DROP COLUMN "parcela", ALTER COLUMN "order_id" SET NOT NULL;
+--   DROP TABLE "encomenda_itens", "encomendas", "config_lembrancinhas";
+--   DROP TYPE "EncomendaStatus", "ParcelaEncomenda", "AtorEncomenda", "DevolucaoStatus", "DevolucaoMotivo";
 --   ALTER TABLE "products" DROP COLUMN "disponivel_em_mini";
---   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261022120000_lembrancinhas';
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261023120000_lembrancinhas';
 --   COMMIT;
+-- ("ModoEntrega" NÃO sai: é de orders.modo_entrega.)
 
 -- CreateEnum
 CREATE TYPE "EncomendaStatus" AS ENUM ('SOLICITADA', 'AGUARDANDO_ENTRADA', 'CONFIRMADA', 'EM_PRODUCAO', 'PRONTA', 'ENTREGUE', 'RECUSADA', 'EXPIRADA', 'CANCELADA');
-
--- CreateEnum
-CREATE TYPE "ModoEntrega" AS ENUM ('RETIRADA', 'ENTREGA');
 
 -- CreateEnum
 CREATE TYPE "ParcelaEncomenda" AS ENUM ('ENTRADA', 'RESTANTE');
@@ -39,6 +47,11 @@ CREATE TYPE "DevolucaoStatus" AS ENUM ('PENDENTE', 'FEITA');
 
 -- CreateEnum
 CREATE TYPE "DevolucaoMotivo" AS ENUM ('DESISTENCIA', 'CANCELAMENTO', 'PAGAMENTO_TARDIO', 'PAGAMENTO_DUPLICADO');
+
+-- AlterTable
+ALTER TABLE "pagamentos" ADD COLUMN     "encomenda_id" TEXT,
+ADD COLUMN     "parcela" "ParcelaEncomenda",
+ALTER COLUMN "order_id" DROP NOT NULL;
 
 -- AlterTable
 ALTER TABLE "products" ADD COLUMN     "disponivel_em_mini" BOOLEAN NOT NULL DEFAULT false;
@@ -114,26 +127,6 @@ CREATE TABLE "encomenda_itens" (
 );
 
 -- CreateTable
-CREATE TABLE "encomenda_pagamentos" (
-    "id" TEXT NOT NULL,
-    "encomenda_id" TEXT NOT NULL,
-    "parcela" "ParcelaEncomenda" NOT NULL,
-    "gateway" VARCHAR(20) NOT NULL,
-    "referencia_externa" VARCHAR(64) NOT NULL,
-    "status" "PaymentStatus" NOT NULL DEFAULT 'PENDENTE',
-    "status_gateway" VARCHAR(40),
-    "valor" DECIMAL(10,2) NOT NULL,
-    "copia_e_cola" TEXT NOT NULL,
-    "qr_code_base64" TEXT,
-    "expira_em" TIMESTAMP(3) NOT NULL,
-    "criado_em" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "consultado_em" TIMESTAMP(3),
-    "aprovado_em" TIMESTAMP(3),
-
-    CONSTRAINT "encomenda_pagamentos_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "encomenda_devolucoes" (
     "id" TEXT NOT NULL,
     "encomenda_id" TEXT NOT NULL,
@@ -183,15 +176,6 @@ CREATE INDEX "encomenda_itens_product_id_idx" ON "encomenda_itens"("product_id")
 CREATE UNIQUE INDEX "encomenda_itens_encomenda_id_product_id_key" ON "encomenda_itens"("encomenda_id", "product_id");
 
 -- CreateIndex
-CREATE INDEX "encomenda_pagamentos_encomenda_id_parcela_idx" ON "encomenda_pagamentos"("encomenda_id", "parcela");
-
--- CreateIndex
-CREATE INDEX "encomenda_pagamentos_status_aprovado_em_idx" ON "encomenda_pagamentos"("status", "aprovado_em");
-
--- CreateIndex
-CREATE UNIQUE INDEX "encomenda_pagamentos_gateway_referencia_externa_key" ON "encomenda_pagamentos"("gateway", "referencia_externa");
-
--- CreateIndex
 CREATE INDEX "encomenda_devolucoes_encomenda_id_idx" ON "encomenda_devolucoes"("encomenda_id");
 
 -- CreateIndex
@@ -202,6 +186,12 @@ CREATE INDEX "encomenda_devolucoes_pagamento_id_idx" ON "encomenda_devolucoes"("
 
 -- CreateIndex
 CREATE INDEX "encomenda_devolucoes_registrada_por_id_idx" ON "encomenda_devolucoes"("registrada_por_id");
+
+-- CreateIndex
+CREATE INDEX "pagamentos_encomenda_id_parcela_idx" ON "pagamentos"("encomenda_id", "parcela");
+
+-- AddForeignKey
+ALTER TABLE "pagamentos" ADD CONSTRAINT "pagamentos_encomenda_id_fkey" FOREIGN KEY ("encomenda_id") REFERENCES "encomendas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -219,19 +209,27 @@ ALTER TABLE "encomenda_itens" ADD CONSTRAINT "encomenda_itens_encomenda_id_fkey"
 ALTER TABLE "encomenda_itens" ADD CONSTRAINT "encomenda_itens_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "encomenda_pagamentos" ADD CONSTRAINT "encomenda_pagamentos_encomenda_id_fkey" FOREIGN KEY ("encomenda_id") REFERENCES "encomendas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE "encomenda_devolucoes" ADD CONSTRAINT "encomenda_devolucoes_encomenda_id_fkey" FOREIGN KEY ("encomenda_id") REFERENCES "encomendas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "encomenda_devolucoes" ADD CONSTRAINT "encomenda_devolucoes_pagamento_id_fkey" FOREIGN KEY ("pagamento_id") REFERENCES "encomenda_pagamentos"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "encomenda_devolucoes" ADD CONSTRAINT "encomenda_devolucoes_pagamento_id_fkey" FOREIGN KEY ("pagamento_id") REFERENCES "pagamentos"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "encomenda_devolucoes" ADD CONSTRAINT "encomenda_devolucoes_registrada_por_id_fkey" FOREIGN KEY ("registrada_por_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- Regras que o Prisma não descreve (a API já confere; o banco também não deixa passar). Os limites
 -- aqui são folgados: o exato (15 a 50 potinhos, 0 a 100%, datas) fica no código, como nos kits.
+
+-- Cobrança: de um pedido OU de uma parcela de encomenda, nunca dos dois nem de nenhum.
+ALTER TABLE "pagamentos" ADD CONSTRAINT "pagamentos_alvo" CHECK (
+  num_nonnulls("order_id", "encomenda_id") = 1
+  AND (("encomenda_id" IS NULL) = ("parcela" IS NULL)));
+
+-- A cobrança de encomenda leva o order_nsu da própria encomenda e parcela: enc-<id>-<PARCELA>-<n>.
+-- É a referência gravada que vai ao payment_check: um link do RESTANTE nunca quita a ENTRADA.
+ALTER TABLE "pagamentos" ADD CONSTRAINT "pagamentos_referencia_da_parcela" CHECK (
+  "encomenda_id" IS NULL
+  OR "referencia_externa" ~ ('^enc-' || "encomenda_id" || '-' || "parcela"::text || '-[1-9][0-9]{0,2}$'));
 
 -- Configuração: preço positivo, pesos plausíveis e percentual retido de 0 a 100.
 ALTER TABLE "config_lembrancinhas" ADD CONSTRAINT "config_lembrancinhas_valores" CHECK (
@@ -256,8 +254,8 @@ ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_valores" CHECK (
   AND "peso_total_gramas" > 0
   AND "percentual_retido" BETWEEN 0 AND 100);
 
--- Telefone só com dígitos: DDD (sem zero na frente) + 8 ou 9 dígitos.
-ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_telefone" CHECK ("telefone" ~ '^[1-9][0-9]{9,10}$');
+-- Telefone: a mesma regra de orders.telefone (telefoneValido em src/lib/entrega-regras.ts).
+ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_telefone" CHECK ("telefone" ~ '^[1-9]{2}(9[0-9]{8}|[2-5][0-9]{7})$');
 
 -- Cada status com os fatos que ele exige. Em especial: ENTREGUE só quitada (restante pago).
 ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_status_coerente" CHECK (
@@ -270,11 +268,8 @@ ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_status_coerente" CHECK (
   AND (("restante_pago_em" IS NULL) = ("restante_forma" IS NULL))
   AND (NOT "restante_fora_do_site" OR "restante_pago_em" IS NOT NULL));
 
--- Itens e cobranças.
+-- Itens.
 ALTER TABLE "encomenda_itens" ADD CONSTRAINT "encomenda_itens_valores" CHECK ("quantidade" BETWEEN 1 AND 200 AND "preco_unitario" > 0);
-ALTER TABLE "encomenda_pagamentos" ADD CONSTRAINT "encomenda_pagamentos_valor_positivo" CHECK ("valor" > 0);
-ALTER TABLE "encomenda_pagamentos" ADD CONSTRAINT "encomenda_pagamentos_aprovacao_coerente"
-  CHECK ("aprovado_em" IS NULL OR "status" IN ('APROVADO', 'ESTORNADO'));
 
 -- Devolução: valor positivo; FEITA tem data, PENDENTE não.
 ALTER TABLE "encomenda_devolucoes" ADD CONSTRAINT "encomenda_devolucoes_coerente" CHECK (
