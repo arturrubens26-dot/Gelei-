@@ -32,9 +32,11 @@ export type ProdutoAdminDTO = {
   /** Verso da foto: "Harmoniza com" e "Por que você vai gostar" (listas vazias: foto sem verso). */
   harmonizacoes: string[];
   destaques: string[];
+  /** "Disponível em mini (lembrancinhas)": o sabor aparece no formulário das lembrancinhas (nasce fora). */
+  disponivelEmMini: boolean;
   /**
-   * Vendas (itens avulsos de pedido + caixas de kit com este sabor) e produções que apontam para o
-   * produto: com alguma, ele só pode ser ocultado.
+   * Vendas (itens avulsos de pedido + caixas de kit com este sabor + encomendas de lembrancinhas com
+   * ele) e produções que apontam para o produto: com alguma, ele só pode ser ocultado.
    */
   vendas: number;
   producoes: number;
@@ -43,14 +45,15 @@ export type ProdutoAdminDTO = {
 type Foto = { tipo: TipoFoto; dados: Uint8Array<ArrayBuffer> };
 
 // `kitSabores`: um sabor vendido só dentro de kits também tem histórico (a composição aponta para ele).
+// `encomendaItens`: idem para os potinhos mini das encomendas (sem isso, "Excluir" esbarraria na FK).
 const comContagens = {
-  _count: { select: { orderItems: true, kitSabores: true, producoes: true } },
+  _count: { select: { orderItems: true, kitSabores: true, encomendaItens: true, producoes: true } },
 } satisfies Prisma.ProductInclude;
 
 type ProdutoComContagens = Prisma.ProductGetPayload<{ include: typeof comContagens }>;
 
-/** Linhas de venda que citam o produto: avulso ou dentro de uma caixa de kit. */
-const vendasDo = (p: ProdutoComContagens) => p._count.orderItems + p._count.kitSabores;
+/** Linhas de venda que citam o produto: avulso, dentro de uma caixa de kit ou numa encomenda de minis. */
+const vendasDo = (p: ProdutoComContagens) => p._count.orderItems + p._count.kitSabores + p._count.encomendaItens;
 
 function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
   return {
@@ -65,6 +68,7 @@ function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
     permitidoEmKit: p.permitidoEmKit,
     harmonizacoes: p.harmonizacoes ?? [],
     destaques: p.destaques ?? [],
+    disponivelEmMini: p.disponivelEmMini,
     vendas: vendasDo(p),
     producoes: p._count.producoes,
   };
@@ -72,12 +76,13 @@ function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
 
 /**
  * A loja (páginas e /api/products) lê o catálogo em cache: depois de mudar, expira na hora. Expira
- * também os kits: os sabores do montador (/kits) e a economia dependem de preço, visibilidade e
- * "Pode entrar no Kit Presente" de cada produto.
+ * também os kits (os sabores do montador e a economia dependem de preço, visibilidade e "Pode entrar
+ * no Kit Presente") e as lembrancinhas (os sabores mini dependem de visibilidade e "Disponível em mini").
  */
 function atualizarLoja(): void {
   revalidateTag("produtos", { expire: 0 });
   revalidateTag("kits", { expire: 0 });
+  revalidateTag("lembrancinhas", { expire: 0 });
 }
 
 export async function listarProdutosAdmin(): Promise<ProdutoAdminDTO[]> {
@@ -103,6 +108,7 @@ export async function lerProdutoDoFormulario(form: FormData, opcoes: { fotoObrig
     // Um item por linha (o textarea do painel). Sem o campo: a lista fica como estava.
     harmonizacoes: campo("harmonizacoes"),
     destaques: campo("destaques"),
+    disponivelEmMini: campo("disponivelEmMini"),
   });
   if (!lido.success) return { ok: false, resposta: erroDeValidacao(lido.error) };
 
@@ -147,6 +153,8 @@ function camposDoProduto(entrada: ProdutoEntrada) {
     // Verso: o mesmo padrão (campo ausente = não mexe; "" = lista vazia).
     ...(entrada.harmonizacoes === undefined ? {} : { harmonizacoes: entrada.harmonizacoes }),
     ...(entrada.destaques === undefined ? {} : { destaques: entrada.destaques }),
+    // Idem para o mini: sem o campo, fica como estava (ao criar, nasce desmarcado).
+    ...(entrada.disponivelEmMini === undefined ? {} : { disponivelEmMini: entrada.disponivelEmMini }),
   };
 }
 
@@ -214,7 +222,8 @@ export async function definirVisibilidade(id: string, ativo: boolean): Promise<P
 }
 
 /**
- * Exclui de vez um produto sem histórico. Com vendas (avulsas ou em kits) ou produções, recusa (409):
+ * Exclui de vez um produto sem histórico. Com vendas (avulsas, em kits ou em encomendas de minis) ou
+ * produções, recusa (409):
  * os pedidos e as fichas de produção apontam para ele, então o caminho é ocultá-lo da loja.
  */
 export async function excluirProduto(id: string): Promise<void> {

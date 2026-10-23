@@ -172,11 +172,16 @@ export function nomeDoMes(mes: string): string {
   return `${NOMES_MES[Number(numero) - 1]} de ${ano}`;
 }
 
-// --- contas de data (horário de Brasília) ------------------------------------
+// --- contas de data (horário da loja, Teresina) ------------------------------
 
-export const FUSO_LOJA = "America/Sao_Paulo";
+/**
+ * Fuso da loja (Teresina-PI). Fortaleza e São Paulo dão o mesmo resultado em toda data desde 2019
+ * (−03:00, sem horário de verão), mas se o horário de verão voltar ele vale só para o Sudeste:
+ * Fortaleza segue o relógio do Piauí. Decisão da dona (D14, 2026-10-21).
+ */
+export const FUSO_LOJA = "America/Fortaleza";
 
-/** Hoje no horário de Brasília, "AAAA-MM-DD". */
+/** Hoje no horário da loja, "AAAA-MM-DD". */
 export function hojeNaLoja(agora = new Date()): string {
   // en-CA formata como AAAA-MM-DD.
   return new Intl.DateTimeFormat("en-CA", { timeZone: FUSO_LOJA, year: "numeric", month: "2-digit", day: "2-digit" }).format(agora);

@@ -29,3 +29,18 @@ export const MAX_LINHAS_DE_KIT = 20;
  * de 2 a 6). A soma exata quem confere é `conferirComposicao`, com os potes do kit lidos do banco.
  */
 export const MAX_POTES_POR_KIT = 6;
+
+/**
+ * Encomendas de lembrancinhas "abertas" (ainda não entregues nem encerradas) por conta (D12). As
+ * regras de potinhos e prazos ficam em src/lib/encomendas-regras.ts.
+ */
+export const MAX_ENCOMENDAS_ABERTAS = 3;
+
+/** Solicitações de encomenda por conta por hora (em memória, por instância). */
+export const MAX_ENCOMENDAS_POR_HORA = 10;
+
+/** PIX gerados por parcela de uma encomenda (cada "Gerar novo PIX" conta um). */
+export const MAX_PIX_POR_PARCELA = 10;
+
+/** PIX de encomenda gerados por conta por hora (todas as encomendas e parcelas). */
+export const MAX_PIX_ENCOMENDA_POR_HORA = 20;

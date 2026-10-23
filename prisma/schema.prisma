@@ -43,62 +43,74 @@ enum PaymentMethod {
 
 /// Clientes e administradores. `isAdmin` nunca deve ser definido a partir de entrada do usuário.
 model User {
-  id                   String             @id @default(cuid())
-  email                String             @unique
-  passwordHash         String             @map("password_hash")
-  nome                 String
-  isAdmin              Boolean            @default(false) @map("is_admin")
-  createdAt            DateTime           @default(now()) @map("created_at")
-  addresses            Address[]
-  orders               Order[]            @relation("PedidosDoCliente")
+  id                    String               @id @default(cuid())
+  email                 String               @unique
+  passwordHash          String               @map("password_hash")
+  nome                  String
+  isAdmin               Boolean              @default(false) @map("is_admin")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  addresses             Address[]
+  orders                Order[]              @relation("PedidosDoCliente")
   /// Vendas presenciais que este admin lançou (auditoria).
-  vendasRegistradas    Order[]            @relation("VendasRegistradas")
+  vendasRegistradas     Order[]              @relation("VendasRegistradas")
   /// Pedidos/vendas que este admin cancelou ou estornou (auditoria).
-  pedidosCancelados    Order[]            @relation("PedidosCancelados")
-  expenses             Expense[]
+  pedidosCancelados     Order[]              @relation("PedidosCancelados")
+  expenses              Expense[]
   /// Produções e ajustes de estoque que este admin lançou (auditoria).
-  producoesRegistradas Producao[]         @relation("ProducoesRegistradas")
-  ajustesRegistrados   AjusteEstoque[]    @relation("AjustesRegistrados")
+  producoesRegistradas  Producao[]           @relation("ProducoesRegistradas")
+  ajustesRegistrados    AjusteEstoque[]      @relation("AjustesRegistrados")
   /// Último WhatsApp informado num pedido (só dígitos, com DDD): pré-preenche a próxima compra.
-  telefone             String?            @db.VarChar(11)
+  telefone              String?              @db.VarChar(11)
   /// Admin que mudou a configuração da loja por último (auditoria).
-  configLojaAtualizada ConfigLoja[]       @relation("ConfigLojaAtualizadaPor")
+  configLojaAtualizada  ConfigLoja[]         @relation("ConfigLojaAtualizadaPor")
   /// Sobe a cada troca de senha: sessões com versão antiga (claim "v" do JWT) deixam de valer.
-  sessaoVersao         Int                @default(0) @map("sessao_versao")
+  sessaoVersao          Int                  @default(0) @map("sessao_versao")
   /// Pedidos de redefinição de senha desta conta.
-  redefinicoes         RedefinicaoSenha[] @relation("RedefinicoesDaConta")
+  redefinicoes          RedefinicaoSenha[]   @relation("RedefinicoesDaConta")
   /// Links de redefinição que este admin gerou no painel (auditoria).
-  linksSenhaGerados    RedefinicaoSenha[] @relation("LinksSenhaGerados")
+  linksSenhaGerados     RedefinicaoSenha[]   @relation("LinksSenhaGerados")
+  /// Encomendas de lembrancinhas desta cliente.
+  encomendas            Encomenda[]          @relation("EncomendasDoCliente")
+  /// Restantes de encomenda recebidos fora do site que este admin registrou (auditoria, decisão D8).
+  restantesRegistrados  Encomenda[]          @relation("RestantesRegistrados")
+  /// Devoluções de encomenda que este admin marcou como feitas (auditoria).
+  devolucoesRegistradas EncomendaDevolucao[] @relation("DevolucoesRegistradas")
 
   @@map("users")
 }
 
 model Product {
-  id             String          @id @default(cuid())
-  nome           String
-  descricao      String
+  id               String          @id @default(cuid())
+  nome             String
+  descricao        String
   /// Preço em reais (ex.: 24.90).
-  preco          Decimal         @db.Decimal(10, 2)
-  imagemUrl      String          @map("imagem_url")
+  preco            Decimal         @db.Decimal(10, 2)
+  imagemUrl        String          @map("imagem_url")
   /// Peso de cada unidade, em gramas (ex.: 250). Usado no cálculo de frete.
-  pesoGramas     Int             @map("peso_gramas")
+  pesoGramas       Int             @map("peso_gramas")
   /// Aparece na loja? Produto com vendas ou produções não pode ser excluído (o histórico aponta
   /// para ele): o admin o oculta da loja.
-  ativo          Boolean         @default(true)
+  ativo            Boolean         @default(true)
   /// Pode entrar no Kit Presente? Só os potes do tamanho padrão: um pote maior ou mais caro dentro
   /// da caixa sairia com desconto grande demais. Produto novo nasce FORA do kit (a dona marca no
   /// painel); o servidor recusa (400) caixa com sabor desmarcado.
-  permitidoEmKit Boolean         @default(false) @map("permitido_em_kit")
+  permitidoEmKit   Boolean         @default(false) @map("permitido_em_kit")
   /// Verso da foto: "Harmoniza com" (até 4 itens de 40 caracteres; CHECK no banco). Editável no painel.
-  harmonizacoes  String[]        @default([])
+  harmonizacoes    String[]        @default([])
   /// Verso da foto: "Por que você vai gostar" (até 3 itens de 70). Só sabor, textura, cor e uso:
   /// nada de alegação de saúde (o painel avisa).
-  destaques      String[]        @default([])
-  orderItems     OrderItem[]
-  producoes      Producao[]
-  fotos          ProdutoFoto[]
+  destaques        String[]        @default([])
+  orderItems       OrderItem[]
+  producoes        Producao[]
+  fotos            ProdutoFoto[]
   /// Potes deste sabor vendidos dentro de kits (a venda avulsa fica em orderItems).
-  kitSabores     OrderKitSabor[]
+  kitSabores       OrderKitSabor[]
+  /// Este sabor existe em potinho mini de 40 ml (lembrancinhas)? O mini é um formato de um sabor que
+  /// já existe: disponível = `ativo && disponivelEmMini`, então ocultar o sabor oculta também o mini.
+  /// Nasce DESMARCADO (a dona marca no painel).
+  disponivelEmMini Boolean         @default(false) @map("disponivel_em_mini")
+  /// Potinhos mini deste sabor em encomendas de lembrancinhas.
+  encomendaItens   EncomendaItem[]
 
   @@map("products")
 }
@@ -119,17 +131,18 @@ model ProdutoFoto {
 }
 
 model Address {
-  id          String  @id @default(cuid())
-  userId      String  @map("user_id")
-  cep         String  @db.VarChar(8)
+  id          String      @id @default(cuid())
+  userId      String      @map("user_id")
+  cep         String      @db.VarChar(8)
   rua         String
   numero      String
   complemento String?
   bairro      String
   cidade      String
-  estado      String  @db.Char(2)
-  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  estado      String      @db.Char(2)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   orders      Order[]
+  encomendas  Encomenda[]
 
   @@index([userId])
   @@map("addresses")
@@ -528,4 +541,220 @@ model RedefinicaoSenha {
   @@index([criadoEm])
   @@index([geradoPorId])
   @@map("redefinicoes_senha")
+}
+
+// --- Encomendas de lembrancinhas (potinhos mini de 40 ml) ------------------------------------------
+// Entidade própria (não é um `Order`): status, pagamentos em duas parcelas e prazos próprios, sem
+// mexer no caminho dos pedidos comuns. Regras puras em src/lib/encomendas-regras.ts.
+
+/// Situação da encomenda. "Quitada" NÃO é status: é `restantePagoEm` preenchido.
+/// Finais: ENTREGUE, RECUSADA, EXPIRADA e CANCELADA.
+enum EncomendaStatus {
+  SOLICITADA
+  AGUARDANDO_ENTRADA
+  CONFIRMADA
+  EM_PRODUCAO
+  PRONTA
+  ENTREGUE
+  RECUSADA
+  EXPIRADA
+  CANCELADA
+}
+
+/// As duas cobranças PIX: a entrada (50% dos potinhos) e o restante (com o frete).
+enum ParcelaEncomenda {
+  ENTRADA
+  RESTANTE
+}
+
+/// Quem encerrou a encomenda (desistência da cliente, cancelamento da loja).
+enum AtorEncomenda {
+  CLIENTE
+  LOJA
+  SISTEMA
+}
+
+enum DevolucaoStatus {
+  PENDENTE
+  FEITA
+}
+
+/// Por que o dinheiro volta para a cliente.
+enum DevolucaoMotivo {
+  /// A cliente desistiu (valor pela regra do corte e do percentual retido).
+  DESISTENCIA
+  /// A loja cancelou.
+  CANCELAMENTO
+  /// PIX pago depois de a encomenda encerrar (recusada, expirada, cancelada).
+  PAGAMENTO_TARDIO
+  /// A mesma parcela paga duas vezes (dois PIX, ou PIX + registro fora do site).
+  PAGAMENTO_DUPLICADO
+}
+
+/// Linha única (id "lembrancinhas"). Nasce DESATIVADA, com valores provisórios (decisões D1, D4, D10).
+model ConfigLembrancinhas {
+  id                  String   @id
+  ativo               Boolean  @default(false)
+  /// Preço de UM potinho, em reais (único para todos os sabores na v1).
+  precoPotinho        Decimal  @map("preco_potinho") @db.Decimal(10, 2)
+  /// Peso do potinho cheio (geleia + vidro + tampa), para o frete.
+  pesoPotinhoGramas   Int      @map("peso_potinho_gramas")
+  /// Peso da embalagem da encomenda inteira, somado ao dos potinhos no frete.
+  pesoEmbalagemGramas Int      @default(0) @map("peso_embalagem_gramas")
+  /// Quanto da entrada fica com a loja se a cliente desistir DEPOIS do corte (0 a 100; padrão 100,
+  /// decisão D4). Congelado em cada encomenda na aprovação.
+  percentualRetido    Int      @default(100) @map("percentual_retido")
+  atualizadoEm        DateTime @updatedAt @map("atualizado_em")
+
+  @@map("config_lembrancinhas")
+}
+
+model Encomenda {
+  id                      String               @id @default(cuid())
+  userId                  String               @map("user_id")
+  status                  EncomendaStatus      @default(SOLICITADA)
+  /// Dia da festa e dia da entrega OU retirada (sem hora; o horário é combinado pelo WhatsApp).
+  dataFesta               DateTime             @map("data_festa") @db.Date
+  dataEntrega             DateTime             @map("data_entrega") @db.Date
+  modoEntrega             ModoEntrega          @map("modo_entrega")
+  /// Só na ENTREGA (CHECK). Restrict: endereço com encomenda não se apaga.
+  addressId               String?              @map("address_id")
+  /// Só dígitos, com DDD. Fica só na encomenda (LGPD: finalidade de combinar esta encomenda) e nunca
+  /// vai para log.
+  telefone                String               @db.VarChar(11)
+  observacao              String?              @db.VarChar(300)
+  potinhos                Int
+  /// Valores congelados na solicitação, em reais. entrada = ⌈subtotal/2⌉; restante = total − entrada.
+  subtotal                Decimal              @db.Decimal(10, 2)
+  frete                   Decimal              @db.Decimal(10, 2)
+  total                   Decimal              @db.Decimal(10, 2)
+  valorEntrada            Decimal              @map("valor_entrada") @db.Decimal(10, 2)
+  valorRestante           Decimal              @map("valor_restante") @db.Decimal(10, 2)
+  pesoTotalGramas         Int                  @map("peso_total_gramas")
+  /// Prazos calculados no servidor (src/lib/encomendas-regras.ts): até quando a loja responde, o
+  /// corte da desistência (23h59 de 3 dias antes da entrega) e até quando a entrada pode ser paga.
+  responderAte            DateTime             @map("responder_ate")
+  corteEm                 DateTime             @map("corte_em")
+  entradaAte              DateTime?            @map("entrada_ate")
+  /// Percentual da entrada retido se a cliente desistir depois do corte. Gravado na solicitação (o
+  /// que a cliente aceitou) e congelado na aprovação: nunca sobe depois do aceite.
+  percentualRetido        Int                  @map("percentual_retido")
+  politicaVersao          String               @map("politica_versao") @db.VarChar(20)
+  politicaAceitaEm        DateTime             @map("politica_aceita_em")
+  /// Cabeçalho Idempotency-Key (obrigatório): reenviar a mesma chave devolve esta encomenda.
+  idempotencyKey          String               @map("idempotency_key") @db.VarChar(100)
+  criadaEm                DateTime             @default(now()) @map("criada_em")
+  aprovadaEm              DateTime?            @map("aprovada_em")
+  entradaPagaEm           DateTime?            @map("entrada_paga_em")
+  producaoIniciadaEm      DateTime?            @map("producao_iniciada_em")
+  prontaEm                DateTime?            @map("pronta_em")
+  /// Quitação. Pelo site: PIX (`restanteForma` = PIX, `restanteForaDoSite` = false). Fora do site
+  /// (decisão D8): a forma informada pela dona, com quem registrou.
+  restantePagoEm          DateTime?            @map("restante_pago_em")
+  restanteForma           PaymentMethod?       @map("restante_forma")
+  restanteForaDoSite      Boolean              @default(false) @map("restante_fora_do_site")
+  restanteObservacao      String?              @map("restante_observacao") @db.VarChar(300)
+  restanteRegistradoPorId String?              @map("restante_registrado_por_id")
+  entregueEm              DateTime?            @map("entregue_em")
+  /// Quando foi recusada, expirou ou foi cancelada.
+  encerradaEm             DateTime?            @map("encerrada_em")
+  motivoRecusa            String?              @map("motivo_recusa") @db.VarChar(300)
+  canceladaPor            AtorEncomenda?       @map("cancelada_por")
+  motivoCancelamento      String?              @map("motivo_cancelamento") @db.VarChar(300)
+  /// Último status avisado à cliente pelo WhatsApp (link do painel) e quando.
+  avisadaStatus           EncomendaStatus?     @map("avisada_status")
+  avisadaEm               DateTime?            @map("avisada_em")
+  user                    User                 @relation("EncomendasDoCliente", fields: [userId], references: [id], onDelete: Restrict)
+  address                 Address?             @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  restanteRegistradoPor   User?                @relation("RestantesRegistrados", fields: [restanteRegistradoPorId], references: [id], onDelete: SetNull)
+  itens                   EncomendaItem[]
+  pagamentos              EncomendaPagamento[]
+  devolucoes              EncomendaDevolucao[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, criadaEm])
+  @@index([status, dataEntrega])
+  @@index([status, responderAte])
+  @@index([status, entradaAte])
+  @@index([entregueEm])
+  @@index([restantePagoEm])
+  @@index([addressId])
+  @@index([restanteRegistradoPorId])
+  @@map("encomendas")
+}
+
+/// Potinhos de cada sabor. O sabor é o produto do catálogo marcado "disponível em mini".
+model EncomendaItem {
+  id            String    @id @default(cuid())
+  encomendaId   String    @map("encomenda_id")
+  productId     String    @map("product_id")
+  quantidade    Int
+  /// Preço de UM potinho congelado na solicitação (já permite preço por sabor na etapa 2).
+  precoUnitario Decimal   @map("preco_unitario") @db.Decimal(10, 2)
+  encomenda     Encomenda @relation(fields: [encomendaId], references: [id], onDelete: Cascade)
+  /// Restrict: sabor com encomenda não se apaga (oculta-se), como nos pedidos.
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([encomendaId, productId])
+  @@index([productId])
+  @@map("encomenda_itens")
+}
+
+/// Cobranças PIX de uma encomenda: as mesmas colunas de `pagamentos`, mais a parcela. Cada parcela
+/// tem o seu `external_reference` ("enc-<id>-ENTRADA" / "enc-<id>-RESTANTE"): um PIX do restante
+/// nunca quita a entrada, mesmo com o mesmo valor.
+model EncomendaPagamento {
+  id                String               @id @default(cuid())
+  encomendaId       String               @map("encomenda_id")
+  parcela           ParcelaEncomenda
+  /// "mercadopago" ou "simulado" (demonstração local).
+  gateway           String               @db.VarChar(20)
+  /// Id da cobrança no gateway (no Mercado Pago, o id do pagamento).
+  referenciaExterna String               @map("referencia_externa") @db.VarChar(64)
+  status            PaymentStatus        @default(PENDENTE)
+  statusGateway     String?              @map("status_gateway") @db.VarChar(40)
+  valor             Decimal              @db.Decimal(10, 2)
+  copiaECola        String               @map("copia_e_cola")
+  qrCodeBase64      String?              @map("qr_code_base64")
+  expiraEm          DateTime             @map("expira_em")
+  criadoEm          DateTime             @default(now()) @map("criado_em")
+  consultadoEm      DateTime?            @map("consultado_em")
+  /// Quando o dinheiro entrou: o Financeiro conta a parcela por esta data.
+  aprovadoEm        DateTime?            @map("aprovado_em")
+  /// Restrict: encomenda com cobrança não se apaga (o histórico do dinheiro fica).
+  encomenda         Encomenda            @relation(fields: [encomendaId], references: [id], onDelete: Restrict)
+  devolucoes        EncomendaDevolucao[]
+
+  @@unique([gateway, referenciaExterna])
+  @@index([encomendaId, parcela])
+  @@index([status, aprovadoEm])
+  @@map("encomenda_pagamentos")
+}
+
+/// Dinheiro a devolver à cliente. Uma linha por motivo (a desistência, um PIX pago tarde…): o
+/// Financeiro tira cada devolução da receita no mês em que ela foi FEITA, e uma devolução nova não
+/// muda um mês já fechado. Na v1 a dona devolve pelo app do Mercado Pago e marca no painel; o aviso
+/// de estorno do Mercado Pago também fecha a devolução sozinho.
+model EncomendaDevolucao {
+  id              String              @id @default(cuid())
+  encomendaId     String              @map("encomenda_id")
+  /// O PIX que originou a devolução (pago tarde ou em duplicidade); nulo na desistência e no cancelamento.
+  pagamentoId     String?             @map("pagamento_id")
+  motivo          DevolucaoMotivo
+  valor           Decimal             @db.Decimal(10, 2)
+  status          DevolucaoStatus     @default(PENDENTE)
+  criadaEm        DateTime            @default(now()) @map("criada_em")
+  feitaEm         DateTime?           @map("feita_em")
+  observacao      String?             @db.VarChar(300)
+  /// Quem marcou como feita; nulo quando foi o aviso de estorno do Mercado Pago. SetNull: fica o registro.
+  registradaPorId String?             @map("registrada_por_id")
+  encomenda       Encomenda           @relation(fields: [encomendaId], references: [id], onDelete: Restrict)
+  pagamento       EncomendaPagamento? @relation(fields: [pagamentoId], references: [id], onDelete: Restrict)
+  registradaPor   User?               @relation("DevolucoesRegistradas", fields: [registradaPorId], references: [id], onDelete: SetNull)
+
+  @@index([encomendaId])
+  @@index([status, feitaEm])
+  @@index([pagamentoId])
+  @@index([registradaPorId])
+  @@map("encomenda_devolucoes")
 }

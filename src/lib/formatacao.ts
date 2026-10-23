@@ -1,7 +1,8 @@
+import { FUSO_LOJA } from "@/lib/despesas";
 import type { StatusPedido } from "@/lib/status";
 
 const formatadorData = new Intl.DateTimeFormat("pt-BR", {
-  timeZone: "America/Sao_Paulo",
+  timeZone: FUSO_LOJA,
   day: "2-digit",
   month: "2-digit",
   year: "numeric",
@@ -9,7 +10,7 @@ const formatadorData = new Intl.DateTimeFormat("pt-BR", {
   minute: "2-digit",
 });
 
-/** "2026-10-13T22:40:00.000Z" → "13/10/2026, 19:40" (horário de Brasília). */
+/** "2026-10-13T22:40:00.000Z" → "13/10/2026, 19:40" (horário da loja, Teresina). */
 export function formatarDataHora(iso: string): string {
   return formatadorData.format(new Date(iso));
 }

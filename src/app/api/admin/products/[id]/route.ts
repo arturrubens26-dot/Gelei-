@@ -9,9 +9,9 @@ const visibilidadeSchema = z.object({ ativo: z.boolean() });
 /**
  * PATCH /api/admin/products/[id]
  * - JSON `{ ativo }`: mostra ou oculta o produto na loja;
- * - multipart/form-data: edição completa (os mesmos campos da criação; a foto é opcional; sem o
- *   campo permitidoEmKit, ele fica como estava).
- * Expira as tags "produtos" e "kits" (os sabores e a economia do montador mudam junto).
+ * - multipart/form-data: edição completa (os mesmos campos da criação; a foto é opcional; sem os
+ *   campos permitidoEmKit ou disponivelEmMini, eles ficam como estavam).
+ * Expira as tags "produtos", "kits" e "lembrancinhas" (os sabores do montador e os minis mudam junto).
  */
 export const PATCH = comTratamento("api/admin/products PATCH", async (request: Request, ctx: RouteContext<"/api/admin/products/[id]">) => {
   const bloqueio = origemInvalida(request);

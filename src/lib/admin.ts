@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import {
+  FUSO_LOJA,
   PADRAO_MES,
   PRIMEIRO_MES,
   ROTULO_CATEGORIA,
@@ -246,7 +247,8 @@ export type FinanceiroDoMes = {
   movimentacoesTruncadas: boolean;
 };
 
-const FUSO = "America/Sao_Paulo";
+/** O mesmo fuso de todo o projeto (Teresina): o Financeiro e as Despesas contam o mesmo mês. */
+const FUSO = FUSO_LOJA;
 const MESES_NO_GRAFICO = 12;
 const MAX_MOVIMENTACOES = 100;
 

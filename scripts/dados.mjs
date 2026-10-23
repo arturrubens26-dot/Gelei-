@@ -195,7 +195,7 @@ function registrarNoGit(arquivo) {
   } catch {
     // diff --quiet sai com erro quando há diferença: segue para o commit.
   }
-  const quando = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date());
+  const quando = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Fortaleza" }).format(new Date());
   git("commit", "-m", `${nome === "producao.json" ? "Site no ar" : "Banco local"}: cópia de ${quando}`, "--", nome);
   return `Registrado no Git da pasta dados (commit ${git("rev-parse", "--short", "HEAD").trim()}).`;
 }

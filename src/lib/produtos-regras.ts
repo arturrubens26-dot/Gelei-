@@ -89,6 +89,14 @@ export function avisosDeAlegacao(texto: string): string[] {
   const normal = semAcento(texto);
   return PADROES_DE_ALEGACAO.filter((p) => p.padrao.test(normal)).map((p) => p.termo);
 }
+/** Rótulo da caixinha das lembrancinhas (e citado nos avisos da configuração). */
+export const ROTULO_DISPONIVEL_EM_MINI = "Disponível em mini (lembrancinhas)";
+
+/** "true"/"on"/true → true; "false"/false → false; ausente → undefined (fica como estava). */
+const caixinhaOpcional = z.preprocess(
+  (v) => (v === undefined || v === null ? undefined : v === true || v === "true" || v === "on"),
+  z.boolean().optional(),
+);
 
 /** "Morango com Pedaços, 250g" → sabor "Morango com Pedaços" e peso "250g" (como no rótulo). */
 export function separarNome(nome: string): { sabor: string; peso: string | null } {
@@ -206,14 +214,16 @@ export const produtoSchema = z.object({
    * "Pode entrar no Kit Presente". Sem o campo (formulário de antes desta versão), `undefined`: ao
    * editar, fica como estava; ao criar, nasce fora do kit (default do banco).
    */
-  permitidoEmKit: z.preprocess(
-    (v) => (v === undefined || v === null ? undefined : v === true || v === "true" || v === "on"),
-    z.boolean().optional(),
-  ),
+  permitidoEmKit: caixinhaOpcional,
   /** Verso da foto: "Harmoniza com" (até 4 linhas de 40). Ausente: não mexe; "": esvazia. */
   harmonizacoes: listaDoVerso({ nome: TITULO_HARMONIZACOES, maxItens: MAX_HARMONIZACOES, maxCaracteres: MAX_CARACTERES_HARMONIZACAO }),
   /** Verso da foto: "Por que você vai gostar" (até 3 linhas de 70). Ausente: não mexe; "": esvazia. */
   destaques: listaDoVerso({ nome: TITULO_DESTAQUES, maxItens: MAX_DESTAQUES, maxCaracteres: MAX_CARACTERES_DESTAQUE }),
+  /**
+   * "Disponível em mini (lembrancinhas)". Sem o campo (formulário de antes desta versão), `undefined`:
+   * ao editar, fica como estava; ao criar, nasce desmarcado (default do banco).
+   */
+  disponivelEmMini: caixinhaOpcional,
 });
 
 export type ProdutoEntrada = z.output<typeof produtoSchema>;

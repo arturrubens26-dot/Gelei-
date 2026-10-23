@@ -197,6 +197,29 @@ async function semearKit() {
   console.log(`✔ kit-presente (${kit.ativo ? "visível" : "oculto"} na loja; mostre ou oculte em /admin/products)`);
 }
 
+/**
+ * Lembrancinhas (potinhos mini). A migração 20261022120000_lembrancinhas já cria a configuração
+ * DESATIVADA, e nenhum sabor nasce "disponível em mini": rodar o seed não muda nada disso. Só com
+ * SEED_LEMBRANCINHAS_ATIVAS=1, e só no banco LOCAL, ele marca os sabores do catálogo como mini e
+ * ativa o recurso, para testar /lembrancinhas num banco novo. Isso pula de propósito a trava do painel
+ * (que só ativa com CNPJ/CPF e e-mail de contato em src/lib/dados-loja.ts): é ambiente de teste.
+ */
+async function semearLembrancinhas() {
+  const ativar = process.env.SEED_LEMBRANCINHAS_ATIVAS === "1" && !bancoRemoto;
+  await db.configLembrancinhas.upsert({
+    where: { id: "lembrancinhas" },
+    update: ativar ? { ativo: true } : {},
+    // Valores provisórios (decisões D1, D4 e D10), os mesmos da migração.
+    create: { id: "lembrancinhas", ativo: ativar, precoPotinho: "6.00", pesoPotinhoGramas: 110, pesoEmbalagemGramas: 300, percentualRetido: 100 },
+  });
+  if (ativar) {
+    const { count } = await db.product.updateMany({ where: { id: { in: produtos.map((p) => p.id) } }, data: { disponivelEmMini: true } });
+    console.log(`✔ lembrancinhas ATIVAS (SEED_LEMBRANCINHAS_ATIVAS=1): ${count} sabores marcados como mini`);
+  } else {
+    console.log("✔ lembrancinhas (configuração conferida; ative e marque os sabores mini no painel)");
+  }
+}
+
 async function semearAdmin() {
   const emProducao = process.env.NODE_ENV === "production";
   const email = (process.env.SEED_ADMIN_EMAIL ?? "admin@geleio.local").toLowerCase();
@@ -249,6 +272,7 @@ async function semearAdmin() {
 async function principal() {
   await semearProdutos();
   await semearKit();
+  await semearLembrancinhas();
   await semearAdmin();
 }
 
