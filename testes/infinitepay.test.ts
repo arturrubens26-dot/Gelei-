@@ -241,7 +241,7 @@ describe("payment_check", () => {
       { s: true, p: true, a: 3000, pa: 3100, i: 2 },
     );
     assert.equal(lerConferencia({ data: { success: true, paid: false } })?.paid, false);
-    assert.equal(lerConferencia({ success: true })?.paid, false);
+    assert.equal(lerConferencia({ success: true })?.paid, undefined, "paid ausente continua ausente");
     assert.equal(lerConferencia({ paid: true }), null, "sem success");
     assert.equal(lerConferencia({ success: true, amount: "30,00" }), null);
     assert.equal(lerConferencia({ success: true, amount: -1 }), null);
@@ -427,6 +427,18 @@ describe("recibo da transação (receipt_url)", () => {
     for (const r of recusados) assert.equal(urlDoRecibo(r, tx), null, String(r));
     assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/tx_1`, "tx_1"), null, "transação que não é UUID");
   });
+  it("formas da mesma URL: host em maiúsculas e :443 valem (normalizados); ponto no fim, IDN, //, /uuid/ e %-codificado não", () => {
+    const canonica = `https://recibo.infinitepay.io/${tx}`;
+    assert.equal(urlDoRecibo(`https://RECIBO.InfinitePay.IO/${tx}`, tx), canonica, "host em maiúsculas");
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io:443/${tx}`, tx), canonica, ":443 é a porta padrão");
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io./${tx}`, tx), null, "ponto no fim do host");
+    assert.equal(urlDoRecibo(`https://recıbo.infinitepay.io/${tx}`, tx), null, "IDN: i sem ponto (recıbo)");
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io//${tx}`, tx), null, "barra dupla");
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/${tx}/`, tx), null, "barra no fim");
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/%33f2b8c1e-7a4d-4e9b-9c2a-1d5e6f7a8b9c`, tx), null, "uuid codificado com %");
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/${tx}%2F`, tx), null);
+    assert.equal(urlDoRecibo(` https://recibo.infinitepay.io/${tx}`, tx) === canonica, true, "espaço no começo é descartado pelo URL");
+  });
   it("servidor falso dos testes: <origem>/recibo/<uuid>, só com origemLocal", () => {
     const local = "http://127.0.0.1:4030";
     assert.equal(urlDoRecibo(`${local}/recibo/${tx}`, tx, { origemLocal: local }), `${local}/recibo/${tx}`);
@@ -442,15 +454,29 @@ describe("canário de amarração do retorno", () => {
     assert.equal(lerReferencia(referenciaDoCanario("ped-abc-1")), null);
     assert.equal(lerReferencia(referenciaDoCanario("enc-abc-ENTRADA-2")), null);
   });
-  it("não pago (o formato real para outro order_nsu) ou success=false: AMARRA, pode confirmar", () => {
+  it("o formato real para um order_nsu inexistente (success=true, paid=false, zeros): AMARRA", () => {
     assert.equal(decisaoDoCanario(conferencia({ success: true, paid: false, amount: 0, paid_amount: 0, installments: null, capture_method: null })), "AMARRA");
-    assert.equal(decisaoDoCanario(conferencia({ success: false })), "AMARRA");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: false })), "AMARRA", "valores ausentes, paid explícito");
+    assert.equal(decisaoDoCanario(conferencia({ data: { success: true, paid: false, amount: 0, paid_amount: 0 } })), "AMARRA", "dentro de data");
+    assert.equal(decisaoDoCanario(conferencia({ success: "true", paid: "false", amount: "0" })), "AMARRA", "textos");
   });
-  it("pago com um order_nsu que não existe: NAO_AMARRA, não confirma pelo retorno", () => {
+  it("qualquer sinal de pagamento: NAO_AMARRA, não confirma pelo retorno", () => {
     assert.equal(decisaoDoCanario(conferencia({ success: true, paid: true, amount: 1500, paid_amount: 1500, installments: 1, capture_method: "pix" })), "NAO_AMARRA");
+    assert.equal(decisaoDoCanario(conferencia({ success: false, paid: true })), "NAO_AMARRA", "success=false com paid=true");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: "true" })), "NAO_AMARRA", 'paid como texto "true"');
+    assert.equal(decisaoDoCanario(conferencia({ data: { success: true, paid: true } })), "NAO_AMARRA", "dentro de data");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: false, amount: 1500 })), "NAO_AMARRA", "paid=false mas com amount");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: false, paid_amount: 1 })), "NAO_AMARRA", "paid=false mas com paid_amount");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, amount: 1500 })), "NAO_AMARRA", "paid ausente mas com amount");
   });
-  it("sem resposta válida (tempo, 5xx, 4xx, formato estranho): FALHOU, não confirma (fail-closed)", () => {
+  it("sem resposta válida ou formato estranho: FALHOU, não confirma (fail-closed)", () => {
     assert.equal(decisaoDoCanario(null), "FALHOU");
     assert.equal(decisaoDoCanario(conferencia({ formato: "estranho" })), "FALHOU");
+    assert.equal(decisaoDoCanario(conferencia({ paid: false })), "FALHOU", "sem success");
+    assert.equal(decisaoDoCanario(conferencia({ success: true })), "FALHOU", "paid ausente e valores ausentes");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, amount: 0, paid_amount: 0 })), "FALHOU", "paid ausente, valores zerados");
+    assert.equal(decisaoDoCanario(conferencia({ success: false })), "FALHOU", "success=false sem pagamento");
+    assert.equal(decisaoDoCanario(conferencia({ success: false, paid: false })), "FALHOU");
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: "talvez" })), "FALHOU", "paid que não é booleano");
   });
 });

@@ -68,6 +68,14 @@ const INTERVALO_CONSULTA_AVISO_MS = 3_000;
 /** O webhook responde logo (a InfinitePay prefere menos de 1 s); o retorno e a tela esperam mais. */
 const TEMPO_CONFERENCIA_AVISO_MS = 5_000;
 const TEMPO_CONFERENCIA_TELA_MS = 8_000;
+/**
+ * O retorno do navegador faz até duas consultas (a principal e o canário) dentro de um orçamento só,
+ * para a função não estourar o limite da Netlify: a principal usa no máximo 5 s, e o canário o que
+ * sobrar. Sem pelo menos 1 s de sobra, não consulta.
+ */
+const ORCAMENTO_RETORNO_MS = 8_000;
+const TEMPO_CONSULTA_RETORNO_MS = 5_000;
+const TEMPO_MINIMO_CONSULTA_MS = 1_000;
 
 // --- configuração -----------------------------------------------------------------------------
 
@@ -236,6 +244,16 @@ async function marcar(p: Pagamento, marca: string): Promise<void> {
   });
 }
 
+/**
+ * Devolve a vez reservada em `consultadoEm` ao valor de antes, mas só se ninguém reservou depois
+ * (o filtro é o instante que NÓS gravamos). Falha aqui só deixa a vez presa por poucos segundos.
+ */
+async function devolverReserva(p: Pagamento, reservadoEm: Date): Promise<void> {
+  await db.pagamento
+    .updateMany({ where: { id: p.id, consultadoEm: reservadoEm }, data: { consultadoEm: p.consultadoEm } })
+    .catch((e) => console.error(`[pagamentos] cobrança ${p.id}: não devolveu a vez reservada (${e instanceof Error ? e.name : "erro"})`));
+}
+
 /** O candidato `c` é o gravado e chegou há menos de 30 min? (Janela para a InfinitePay "achar" a transação.) */
 function dentroDaJanela(p: Pagamento, c: Candidato, agora = Date.now()): boolean {
   if (p.avisoTransacaoNsu !== c.transacaoNsu || p.avisoSlug !== c.slug || !p.avisadoEm) return true; // recém-chegado
@@ -251,7 +269,13 @@ function dentroDaJanela(p: Pagamento, c: Candidato, agora = Date.now()): boolean
  * dinheiro entrou. Pago com o pedido já cancelado, ou com outra cobrança dele já aprovada: a cobrança
  * fica APROVADO e o pedido não muda (o painel mostra o alerta para devolver pelo app InfinitePay).
  */
-export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: OrigemCandidato): Promise<ResultadoConfirmacao> {
+export async function confirmarCobranca(
+  p: Pagamento,
+  c: Candidato,
+  origem: OrigemCandidato,
+  /** Instante (ms) até o qual esta chamada pode gastar com a InfinitePay; o retorno sempre tem um. */
+  prazoFinal?: number,
+): Promise<ResultadoConfirmacao> {
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return "APROVADO";
   if (p.gateway !== "infinitepay" || (p.status !== "PENDENTE" && p.status !== "CANCELADO")) return "INVALIDO";
   const daCliente = origem === "retorno";
@@ -266,6 +290,11 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
     console.warn(`[pagamentos] cobrança ${p.id}: candidato com slug de outra fatura, descartado`);
     return "INVALIDO";
   }
+
+  const prazo = prazoFinal ?? (daCliente ? Date.now() + ORCAMENTO_RETORNO_MS : undefined);
+  const tempoAte = (max: number) => (prazo === undefined ? max : Math.min(max, prazo - Date.now()));
+  // Sem tempo no orçamento: nem reserva a vez (a tela confere de novo daqui a pouco).
+  if (prazo !== undefined && prazo - Date.now() < TEMPO_MINIMO_CONSULTA_MS) return "ADIADO";
 
   // Reserva a vez (atômico): duas conferências da mesma cobrança não correm juntas.
   const intervalo = origem === "aviso" ? INTERVALO_CONSULTA_AVISO_MS : INTERVALO_CONSULTA_TELA_MS;
@@ -283,7 +312,7 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
   try {
     conferencia = await conferirPagamento(
       { referencia: p.referenciaExterna, transacaoNsu: c.transacaoNsu, slug: c.slug },
-      origem === "aviso" ? TEMPO_CONFERENCIA_AVISO_MS : TEMPO_CONFERENCIA_TELA_MS,
+      origem === "aviso" ? TEMPO_CONFERENCIA_AVISO_MS : tempoAte(daCliente ? TEMPO_CONSULTA_RETORNO_MS : TEMPO_CONFERENCIA_TELA_MS),
     );
   } catch (e) {
     const status = e instanceof ErroInfinitePay ? e.status : 0;
@@ -312,6 +341,11 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
   const resultado = classificarConferencia(conferencia, valorCentavos, p.referenciaExterna);
   // Com a exigência ligada, nada confirma sem o order_nsu na resposta: vira divergência (conferir no app).
   if (EXIGIR_ORDER_NSU_NA_CONFERENCIA && !conferenciaAmarrada(conferencia, p.referenciaExterna) && resultado.tipo === "APROVADO") {
+    // Do retorno (dado da cliente): só não confirma, sem marca. O aviso decide.
+    if (daCliente) {
+      console.warn(`[pagamentos] cobrança ${p.id}: retorno "pago" sem order_nsu na conferência; não confirma, aguarda o aviso`);
+      return "PENDENTE";
+    }
     console.error(`[pagamentos] cobrança ${p.id}: "pago" sem order_nsu na conferência; confira no app InfinitePay`);
     await db.pagamento.updateMany({
       where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
@@ -353,19 +387,27 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
   // nem grava nada: o aviso, que só chega pela URL com o token desta cobrança, decide.
   if (daCliente) {
     let canario = null;
-    try {
-      canario = await conferirPagamento(
-        { referencia: referenciaDoCanario(p.referenciaExterna), transacaoNsu: c.transacaoNsu, slug: c.slug },
-        TEMPO_CONFERENCIA_TELA_MS,
-      );
-    } catch {
-      canario = null;
+    let causa = "sem tempo no orçamento";
+    const tempoCanario = tempoAte(TEMPO_CONFERENCIA_TELA_MS);
+    if (tempoCanario >= TEMPO_MINIMO_CONSULTA_MS) {
+      try {
+        canario = await conferirPagamento(
+          { referencia: referenciaDoCanario(p.referenciaExterna), transacaoNsu: c.transacaoNsu, slug: c.slug },
+          tempoCanario,
+        );
+        causa = "resposta em formato inesperado";
+      } catch (e) {
+        // Só o status (ou "sem resposta"): nunca o corpo nem dado da cliente.
+        causa = e instanceof ErroInfinitePay ? (e.status === 0 ? e.message : `HTTP ${e.status}`) : "erro";
+      }
     }
     const decisao = decisaoDoCanario(canario);
     if (decisao !== "AMARRA") {
       console.error(
-        `[pagamentos] cobrança ${p.id}: retorno NÃO confirmado (canário ${decisao === "NAO_AMARRA" ? "pago: a API não amarrou a transação" : "sem resposta"}); aguarda o aviso`,
+        `[pagamentos] cobrança ${p.id}: retorno NÃO confirmado (canário ${decisao === "NAO_AMARRA" ? "com sinal de pagamento: a API não amarrou a transação" : `sem decisão: ${causa}`}); aguarda o aviso`,
       );
+      // Nada foi decidido: devolve a vez reservada, para o aviso que chega logo em seguida não receber ADIADO.
+      await devolverReserva(p, agora);
       return "PENDENTE";
     }
   }
@@ -637,12 +679,14 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
       if (candidato) {
         await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { retornoEm: new Date() } });
       }
+      // As consultas do retorno (a do aviso gravado, a principal e o canário) dividem um orçamento só.
+      const prazo = Date.now() + ORCAMENTO_RETORNO_MS;
       const gravado = candidatoGravado(p);
-      const r = gravado ? await confirmarCobranca(p, gravado, "gravado") : null;
+      const r = gravado ? await confirmarCobranca(p, gravado, "gravado", prazo) : null;
       const mesmoDoAviso = gravado && candidato && gravado.transacaoNsu === candidato.transacaoNsu && gravado.slug === candidato.slug;
       if (r !== "APROVADO" && r !== "DIVERGENTE" && candidato && !mesmoDoAviso) {
         const atual = (await db.pagamento.findUnique({ where: { id: p.id } })) ?? p;
-        await confirmarCobranca(atual, candidato, "retorno");
+        await confirmarCobranca(atual, candidato, "retorno", prazo);
       }
     } catch (e) {
       console.error(`[pagamentos] conferência no retorno da cobrança ${p.id} falhou: ${e instanceof Error ? e.name : "erro"}`);

@@ -176,16 +176,22 @@ export function referenciaDoCanario(referencia: string): string {
  * O retorno do navegador é dado da cliente: ele só confirma se a InfinitePay AMARRA a transação ao
  * order_nsu consultado. Isso foi visto no ensaio (PIX), mas não está documentado. Por isso, antes de
  * confirmar pelo retorno, o servidor consulta a mesma transação com um order_nsu que nunca existe:
- * - "AMARRA": o canário respondeu "não pago" (ou `success=false`): a API amarra, pode confirmar;
- * - "NAO_AMARRA": o canário respondeu "pago": a API não amarra, e a transação pode ser de outra compra
- *   (link manual da dona, outra pessoa de mesmo valor). NÃO confirma: o aviso decide;
- * - "FALHOU": sem resposta válida (tempo, 5xx, 4xx): NÃO confirma (fail-closed); o aviso decide.
+ * - "NAO_AMARRA": há QUALQUER sinal de pagamento (`paid` verdadeiro, ou `amount`/`paid_amount` maiores
+ *   que zero, com ou sem `success`): a API não amarra, e a transação pode ser de outra compra (link
+ *   manual da dona, outra pessoa de mesmo valor). NÃO confirma: o aviso decide;
+ * - "AMARRA": SÓ com `success=true` e `paid=false` explícitos (e valores zerados ou ausentes), que é o
+ *   que a API real respondeu no ensaio (`success=true paid=false amount=0 paid_amount=0`): pode confirmar;
+ * - "FALHOU": sem resposta válida (tempo, 5xx, 4xx, formato estranho: sem `success`, sem `paid`,
+ *   `success=false`): NÃO confirma (fail-closed); o aviso decide.
  */
 export type DecisaoDoCanario = "AMARRA" | "NAO_AMARRA" | "FALHOU";
 
 export function decisaoDoCanario(canario: Conferencia | null): DecisaoDoCanario {
   if (!canario) return "FALHOU";
-  return canario.success && canario.paid ? "NAO_AMARRA" : "AMARRA";
+  const temValor = (canario.amount ?? 0) > 0 || (canario.paid_amount ?? 0) > 0;
+  if (canario.paid === true || temValor) return "NAO_AMARRA";
+  if (canario.success === true && canario.paid === false) return "AMARRA";
+  return "FALHOU";
 }
 
 // --- corpo do POST /links ---------------------------------------------------------------------
@@ -298,7 +304,8 @@ const booleano = z.union([z.boolean(), z.enum(["true", "false"]).transform((v) =
 
 const conferenciaSchema = z.object({
   success: booleano,
-  paid: booleano.optional().default(false),
+  // Sem default: "não veio" precisa ser distinguível de false (o canário trata como formato estranho).
+  paid: booleano.optional(),
   // nullish: "não veio" e null valem o mesmo (a conferência recusa o que faltar, sem quebrar a leitura).
   amount: centavos.nullish(),
   paid_amount: centavos.nullish(),
