@@ -211,6 +211,11 @@ describe("URL da InfinitePay e resposta de /links", () => {
     assert.deepEqual(lerRespostaDoLink({ url: u, slug: "com espaço" }), { url: u, slug: null });
   });
 
+  it("formato real (ensaio de 2026-10-22): só { url }, sem slug", () => {
+    const u = "https://checkout.infinitepay.io/geleio/aKVH6PwBdw";
+    assert.deepEqual(lerRespostaDoLink({ url: u }), { url: u, slug: null });
+  });
+
   it("recusa resposta sem URL válida", () => {
     assert.equal(lerRespostaDoLink({ url: "http://checkout.infinitepay.io/x" }), null);
     assert.equal(lerRespostaDoLink({ url: "https://evil.com/x" }), null);
@@ -307,6 +312,23 @@ describe("payment_check", () => {
     assert.deepEqual(classificarConferencia(c({ paid: false }), 3000, REF), { tipo: "NAO_PAGO" });
     assert.equal(classificarConferencia(c({ order_nsu: "" }), 3000, REF).tipo, "APROVADO", "order_nsu vazio não conta");
   });
+
+  it("respostas reais (ensaio de 2026-10-22)", () => {
+    // PIX de R$ 1 pago, consultado com o order_nsu certo: sem order_nsu nem moeda na resposta.
+    const pix = lerConferencia({ success: true, paid: true, amount: 100, paid_amount: 100, installments: 1, capture_method: "pix" });
+    assert.ok(pix);
+    assert.deepEqual(classificarConferencia(pix, 100, REF), { tipo: "APROVADO", metodo: "pix", parcelas: 1, valorPagoCentavos: 100 });
+    assert.equal(conferenciaAmarrada(pix, REF), false, "a API não devolve o order_nsu");
+    // A mesma transação consultada com OUTRO order_nsu: "não pago", nunca divergência (sem alerta).
+    const deOutroPedido = lerConferencia({ success: true, paid: false, amount: 0, paid_amount: 0, installments: null, capture_method: null });
+    assert.ok(deOutroPedido);
+    assert.deepEqual(classificarConferencia(deOutroPedido, 100, REF), { tipo: "NAO_PAGO" });
+    assert.deepEqual(classificarConferencia(deOutroPedido, 0, REF), { tipo: "NAO_PAGO" }, "nem com valor 0");
+    // O order_nsu certo com o slug errado: recusada.
+    const slugErrado = lerConferencia({ success: false });
+    assert.ok(slugErrado);
+    assert.deepEqual(classificarConferencia(slugErrado, 100, REF), { tipo: "INVALIDO" });
+  });
 });
 
 describe("aviso e retorno", () => {
@@ -341,6 +363,23 @@ describe("aviso e retorno", () => {
       candidato: { transacaoNsu: "tx-9", slug: "sl-9", comprovanteUrl: receipt, referencia: "ped-a-1" },
     });
     assert.equal(lerRetorno(new URLSearchParams({ order_nsu: "ped-a-1", transaction_nsu: "tx-9", invoice_slug: "s2" })).candidato?.slug, "s2");
+  });
+
+  it("retorno no formato real (ensaio de 2026-10-22): transação em UUID, comprovante em recibo.infinitepay.io", () => {
+    const tx = "3f2b8c1e-7a4d-4e9b-9c2a-1d5e6f7a8b9c";
+    const recibo = `https://recibo.infinitepay.io/${tx}`;
+    const q = new URLSearchParams({
+      capture_method: "pix",
+      transaction_id: tx,
+      transaction_nsu: tx,
+      slug: "sKXhSekbqG",
+      order_nsu: "ped-a-1",
+      receipt_url: recibo,
+    });
+    assert.deepEqual(lerRetorno(q), {
+      referencia: "ped-a-1",
+      candidato: { transacaoNsu: tx, slug: "sKXhSekbqG", comprovanteUrl: recibo, referencia: "ped-a-1" },
+    });
   });
 
   it("retorno sem transação: só a referência; referência longa demais: null", () => {

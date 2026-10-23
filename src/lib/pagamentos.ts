@@ -137,10 +137,12 @@ function cobrancaComAviso(cobrancas: readonly Pagamento[]): Pagamento | null {
 }
 
 /**
- * Exigir que a resposta do payment_check traga o NOSSO order_nsu em TODA origem (aviso também), e
- * não só na transação trazida pela cliente. Ligue (true) quando o ensaio com dinheiro real mostrar
- * que a resposta traz `order_nsu` (README, "Ensaio com dinheiro real"). Com ela ligada, um "pago" sem
- * order_nsu vindo do aviso vira divergência (a dona confere no app), nunca PAGO.
+ * Exigir que a resposta do payment_check traga o NOSSO order_nsu. Fica DESLIGADA: o ensaio com
+ * dinheiro real (2026-10-22, README) mostrou que a resposta NÃO traz `order_nsu`, mas que a API
+ * amarra a transação ao pedido ENVIADO na consulta (com outro order_nsu, a mesma transação responde
+ * `paid=false, amount=0`; com o slug errado, `success=false`). Como o servidor sempre consulta com o
+ * order_nsu do NOSSO banco, a amarração já está garantida. Ligada, todo "pago" viraria divergência.
+ * Só ligue se a InfinitePay passar a devolver o `order_nsu` na resposta.
  */
 export const EXIGIR_ORDER_NSU_NA_CONFERENCIA = false;
 
@@ -167,28 +169,25 @@ const MENSAGEM_RETORNO_RECENTE =
  * - PENDENTE: a InfinitePay diz que não foi pago ainda (pode cair depois);
  * - DIVERGENTE: pago, mas o valor, a moeda, o método ou as parcelas não conferem: o pedido NÃO vira
  *   PAGO e a dona confere no app InfinitePay (repetir a consulta não muda nada);
- * - INVALIDO: candidato recusado de vez (transação de outro link ou pedido, slug diferente, já usada);
+ *   Inclui `paid=false`: "ainda não pago" OU transação de outro pedido (a API responde assim quando o
+ *   order_nsu consultado não é o da transação). Nunca é divergência nem alerta;
+ * - INVALIDO: candidato recusado de vez (`success=false`: slug errado ou transação inexistente;
+ *   transação de outro pedido na resposta; slug diferente da fatura; já usada);
  * - TRANSITORIO: a InfinitePay não respondeu direito, ou ainda não acha a transação (HTTP 4xx logo
  *   depois do pagamento): o webhook responde 400 para ela repetir;
- * - ADIADO: conferida há instantes (a próxima tentativa confere);
- * - NAO_AMARRADO: transação trazida pela cliente (retorno) que a resposta não amarra a esta cobrança:
- *   não confirma sozinha (pode ser de outro link da loja de mesmo valor); vale o aviso.
+ * - ADIADO: conferida há instantes (a próxima tentativa confere).
  */
-export type ResultadoConfirmacao =
-  | "APROVADO"
-  | "PENDENTE"
-  | "DIVERGENTE"
-  | "INVALIDO"
-  | "TRANSITORIO"
-  | "ADIADO"
-  | "NAO_AMARRADO";
+export type ResultadoConfirmacao = "APROVADO" | "PENDENTE" | "DIVERGENTE" | "INVALIDO" | "TRANSITORIO" | "ADIADO";
 
 /**
  * De onde veio o candidato:
  * - "aviso": corpo do webhook, que só chega pela URL com o token desta cobrança;
  * - "gravado": o candidato guardado no banco (só o aviso grava), reconferido pela tela ou pelo retorno;
- * - "retorno": a query do redirect_url, ou seja, dado da CLIENTE. Só confirma se o slug da fatura
- *   (da criação do link) e o order_nsu da resposta do payment_check amarrarem a transação a esta cobrança.
+ * - "retorno": a query do redirect_url, ou seja, dado da CLIENTE (já conferido que a sessão é a dona
+ *   do pedido). Confirma como os outros: quem amarra a transação a esta cobrança é o payment_check,
+ *   consultado com o order_nsu do NOSSO banco (nunca o da query). Transação de outro link responde
+ *   `paid=false` (ou `success=false`) e não confirma. O candidato do retorno nunca é gravado como
+ *   candidato, e uma recusa dele não grava marca nenhuma (é dado da cliente).
  */
 type OrigemCandidato = "aviso" | "gravado" | "retorno";
 
@@ -251,12 +250,13 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return "APROVADO";
   if (p.gateway !== "infinitepay" || (p.status !== "PENDENTE" && p.status !== "CANCELADO")) return "INVALIDO";
   const daCliente = origem === "retorno";
-  // Transação trazida pela cliente só vale com a fatura amarrada desde a criação do link (slug). Sem
-  // isso, nem consulta: o aviso (com token) é que confirma.
-  if (daCliente && !p.faturaSlug) return "NAO_AMARRADO";
-  // O slug que veio na criação do link amarra a fatura: outro slug é de outra fatura.
+  // Se a criação do link trouxe o slug da fatura, ele amarra a fatura: outro slug é de outra fatura e
+  // nem é consultado. (A API real não devolve o slug em /links: aí quem amarra é o payment_check.)
   if (p.faturaSlug && p.faturaSlug !== c.slug) {
-    if (daCliente) return "NAO_AMARRADO";
+    if (daCliente) {
+      console.info(`[pagamentos] cobrança ${p.id}: retorno com slug de outra fatura, ignorado`);
+      return "INVALIDO";
+    }
     await descartarCandidato(p, c, "slug-diferente");
     console.warn(`[pagamentos] cobrança ${p.id}: candidato com slug de outra fatura, descartado`);
     return "INVALIDO";
@@ -301,18 +301,12 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
   }
 
   const valorCentavos = centavosDe(p.valor);
+  // A consulta foi feita com o order_nsu do NOSSO banco: a API só responde "pago" se a transação for
+  // deste pedido (ensaio de 2026-10-22). Transação de outro link da loja responde paid=false (NAO_PAGO)
+  // ou success=false (INVALIDO), em qualquer origem.
   const resultado = classificarConferencia(conferencia, valorCentavos, p.referenciaExterna);
-  // A transação da cliente só vale se a RESPOSTA disser que é deste order_nsu (cenário: ela pagou outro
-  // link da loja, de mesmo valor, e apresenta aquela transação aqui). Nada é gravado nem marcado.
-  const amarrada = conferenciaAmarrada(conferencia, p.referenciaExterna);
-  if (daCliente && !amarrada) {
-    if (resultado.tipo === "APROVADO" || resultado.tipo === "DIVERGENTE") {
-      console.info(`[pagamentos] cobrança ${p.id}: transação do retorno sem order_nsu na conferência; aguarda o aviso`);
-    }
-    return "NAO_AMARRADO";
-  }
-  // Com a exigência ligada, nem o aviso confirma sem o order_nsu: vira divergência (conferir no app).
-  if (EXIGIR_ORDER_NSU_NA_CONFERENCIA && !amarrada && resultado.tipo === "APROVADO") {
+  // Com a exigência ligada, nada confirma sem o order_nsu na resposta: vira divergência (conferir no app).
+  if (EXIGIR_ORDER_NSU_NA_CONFERENCIA && !conferenciaAmarrada(conferencia, p.referenciaExterna) && resultado.tipo === "APROVADO") {
     console.error(`[pagamentos] cobrança ${p.id}: "pago" sem order_nsu na conferência; confira no app InfinitePay`);
     await db.pagamento.updateMany({
       where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
@@ -327,7 +321,8 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
     return "INVALIDO";
   }
   if (resultado.tipo === "NAO_PAGO") {
-    await marcar(p, "nao-pago");
+    // Do retorno, paid=false pode ser uma transação de outro pedido: não marca nada (dado da cliente).
+    if (!daCliente) await marcar(p, "nao-pago");
     return "PENDENTE";
   }
   if (resultado.tipo === "DIVERGENTE") {
@@ -583,10 +578,12 @@ export async function processarAvisoDaInfinitePay(referencia: string, token: str
 
 /**
  * Retorno do navegador (redirect_url): acha a cobrança pela referência e, se a sessão é da dona do
- * pedido, serve de GATILHO: reconfere o candidato que o aviso gravou e, só com a fatura amarrada
- * (slug da criação do link + order_nsu na resposta), confere a transação da query. A transação da
- * query nunca é gravada: é dado da cliente. Erro não derruba (a tela confere de novo). Devolve o
- * caminho para onde redirecionar: nunca uma URL vinda da query.
+ * pedido, reconfere o candidato que o aviso gravou e confere a transação da query no payment_check,
+ * com o order_nsu do NOSSO banco (a referência da query só localiza a cobrança). Se a InfinitePay
+ * disser que essa transação pagou ESTE pedido, com as regras de sempre, o pedido vira PAGO aqui
+ * mesmo, sem esperar o aviso. A transação da query só é gravada ao confirmar; recusada, não deixa
+ * rastro além do `retorno_em`. Erro não derruba (a tela confere de novo). Devolve o caminho para onde
+ * redirecionar: nunca uma URL vinda da query.
  */
 export async function processarRetorno(parametros: URLSearchParams, usuarioId: string | null): Promise<string> {
   const { referencia, candidato } = lerRetorno(parametros, { origemLocal: origemDaApiDeTeste() });
@@ -603,14 +600,15 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
 
   if (p.status === "PENDENTE" || p.status === "CANCELADO") {
     try {
-      // A cliente diz que pagou: segura a tela em "confirmando" e o link novo por 30 min, sem
-      // confirmar nada (a transação da query não é gravada).
+      // A cliente diz que pagou: segura a tela em "confirmando" e o link novo por 30 min, mesmo que a
+      // conferência abaixo ainda não confirme (a InfinitePay pode demorar a achar a transação).
       if (candidato) {
         await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { retornoEm: new Date() } });
       }
       const gravado = candidatoGravado(p);
       const r = gravado ? await confirmarCobranca(p, gravado, "gravado") : null;
-      if (r !== "APROVADO" && r !== "DIVERGENTE" && candidato) {
+      const mesmoDoAviso = gravado && candidato && gravado.transacaoNsu === candidato.transacaoNsu && gravado.slug === candidato.slug;
+      if (r !== "APROVADO" && r !== "DIVERGENTE" && candidato && !mesmoDoAviso) {
         const atual = (await db.pagamento.findUnique({ where: { id: p.id } })) ?? p;
         await confirmarCobranca(atual, candidato, "retorno");
       }

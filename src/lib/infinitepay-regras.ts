@@ -2,9 +2,12 @@
  * Regras puras da integração com o checkout da InfinitePay (sem rede e sem banco), testadas em
  * testes/infinitepay.test.ts. As chamadas HTTP ficam em src/lib/infinitepay.ts.
  *
- * O que a documentação não fixa (o nome do campo da URL na resposta de /links, se vem o slug, o
- * formato exato do aviso) é lido de forma tolerante aqui; o ensaio com dinheiro real
- * (scripts/ensaio-infinitepay.ts) confirma o formato e o README registra.
+ * O que a documentação não fixa é lido de forma tolerante aqui. O ensaio com dinheiro real de
+ * 2026-10-22 (scripts/ensaio-infinitepay.ts; formato registrado no README) mostrou: /links devolve só
+ * `{ url }` (sem slug; o código no caminho do link NÃO é o slug da fatura); o retorno traz
+ * `capture_method, transaction_id, transaction_nsu, slug, order_nsu, receipt_url`; o payment_check
+ * traz `success, paid, amount, paid_amount, installments, capture_method` (sem order_nsu nem moeda).
+ * O formato do aviso (webhook) ainda não foi visto.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
@@ -220,6 +223,7 @@ const objeto = (v: unknown): Record<string, unknown> | null =>
 /**
  * Resposta do POST /links: a URL vem em `url`, `link` ou `checkout_url` (no corpo ou em `data`), e o
  * slug, se vier, em `slug` ou `invoice_slug`. URL fora da InfinitePay (ou http) é recusada: `null`.
+ * A API real devolve só `{ url }` (https://checkout.infinitepay.io/<handle>/<código>): slug `null`.
  */
 export function lerRespostaDoLink(json: unknown, opcoes: { origemLocal?: string | null } = {}): { url: string; slug: string | null } | null {
   const raiz = objeto(json);
@@ -282,9 +286,9 @@ export function divergenciaDaConferencia(c: Conferencia, valorCentavos: number):
 }
 
 /**
- * A resposta do payment_check AMARRA a transação a esta cobrança? Só se trouxer o nosso order_nsu.
- * Sem isso (a documentação não garante), uma transação apresentada pela própria cliente (retorno do
- * navegador) não basta para confirmar: ela pode ser de outro link da loja de mesmo valor.
+ * A resposta do payment_check traz o nosso order_nsu? A API real NÃO traz (ensaio de 2026-10-22):
+ * ela amarra pelo order_nsu ENVIADO na consulta (transação de outro pedido responde `paid=false,
+ * amount=0`). Só é usada com EXIGIR_ORDER_NSU_NA_CONFERENCIA ligada (src/lib/pagamentos.ts).
  */
 export function conferenciaAmarrada(c: Conferencia, referencia: string): boolean {
   return typeof c.order_nsu === "string" && c.order_nsu === referencia;
@@ -300,7 +304,9 @@ function parcelasDe(c: Conferencia): number {
 /**
  * O que fazer com a resposta do payment_check (ver confirmarCobranca em src/lib/pagamentos.ts).
  * `referencia` é o order_nsu da cobrança no NOSSO banco: se a resposta disser que a transação é de
- * outro pedido, o candidato é recusado de vez.
+ * outro pedido, o candidato é recusado de vez. `paid=false` vem antes de qualquer conferência de
+ * valor: a resposta da API real para uma transação de outro pedido (`success=true, paid=false,
+ * amount=0, paid_amount=0, installments=null, capture_method=null`) é NAO_PAGO, nunca DIVERGENTE.
  */
 export function classificarConferencia(c: Conferencia, valorCentavos: number, referencia: string): Classificacao {
   if (!c.success) return { tipo: "INVALIDO" };
