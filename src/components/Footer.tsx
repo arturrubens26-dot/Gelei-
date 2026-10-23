@@ -15,7 +15,7 @@ const estiloLink =
  */
 export function Footer() {
   return (
-    <footer className="mt-auto">
+    <footer className="mt-auto print:hidden">
       <div className="h-4 bg-gingham" aria-hidden="true" />
       <div className="bg-primaria text-destaque">
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-6 py-8 text-center lg:flex-row lg:justify-between lg:gap-6">
