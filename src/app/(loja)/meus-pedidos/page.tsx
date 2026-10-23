@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
+import { AbasDaConta } from "@/components/AbasDaConta";
 import { SeloDoPagamento } from "@/components/checkout/SeloDoPagamento";
 import { Ornamento } from "@/components/marca/Ornamento";
 import { exigirUsuario } from "@/lib/auth/dal";
@@ -9,6 +10,7 @@ import { formatarBRL } from "@/lib/dinheiro";
 import { ROTULO_MODO_ENTREGA } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 import type { PedidoResumoDTO } from "@/lib/pagamentos-regras";
+import { obterLembrancinhas } from "@/lib/lembrancinhas";
 import { listarPedidosDoUsuario } from "@/lib/pedidos";
 
 export const metadata: Metadata = { title: "Meus pedidos" };
@@ -17,13 +19,16 @@ export const metadata: Metadata = { title: "Meus pedidos" };
  * Os pedidos da conta, do mais recente ao mais antigo. É o caminho de volta para quem saiu da página
  * de pagamento sem pagar, ou volta outro dia: o pedido que falta pagar tem o botão "Pagar".
  */
-export default function PaginaMeusPedidos() {
+export default async function PaginaMeusPedidos() {
+  // Com as lembrancinhas abertas, a aba leva às encomendas (configuração em cache, sem sessão).
+  const { ativo } = await obterLembrancinhas();
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10 sm:px-6">
       <header className="mb-8 text-center">
         <h1 className="font-titulos text-4xl font-semibold text-primaria sm:text-5xl">Meus pedidos</h1>
         <Ornamento className="mt-4" />
       </header>
+      {ativo && <AbasDaConta atual="/meus-pedidos" />}
       {/* A sessão é dado da requisição: a lista chega por streaming. */}
       <Suspense
         fallback={
