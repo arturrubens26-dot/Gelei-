@@ -60,10 +60,10 @@ export function textosDaPolitica(versao: string, d: DadosDaPolitica): string[] {
 
   return [
     "Sua solicitação só vira encomenda quando a Geleiô aprova e você paga a entrada (50% do valor dos potinhos). Antes disso nada é cobrado e você pode desistir quando quiser.",
-    `Até ${corte}, ${DIAS_CORTE_ANTES_DA_ENTREGA} dias antes da ${palavra}, você pode desistir aqui no site, em Minhas encomendas, e devolvemos 100% do que você pagou, por PIX, em até ${PRAZO_DEVOLUCAO_DIAS_UTEIS} dias úteis.`,
+    `Até ${corte}, ${DIAS_CORTE_ANTES_DA_ENTREGA} dias antes da ${palavra}, você pode desistir aqui no site, em Minhas encomendas, e devolvemos 100% do que você pagou, pelo mesmo meio do pagamento, em até ${PRAZO_DEVOLUCAO_DIAS_UTEIS} dias úteis.`,
     depoisDoCorte,
     "Se a Geleiô não puder fazer a encomenda, devolvemos tudo.",
-    `O restante (${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? ", com o frete" : ""}) é pago até a ${palavra}, por PIX aqui no site ou combinado direto com a Geleiô; a encomenda só sai quitada.`,
+    `O restante (${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? ", com o frete" : ""}) é pago até a ${palavra}, aqui no site (PIX ou cartão) ou combinado direto com a Geleiô; a encomenda só sai quitada.`,
     "Esta política não exclui nem limita os direitos previstos no Código de Defesa do Consumidor.",
   ];
 }

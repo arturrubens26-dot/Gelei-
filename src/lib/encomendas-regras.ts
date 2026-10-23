@@ -11,8 +11,9 @@
 import { z } from "zod";
 import { FUSO_LOJA, formatarDia, hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
+import type { ModoEntrega } from "@/lib/entrega-regras";
 import { normalizarComposicao, type SaborNoKit } from "@/lib/kits-regras";
-import { enderecoSchema } from "@/lib/validacao";
+import { enderecoSchema, telefoneSchema } from "@/lib/validacao";
 import { FORMAS_PAGAMENTO, MAX_PRECO_UNITARIO_CENTAVOS, somarDias, textoLivreValido } from "@/lib/vendas";
 
 // --- status ---------------------------------------------------------------------------------------
@@ -30,7 +31,8 @@ export const STATUS_ENCOMENDA = [
 ] as const;
 
 export type StatusEncomenda = (typeof STATUS_ENCOMENDA)[number];
-export type ModoEntrega = "RETIRADA" | "ENTREGA";
+/** O mesmo tipo dos pedidos (enum ModoEntrega do banco). */
+export type { ModoEntrega };
 export type Parcela = "ENTRADA" | "RESTANTE";
 export type Ator = "CLIENTE" | "LOJA" | "SISTEMA";
 
@@ -76,9 +78,13 @@ export const DIAS_MIN_ATE_ENTREGA = 4;
 export const DIAS_CORTE_ANTES_DA_ENTREGA = 3;
 /** A cliente paga a entrada em até 24 h depois da aprovação, nunca depois do corte (D6). */
 export const HORAS_PARA_PAGAR_ENTRADA = 24;
-/** Validade do PIX: o Mercado Pago exige no mínimo 30 minutos; a loja usa no máximo 1 hora. */
-export const PIX_MIN_MS = 30 * 60_000;
-export const PIX_MAX_MS = 60 * 60_000;
+/** Validade de cada link de pagamento (`valid_until`): no máximo 1 hora, como nos pedidos. */
+export const LINK_MAX_MS = 60 * 60_000;
+/**
+ * Um link novo precisa valer pelo menos isto: com o prazo da entrada terminando em menos tempo, a
+ * cliente não teria tempo de pagar (é a mesma folga com que os pedidos reaproveitam um link).
+ */
+export const LINK_MIN_MS = 5 * 60_000;
 export const TAMANHO_MAX_TEXTO = 300;
 export const TAMANHO_MIN_MOTIVO = 5;
 
@@ -192,15 +198,15 @@ export function prazoDaEntrada(aprovadaEm: Date, corteEm: Date): Date {
 }
 
 /**
- * Vencimento de um PIX novo: 1 hora, sem passar do `limite` (o prazo da entrada), mas nunca menos de
- * 30 minutos (o mínimo do Mercado Pago). Sem limite (o restante), 1 hora. `null` se o limite já passou:
- * não se abre PIX para um prazo vencido.
+ * `valid_until` de um link novo: min(agora + 1 hora, `limite`), onde o limite é o prazo da entrada
+ * (o link nunca passa dele). Sem limite (o restante), 1 hora. `null` se faltam menos de 5 minutos
+ * para o limite (ou ele já passou): não se abre link para um prazo que está acabando.
  */
-export function validadeDoPix(agora: Date, limite: Date | null): Date | null {
+export function validadeDoLink(agora: Date, limite: Date | null): Date | null {
   const t = agora.getTime();
-  if (limite === null) return new Date(t + PIX_MAX_MS);
-  if (t >= limite.getTime()) return null;
-  return new Date(Math.max(t + PIX_MIN_MS, Math.min(t + PIX_MAX_MS, limite.getTime())));
+  if (limite === null) return new Date(t + LINK_MAX_MS);
+  if (limite.getTime() - t < LINK_MIN_MS) return null;
+  return new Date(Math.min(t + LINK_MAX_MS, limite.getTime()));
 }
 
 // --- formatação de prazos -------------------------------------------------------------------------
@@ -356,7 +362,7 @@ export const TRANSICOES_ENCOMENDA: Record<StatusEncomenda, readonly Transicao[]>
     { para: "CANCELADA", atores: ["CLIENTE"] },
   ],
   AGUARDANDO_ENTRADA: [
-    // Paga por um PIX que ainda valia: confirma mesmo depois de `entradaAte`.
+    // Paga por um link que ainda valia: confirma mesmo depois de `entradaAte`.
     { para: "CONFIRMADA", atores: ["SISTEMA"] },
     { para: "EXPIRADA", atores: ["SISTEMA"], condicao: depoisDe((f) => f.entradaAte) },
     { para: "CANCELADA", atores: ["CLIENTE", "LOJA"] },
@@ -399,8 +405,14 @@ export type EncomendaParaRegras = {
   responderAte: Date;
   entradaAte: Date | null;
   corteEm: Date;
-  /** Vencimento do PIX da ENTRADA ainda aberto mais longo (null = nenhum aberto). */
-  pixEntradaValidoAte: Date | null;
+  /** Vencimento do link da ENTRADA ainda aberto mais longo (null = nenhum aberto). */
+  linkEntradaValidoAte: Date | null;
+  /**
+   * Algum pagamento da ENTRADA está em conferência (aviso da InfinitePay ainda não conferido, retorno
+   * do navegador há menos de 30 min, ou pago com divergência): o dinheiro pode ter entrado, então a
+   * encomenda não expira por prazo enquanto isso.
+   */
+  entradaEmConfirmacao?: boolean;
   entradaPagaEm: Date | null;
   restantePagoEm: Date | null;
   valorEntradaCentavos: number;
@@ -412,18 +424,18 @@ export type EncomendaParaRegras = {
  * Status como a cliente e a dona devem ver AGORA. A expiração é "preguiçosa" (gravada na próxima
  * leitura ou ação); até lá, a tela usa este status:
  * - SOLICITADA sem resposta até `responderAte` → EXPIRADA;
- * - AGUARDANDO_ENTRADA depois de `entradaAte` → EXPIRADA, a menos que ainda haja um PIX da entrada
- *   valendo (pode ser pago até o vencimento dele).
+ * - AGUARDANDO_ENTRADA depois de `entradaAte` → EXPIRADA, a menos que ainda haja um link da entrada
+ *   valendo (pode ser pago até o vencimento dele) ou um pagamento dela em conferência.
  */
 export function statusEfetivo(
-  enc: Pick<EncomendaParaRegras, "status" | "responderAte" | "entradaAte" | "pixEntradaValidoAte">,
+  enc: Pick<EncomendaParaRegras, "status" | "responderAte" | "entradaAte" | "linkEntradaValidoAte" | "entradaEmConfirmacao">,
   agora: Date,
 ): StatusEncomenda {
   const t = agora.getTime();
   if (enc.status === "SOLICITADA" && t >= enc.responderAte.getTime()) return "EXPIRADA";
   if (enc.status === "AGUARDANDO_ENTRADA" && enc.entradaAte && t >= enc.entradaAte.getTime()) {
-    const pixValendo = enc.pixEntradaValidoAte !== null && enc.pixEntradaValidoAte.getTime() > t;
-    return pixValendo ? "AGUARDANDO_ENTRADA" : "EXPIRADA";
+    const linkValendo = enc.linkEntradaValidoAte !== null && enc.linkEntradaValidoAte.getTime() > t;
+    return linkValendo || enc.entradaEmConfirmacao ? "AGUARDANDO_ENTRADA" : "EXPIRADA";
   }
   return enc.status;
 }
@@ -434,9 +446,9 @@ const pagoEmCentavos = (enc: EncomendaParaRegras) => ({
 });
 
 export type AcoesDaCliente = {
-  /** Pode gerar (ou pedir de novo) o PIX da entrada. */
+  /** Pode abrir (ou pedir de novo) o link de pagamento da entrada (PIX ou cartão, na InfinitePay). */
   pagarEntrada: boolean;
-  /** Pode gerar o PIX do restante (de CONFIRMADA até antes da entrega, se ainda não quitada). */
+  /** Pode abrir o link do restante (de CONFIRMADA até antes da entrega, se ainda não quitada). */
   pagarRestante: boolean;
   /** Prévia da desistência agora (centavos), ou `null` se não dá para desistir. */
   desistir: { devolucao: number; retido: number } | null;
@@ -446,7 +458,8 @@ export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCl
   const status = statusEfetivo(enc, agora);
   const aberta = (STATUS_ABERTOS as readonly StatusEncomenda[]).includes(status);
   return {
-    pagarEntrada: status === "AGUARDANDO_ENTRADA" && enc.entradaAte !== null && agora.getTime() < enc.entradaAte.getTime(),
+    // Com menos de 5 min até o prazo da entrada, não se abre link novo (validadeDoLink).
+    pagarEntrada: status === "AGUARDANDO_ENTRADA" && enc.entradaAte !== null && validadeDoLink(agora, enc.entradaAte) !== null,
     pagarRestante: statusConfirmado(status) && enc.restantePagoEm === null,
     desistir: aberta
       ? devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pagoEmCentavos(enc), quem: "CLIENTE", percentualRetido: enc.percentualRetido })
@@ -512,7 +525,7 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
     acao("cancelar", "Cancelar encomenda", {
       aviso:
         enc.entradaPagaEm || enc.restantePagoEm
-          ? "O que a cliente pagou fica como devolução pendente: devolva pelo app do Mercado Pago e marque aqui."
+          ? "O que a cliente pagou fica como devolução pendente: devolva pelo app da InfinitePay e marque aqui."
           : null,
     });
 
@@ -556,48 +569,10 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
   return lista;
 }
 
-// --- referências, telefone e idempotência ---------------------------------------------------------
-
-/**
- * `external_reference` da cobrança no Mercado Pago. Cada parcela tem a sua: um PIX do RESTANTE com o
- * mesmo valor da ENTRADA não quita a entrada (a conferência compara a referência inteira).
- */
-export function referenciaDaParcela(encomendaId: string, parcela: Parcela): string {
-  return `enc-${encomendaId}-${parcela}`;
-}
-
-/** O inverso, para logs e conferência: "enc-<id>-ENTRADA" → { encomendaId, parcela }. */
-export function lerReferenciaDaParcela(referencia: string | null | undefined): { encomendaId: string; parcela: Parcela } | null {
-  const m = /^enc-([A-Za-z0-9_-]{1,100})-(ENTRADA|RESTANTE)$/.exec(referencia ?? "");
-  return m ? { encomendaId: m[1], parcela: m[2] as Parcela } : null;
-}
-
-/**
- * "(86) 99999-1234" → "86999991234". Aceita fixo (DDD + 8) e celular (DDD + 9 + 8), com ou sem "+55"
- * escrito; DDD não começa nem termina com 0. Devolve `null` se não for um telefone brasileiro.
- */
-export function normalizarTelefone(texto: string): string | null {
-  const semPais = texto.trim().replace(/^\+\s*55/, "");
-  if (/[^\d\s().-]/.test(semPais)) return null;
-  const digitos = semPais.replace(/\D/g, "");
-  if (/^[1-9][1-9][2-9]\d{7}$/.test(digitos)) return digitos;
-  if (/^[1-9][1-9]9\d{8}$/.test(digitos)) return digitos;
-  return null;
-}
-
-const MSG_TELEFONE = "Informe um telefone com DDD, como (86) 99999-1234.";
-
-export const telefoneSchema = z
-  .string(MSG_TELEFONE)
-  .max(30, MSG_TELEFONE)
-  .transform((valor, ctx) => {
-    const telefone = normalizarTelefone(valor);
-    if (!telefone) {
-      ctx.addIssue({ code: "custom", message: MSG_TELEFONE });
-      return z.NEVER;
-    }
-    return telefone;
-  });
+// --- idempotência ---------------------------------------------------------------------------------
+//
+// A referência de cada cobrança (order_nsu enc-<id>-<PARCELA>-<n>) fica em src/lib/infinitepay-regras.ts
+// (referenciaDaEncomenda); o telefone segue a regra dos pedidos (telefoneSchema, em src/lib/validacao.ts).
 
 export type ConteudoDaEncomenda = {
   itens: readonly SaborNoKit[];

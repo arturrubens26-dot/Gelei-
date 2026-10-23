@@ -47,6 +47,37 @@ export function lerReferencia(ref: string): ReferenciaLida | null {
   return null;
 }
 
+/** A quem a cobrança paga: um pedido, ou uma parcela de encomenda de lembrancinhas. */
+export type AlvoCobranca =
+  | { tipo: "pedido"; orderId: string }
+  | { tipo: "encomenda"; encomendaId: string; parcela: "ENTRADA" | "RESTANTE" };
+
+/**
+ * O alvo de uma cobrança do NOSSO banco, conferido contra a referência (order_nsu) gravada nela: a
+ * de pedido precisa ser ped-<orderId>-<n>, a de encomenda enc-<encomendaId>-<parcela>-<n> (a mesma
+ * regra da CHECK `pagamentos_referencia_da_parcela`). Qualquer incoerência (os dois alvos, nenhum,
+ * parcela sem encomenda, referência de outra parcela ou de outro alvo): `null`, e a cobrança não
+ * quita nada. É o que garante que um pagamento do RESTANTE nunca quita a ENTRADA: a parcela que
+ * recebe o efeito é a da linha, e a referência conferida no payment_check é a dessa mesma parcela.
+ */
+export function alvoDaCobranca(c: {
+  orderId: string | null;
+  encomendaId: string | null;
+  parcela: "ENTRADA" | "RESTANTE" | null;
+  referenciaExterna: string;
+}): AlvoCobranca | null {
+  const ref = lerReferencia(c.referenciaExterna);
+  if (c.orderId !== null && c.encomendaId === null && c.parcela === null) {
+    return ref?.tipo === "pedido" && ref.pedidoId === c.orderId ? { tipo: "pedido", orderId: c.orderId } : null;
+  }
+  if (c.orderId === null && c.encomendaId !== null && c.parcela !== null) {
+    return ref?.tipo === "encomenda" && ref.encomendaId === c.encomendaId && ref.parcela === c.parcela
+      ? { tipo: "encomenda", encomendaId: c.encomendaId, parcela: c.parcela }
+      : null;
+  }
+  return null;
+}
+
 /**
  * Token do aviso, por cobrança: HMAC-SHA256(SESSION_SECRET, "infinitepay-aviso:" + order_nsu), em
  * base64url. Vai no CAMINHO do webhook_url (não se sabe se a InfinitePay preserva a query). O aviso
@@ -216,7 +247,16 @@ export function itensDoLink(entrada: {
   ];
 }
 
-export const somaDosItens = (itens: readonly ItemDoLink[]) => itens.reduce((soma, i) => soma + i.quantity * i.price, 0);
+/**
+ * Item único do link de uma parcela de encomenda: "Lembrancinhas #9F3K2XQP: entrada" (ou "restante"),
+ * com o valor da parcela em centavos.
+ */
+export function itensDaParcela(entrada: { codigo: string; parcela: "ENTRADA" | "RESTANTE"; valorCentavos: number }): ItemDoLink[] {
+  const nome = `Lembrancinhas ${entrada.codigo}: ${entrada.parcela === "ENTRADA" ? "entrada" : "restante"}`;
+  return [{ description: nome.slice(0, 80), quantity: 1, price: entrada.valorCentavos }];
+}
+
+export const somaDosItens =(itens: readonly ItemDoLink[]) => itens.reduce((soma, i) => soma + i.quantity * i.price, 0);
 
 export type EntradaDoLink = {
   handle: string;

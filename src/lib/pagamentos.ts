@@ -12,7 +12,9 @@ import {
   origemDaApiDeTeste,
   origemPublica,
 } from "@/lib/infinitepay";
+import { STATUS_CONFIRMADOS, statusFinal } from "@/lib/encomendas-regras";
 import {
+  alvoDaCobranca,
   classificarConferencia,
   conferenciaAmarrada,
   conferirTokenDoAviso,
@@ -23,6 +25,7 @@ import {
   lerRetorno,
   referenciaDoPedido,
   tokenDoAviso,
+  type AlvoCobranca,
   type Candidato,
 } from "@/lib/infinitepay-regras";
 import {
@@ -53,12 +56,16 @@ export type { CobrancaDTO, SituacaoPagamentoDTO } from "@/lib/pagamentos-regras"
  * para PAGO). O aviso (webhook, que não é assinado) e o retorno do navegador só trazem um
  * "candidato" (transação e slug) e disparam a conferência. A mesma transação nunca quita duas
  * cobranças: UNIQUE(gateway, transacao_nsu), gravada só depois de confirmada.
+ *
+ * Cada cobrança tem um ALVO (`alvoDaCobranca`): um pedido, ou uma parcela (ENTRADA ou RESTANTE) de
+ * encomenda de lembrancinhas (src/lib/encomendas-pagamentos.ts abre os links delas). A conferência é
+ * a mesma; só o efeito da aprovação muda, no `switch` de `aplicarAprovacao`.
  */
 
-type NomeGateway = "infinitepay" | "simulado";
+export type NomeGateway = "infinitepay" | "simulado";
 
 /** Um link que vence em menos que isto não é reaproveitado: a cliente não teria tempo de pagar. */
-const FOLGA_PARA_PAGAR_MS = 5 * 60_000;
+export const FOLGA_PARA_PAGAR_MS = 5 * 60_000;
 /** Links por pedido (cada "Pagar" depois de um link vencido conta um). */
 const MAX_COBRANCAS_POR_PEDIDO = 10;
 /** A tela pergunta a cada 5 s; a InfinitePay, no máximo uma vez nesse intervalo por cobrança. */
@@ -95,7 +102,7 @@ export function pagamentoOnlineDisponivel(): boolean {
   return infinitePayConfigurado() || pagamentosSimuladosAtivos();
 }
 
-function gatewayAtivo(): NomeGateway {
+export function gatewayAtivo(): NomeGateway {
   if (infinitePayConfigurado()) return "infinitepay";
   if (pagamentosSimuladosAtivos()) return "simulado";
   throw new ErroNegocio(503, "O pagamento pelo site está indisponível no momento.");
@@ -107,7 +114,7 @@ const centavosDe = (valor: Prisma.Decimal) => valor.mul(100).toNumber();
 const reaisDe = (centavos: number) => new Prisma.Decimal(centavos).div(100);
 const metodoDe = (v: string | null): MetodoPagamento | null => (v === "pix" || v === "credit_card" ? v : null);
 
-function paraCobrancaDTO(p: Pagamento, agora = Date.now()): CobrancaDTO {
+export function paraCobrancaDTO(p: Pagamento, agora = Date.now()): CobrancaDTO {
   const valendo = p.status === "PENDENTE" && p.expiraEm.getTime() > agora;
   const aprovada = p.status === "APROVADO" || p.status === "ESTORNADO";
   return {
@@ -125,14 +132,14 @@ function paraCobrancaDTO(p: Pagamento, agora = Date.now()): CobrancaDTO {
 }
 
 /** Candidato gravado (aviso com token ou retorno da dona do pedido), se houver. */
-function candidatoGravado(p: Pagamento): Candidato | null {
+export function candidatoGravado(p: Pagamento): Candidato | null {
   return p.avisoTransacaoNsu && p.avisoSlug
     ? { transacaoNsu: p.avisoTransacaoNsu, slug: p.avisoSlug, comprovanteUrl: p.comprovanteUrl }
     : null;
 }
 
 /** Para `cobrancaParaEtapa`: `avisadoEm` só conta com um candidato gravado. */
-const paraEtapa = (p: Pagamento) => ({ ...p, avisadoEm: candidatoGravado(p) ? p.avisadoEm : null });
+export const paraEtapa = (p: Pagamento) => ({ ...p, avisadoEm: candidatoGravado(p) ? p.avisadoEm : null });
 
 const maisNovasPrimeiro = (cobrancas: readonly Pagamento[]) =>
   [...cobrancas].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime() || (a.id < b.id ? 1 : -1));
@@ -142,7 +149,7 @@ const maisNovasPrimeiro = (cobrancas: readonly Pagamento[]) =>
  * necessariamente a última criada: a cliente pode ter aberto outro link depois de pagar). É a que
  * a tela, o retorno e o "Pagar" reconferem. `null` se nenhuma.
  */
-function cobrancaComAviso(cobrancas: readonly Pagamento[]): Pagamento | null {
+export function cobrancaComAviso(cobrancas: readonly Pagamento[]): Pagamento | null {
   return maisNovasPrimeiro(cobrancas).find((c) => (c.status === "PENDENTE" || c.status === "CANCELADO") && candidatoGravado(c)) ?? null;
 }
 
@@ -165,11 +172,11 @@ function segredoDoAviso(): string {
   return process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() || process.env.SESSION_SECRET || "";
 }
 
-const MENSAGEM_DIVERGENCIA =
+export const MENSAGEM_DIVERGENCIA =
   "Recebemos um pagamento deste pedido que precisa ser conferido. Não pague de novo: fale com a loja no Instagram @ge.leio.";
-const MENSAGEM_AVISO_EM_CONFERENCIA =
+export const MENSAGEM_AVISO_EM_CONFERENCIA =
   "Recebemos o aviso do seu pagamento e estamos conferindo com a InfinitePay. Não pague de novo: se demorar, fale com a loja no Instagram @ge.leio.";
-const MENSAGEM_RETORNO_RECENTE =
+export const MENSAGEM_RETORNO_RECENTE =
   "Você acabou de voltar da página de pagamento: estamos confirmando. Aguarde alguns minutos antes de tentar pagar de novo.";
 
 // --- confirmação (a única porta para PAGO) ----------------------------------------------------
@@ -278,6 +285,12 @@ export async function confirmarCobranca(
 ): Promise<ResultadoConfirmacao> {
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return "APROVADO";
   if (p.gateway !== "infinitepay" || (p.status !== "PENDENTE" && p.status !== "CANCELADO")) return "INVALIDO";
+  // O alvo vem da linha e é conferido contra a referência gravada (a mesma que vai ao payment_check).
+  const alvo = alvoDaCobranca(p);
+  if (!alvo) {
+    console.error(`[pagamentos] cobrança ${p.id}: alvo incoerente com a referência gravada; não confirma nada`);
+    return "INVALIDO";
+  }
   const daCliente = origem === "retorno";
   // Se a criação do link trouxe o slug da fatura, ele amarra a fatura: outro slug é de outra fatura e
   // nem é consultado. (A API real não devolve o slug em /links: aí quem amarra é o payment_check.)
@@ -374,8 +387,8 @@ export async function confirmarCobranca(
     const marca = `${MARCA_DIVERGENTE}${resultado.motivo}`.slice(0, 40);
     if (p.statusGateway !== marca) {
       console.error(
-        `[pagamentos] cobrança ${p.id} do pedido ${p.orderId} paga com divergência (${resultado.motivo}): ` +
-          "o pedido NÃO foi marcado como pago. Confira no app InfinitePay.",
+        `[pagamentos] cobrança ${p.id} (${descreverAlvo(alvo)}) paga com divergência (${resultado.motivo}): ` +
+          "NÃO foi marcada como paga. Confira no app InfinitePay.",
       );
     }
     await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { statusGateway: marca } });
@@ -412,66 +425,173 @@ export async function confirmarCobranca(
     }
   }
 
-  // Aprovado: grava a transação (UNIQUE) e o pedido, juntos.
-  let pedidoMudou = false;
+  // Aprovado: grava a transação (UNIQUE) e o efeito no alvo, juntos.
   try {
-    const [cobranca, pedido] = await db.$transaction([
-      db.pagamento.updateMany({
-        where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
-        data: {
-          status: "APROVADO",
-          statusGateway: "pago",
-          transacaoNsu: c.transacaoNsu,
-          faturaSlug: c.slug,
-          metodo: resultado.metodo,
-          parcelas: resultado.parcelas,
-          valorPago: reaisDe(resultado.valorPagoCentavos),
-          comprovanteUrl: c.comprovanteUrl,
-          aprovadoEm: new Date(),
-          avisoTransacaoNsu: null,
-          avisoSlug: null,
-        },
-      }),
-      db.order.updateMany({ where: { id: p.orderId, status: "PENDENTE" }, data: { status: "PAGO" } }),
-    ]);
-    // Outra conferência aprovou esta cobrança no meio do caminho: ela já cuidou do pedido.
-    if (cobranca.count !== 1) return "APROVADO";
-    pedidoMudou = pedido.count === 1;
+    await aplicarAprovacao(p, alvo, {
+      statusGateway: "pago",
+      transacaoNsu: c.transacaoNsu,
+      faturaSlug: c.slug,
+      metodo: resultado.metodo,
+      parcelas: resultado.parcelas,
+      valorPago: reaisDe(resultado.valorPagoCentavos),
+      comprovanteUrl: c.comprovanteUrl,
+      origem,
+    });
+    return "APROVADO";
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      // Esta transação já quitou outra cobrança: não paga duas. Do retorno (dado da cliente), não grava marca.
+      // Esta transação já quitou outra cobrança (de pedido ou de encomenda): não paga duas. Do retorno
+      // (dado da cliente), não grava marca.
       if (!daCliente) await descartarCandidato(p, c, "transacao-ja-usada");
       console.error(`[pagamentos] cobrança ${p.id}: a transação informada já quitou outra cobrança; recusada`);
       return "INVALIDO";
     }
     throw e;
   }
+}
 
-  if (pedidoMudou) {
-    console.info(`[pagamentos] pedido ${p.orderId} pago (${resultado.metodo}, ${resultado.parcelas}x, cobrança ${p.id}, via ${origem})`);
-    // Os outros links ainda abertos do pedido são encerrados no nosso banco (não há cancelamento na API).
-    await db.pagamento.updateMany({ where: { orderId: p.orderId, status: "PENDENTE", NOT: { id: p.id } }, data: { status: "CANCELADO" } });
-    return "APROVADO";
-  }
+/** "pedido <id>" ou "encomenda <id>, entrada", para os logs (sem dados pessoais). */
+function descreverAlvo(alvo: AlvoCobranca): string {
+  return alvo.tipo === "pedido" ? `pedido ${alvo.orderId}` : `encomenda ${alvo.encomendaId}, ${alvo.parcela === "ENTRADA" ? "entrada" : "restante"}`;
+}
 
-  // O pedido não estava PENDENTE: cancelado, pago por outra cobrança, ou marcado como pago à mão pela
-  // dona (plano C, com ESTE dinheiro). O painel mostra o alerta só nos dois primeiros casos.
-  const [pedido, outrasAprovadas] = await Promise.all([
-    db.order.findUnique({ where: { id: p.orderId }, select: { status: true } }),
-    db.pagamento.count({ where: { orderId: p.orderId, status: "APROVADO", NOT: { id: p.id } } }),
-  ]);
-  if (pedido?.status === "CANCELADO" || outrasAprovadas > 0) {
-    console.error(
-      `[pagamentos] cobrança ${p.id} paga com o pedido ${p.orderId} em ${pedido?.status ?? "?"}` +
-        `${outrasAprovadas > 0 ? " e já pago por outra cobrança" : ""}: devolva o valor pelo app InfinitePay (o painel mostra o alerta).`,
-    );
-  } else {
-    // A dona marcou PAGO à mão antes: o painel mostra CONFIRMADO_APOS_BAIXA_MANUAL para ela conferir
-    // no app se a cliente não pagou duas vezes (por fora e pelo site).
-    await db.pagamento.updateMany({ where: { id: p.id, status: "APROVADO" }, data: { statusGateway: MARCA_APOS_BAIXA_MANUAL } });
-    console.warn(`[pagamentos] cobrança ${p.id} confirmada depois de o pedido ${p.orderId} ser marcado ${pedido?.status ?? "?"} à mão`);
+type DadosDaAprovacao = {
+  statusGateway: string;
+  transacaoNsu: string | null;
+  faturaSlug: string | null;
+  metodo: MetodoPagamento;
+  parcelas: number;
+  valorPago: Prisma.Decimal;
+  comprovanteUrl: string | null;
+  /** Só para o log. */
+  origem: OrigemCandidato | "simulado";
+};
+
+/**
+ * Marca a cobrança APROVADO (só a partir de PENDENTE ou CANCELADO) e aplica o efeito no alvo, numa
+ * transação curta e sem rede dentro. Idempotente: se outra conferência aprovou esta cobrança no meio
+ * do caminho, nada mais acontece. P2002 em (gateway, transacao_nsu) sobe para quem chamou.
+ */
+async function aplicarAprovacao(p: Pagamento, alvo: AlvoCobranca, d: DadosDaAprovacao): Promise<void> {
+  const dados = {
+    status: "APROVADO",
+    statusGateway: d.statusGateway,
+    transacaoNsu: d.transacaoNsu,
+    faturaSlug: d.faturaSlug,
+    metodo: d.metodo,
+    parcelas: d.parcelas,
+    valorPago: d.valorPago,
+    comprovanteUrl: d.comprovanteUrl,
+    aprovadoEm: new Date(),
+    avisoTransacaoNsu: null,
+    avisoSlug: null,
+  } satisfies Prisma.PagamentoUpdateManyMutationInput;
+  const desta = { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } } satisfies Prisma.PagamentoWhereInput;
+
+  switch (alvo.tipo) {
+    case "pedido": {
+      const [cobranca, pedido] = await db.$transaction([
+        db.pagamento.updateMany({ where: desta, data: dados }),
+        db.order.updateMany({ where: { id: alvo.orderId, status: "PENDENTE" }, data: { status: "PAGO" } }),
+      ]);
+      // Outra conferência aprovou esta cobrança no meio do caminho: ela já cuidou do pedido.
+      if (cobranca.count !== 1) return;
+      if (pedido.count === 1) {
+        console.info(`[pagamentos] pedido ${alvo.orderId} pago (${d.metodo}, ${d.parcelas}x, cobrança ${p.id}, via ${d.origem})`);
+        // Os outros links ainda abertos do pedido são encerrados no nosso banco (não há cancelamento na API).
+        await db.pagamento.updateMany({ where: { orderId: alvo.orderId, status: "PENDENTE", NOT: { id: p.id } }, data: { status: "CANCELADO" } });
+        return;
+      }
+      // O pedido não estava PENDENTE: cancelado, pago por outra cobrança, ou marcado como pago à mão
+      // pela dona (plano C, com ESTE dinheiro). O painel mostra o alerta só nos dois primeiros casos.
+      const [atual, outrasAprovadas] = await Promise.all([
+        db.order.findUnique({ where: { id: alvo.orderId }, select: { status: true } }),
+        db.pagamento.count({ where: { orderId: alvo.orderId, status: "APROVADO", NOT: { id: p.id } } }),
+      ]);
+      if (atual?.status === "CANCELADO" || outrasAprovadas > 0) {
+        console.error(
+          `[pagamentos] cobrança ${p.id} paga com o pedido ${alvo.orderId} em ${atual?.status ?? "?"}` +
+            `${outrasAprovadas > 0 ? " e já pago por outra cobrança" : ""}: devolva o valor pelo app InfinitePay (o painel mostra o alerta).`,
+        );
+      } else {
+        // A dona marcou PAGO à mão antes: o painel mostra CONFIRMADO_APOS_BAIXA_MANUAL para ela conferir
+        // no app se a cliente não pagou duas vezes (por fora e pelo site).
+        await db.pagamento.updateMany({ where: { id: p.id, status: "APROVADO" }, data: { statusGateway: MARCA_APOS_BAIXA_MANUAL } });
+        console.warn(`[pagamentos] cobrança ${p.id} confirmada depois de o pedido ${alvo.orderId} ser marcado ${atual?.status ?? "?"} à mão`);
+      }
+      return;
+    }
+
+    case "encomenda": {
+      // ENTRADA paga: AGUARDANDO_ENTRADA → CONFIRMADA. RESTANTE pago: quita (restantePagoEm). A parcela
+      // é a da LINHA (conferida contra a referência em alvoDaCobranca): o restante nunca quita a entrada.
+      // Pago sem ter o que quitar (encomenda encerrada, parcela já paga por outro link ou fora do
+      // site): devolução PENDENTE no painel, a dona devolve pelo app InfinitePay (v1 manual).
+      type Efeito = "ja-aplicado" | "confirmou" | "quitou" | "PAGAMENTO_TARDIO" | "PAGAMENTO_DUPLICADO";
+      const efeito = await db.$transaction(async (tx): Promise<Efeito> => {
+        const marcou = await tx.pagamento.updateMany({ where: desta, data: dados });
+        if (marcou.count !== 1) return "ja-aplicado";
+        if (alvo.parcela === "ENTRADA") {
+          const r = await tx.encomenda.updateMany({
+            where: { id: alvo.encomendaId, status: "AGUARDANDO_ENTRADA", entradaPagaEm: null },
+            data: { status: "CONFIRMADA", entradaPagaEm: dados.aprovadoEm },
+          });
+          if (r.count === 1) return "confirmou";
+        } else {
+          const r = await tx.encomenda.updateMany({
+            where: { id: alvo.encomendaId, status: { in: [...STATUS_CONFIRMADOS] }, restantePagoEm: null },
+            data: {
+              restantePagoEm: dados.aprovadoEm,
+              restanteForma: d.metodo === "credit_card" ? "CARTAO_CREDITO" : "PIX",
+              restanteForaDoSite: false,
+            },
+          });
+          if (r.count === 1) return "quitou";
+        }
+        const atual = await tx.encomenda.findUnique({ where: { id: alvo.encomendaId }, select: { status: true } });
+        const motivo = atual && statusFinal(atual.status) && atual.status !== "ENTREGUE" ? "PAGAMENTO_TARDIO" : "PAGAMENTO_DUPLICADO";
+        await tx.encomendaDevolucao.create({ data: { encomendaId: alvo.encomendaId, pagamentoId: p.id, motivo, valor: p.valor } });
+        return motivo;
+      });
+      if (efeito === "ja-aplicado") return;
+      if (efeito === "confirmou" || efeito === "quitou") {
+        console.info(`[pagamentos] ${descreverAlvo(alvo)} paga (${d.metodo}, ${d.parcelas}x, cobrança ${p.id}, via ${d.origem})`);
+        // Os outros links ainda abertos desta parcela são encerrados no nosso banco.
+        await db.pagamento.updateMany({
+          where: { encomendaId: alvo.encomendaId, parcela: alvo.parcela, status: "PENDENTE", NOT: { id: p.id } },
+          data: { status: "CANCELADO" },
+        });
+        return;
+      }
+      console.error(
+        `[pagamentos] cobrança ${p.id} (${descreverAlvo(alvo)}) paga sem ter o que quitar (${efeito}): ` +
+          `devolução de ${p.valor.toFixed(2)} pendente no painel; devolva pelo app InfinitePay.`,
+      );
+      return;
+    }
   }
-  return "APROVADO";
+}
+
+/**
+ * DEMONSTRAÇÃO (gateway simulado): aprova a cobrança simulada pelo MESMO caminho de um pagamento real
+ * (efeito no alvo, devolução se não houver o que quitar). Só com a simulação ligada. `false`: não é
+ * uma cobrança simulada aberta, ou o alvo é incoerente.
+ */
+export async function aprovarCobrancaSimulada(p: Pagamento): Promise<boolean> {
+  if (!pagamentosSimuladosAtivos() || p.gateway !== "simulado" || (p.status !== "PENDENTE" && p.status !== "CANCELADO")) return false;
+  const alvo = alvoDaCobranca(p);
+  if (!alvo) return false;
+  await aplicarAprovacao(p, alvo, {
+    statusGateway: "simulado",
+    transacaoNsu: null,
+    faturaSlug: null,
+    metodo: "pix",
+    parcelas: 1,
+    valorPago: p.valor,
+    comprovanteUrl: null,
+    origem: "simulado",
+  });
+  return true;
 }
 
 // --- abrir o link -----------------------------------------------------------------------------
@@ -491,7 +611,7 @@ const PEDIDO_PARA_COBRAR = {
 } satisfies Prisma.OrderSelect;
 
 /** URL do aviso com o token da cobrança no caminho. */
-function urlDoAviso(origem: string, referencia: string): string {
+export function urlDoAviso(origem: string, referencia: string): string {
   return `${origem}/api/webhooks/infinitepay/${referencia}/${tokenDoAviso(segredoDoAviso(), referencia)}`;
 }
 
@@ -664,13 +784,18 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
   if (!referencia) return usuarioId ? "/meus-pedidos" : "/";
   const p = await db.pagamento.findUnique({
     where: { gateway_referenciaExterna: { gateway: "infinitepay", referenciaExterna: referencia } },
-    include: { order: { select: { userId: true } } },
+    include: { order: { select: { userId: true } }, encomenda: { select: { userId: true } } },
   });
-  if (!p) return usuarioId ? "/meus-pedidos" : "/";
-  // Sem sessão: a página do pedido pede login; sem gravar nada (o aviso cobre esse caso).
-  if (!usuarioId) return `/order-confirmation/${p.orderId}?retorno=1`;
+  const alvo = p ? alvoDaCobranca(p) : null;
+  if (!p || !alvo) return usuarioId ? "/meus-pedidos" : "/";
+  // Pedido: a confirmação do pedido. Encomenda: a página da encomenda (ela mostra as duas parcelas).
+  const destino =
+    alvo.tipo === "pedido" ? `/order-confirmation/${alvo.orderId}?retorno=1` : `/minhas-encomendas/${alvo.encomendaId}?retorno=1`;
+  const dona = alvo.tipo === "pedido" ? p.order?.userId : p.encomenda?.userId;
+  // Sem sessão: a página pede login; sem gravar nada (o aviso cobre esse caso).
+  if (!usuarioId) return destino;
   // De outra conta: não revela nem grava nada.
-  if (p.order.userId !== usuarioId) return "/meus-pedidos";
+  if (dona !== usuarioId) return alvo.tipo === "pedido" ? "/meus-pedidos" : "/minhas-encomendas";
 
   if (p.status === "PENDENTE" || p.status === "CANCELADO") {
     try {
@@ -692,7 +817,7 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
       console.error(`[pagamentos] conferência no retorno da cobrança ${p.id} falhou: ${e instanceof Error ? e.name : "erro"}`);
     }
   }
-  return `/order-confirmation/${p.orderId}?retorno=1`;
+  return destino;
 }
 
 // --- leitura para as telas --------------------------------------------------------------------
