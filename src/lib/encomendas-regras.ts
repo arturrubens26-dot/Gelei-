@@ -13,6 +13,7 @@ import { FUSO_LOJA, formatarDia, hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ModoEntrega } from "@/lib/entrega-regras";
 import { normalizarComposicao, type SaborNoKit } from "@/lib/kits-regras";
+import type { EtapaPagamento } from "@/lib/pagamentos-regras";
 import { enderecoSchema, telefoneSchema } from "@/lib/validacao";
 import { FORMAS_PAGAMENTO, MAX_PRECO_UNITARIO_CENTAVOS, somarDias, textoLivreValido } from "@/lib/vendas";
 
@@ -465,6 +466,37 @@ export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCl
       ? devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pagoEmCentavos(enc), quem: "CLIENTE", percentualRetido: enc.percentualRetido })
       : null,
   };
+}
+
+/**
+ * Etapa do pagamento de UMA parcela, para a tela da encomenda (os mesmos valores da tela do pedido,
+ * na ordem):
+ * 1. parcela paga → PAGO;
+ * 2. encomenda EXPIRADA → EXPIRADO; RECUSADA, CANCELADA ou ENTREGUE → CANCELADO;
+ * 3. pago com divergência → CONFIRMANDO ("fale com a loja"), sem prazo;
+ * 4. pagamento pelo site desligado → INDISPONIVEL;
+ * 5. aviso da InfinitePay ainda não conferido, ou retorno do navegador há menos de 30 min → CONFIRMANDO
+ *    (com dinheiro possivelmente entrando, a tela nunca volta a "Pagar");
+ * 6. a parcela ainda não pode ser paga (a ENTRADA antes da aprovação; o RESTANTE antes da entrada) → INDISPONIVEL;
+ * 7. o resto → PAGAR (o botão segue `acoes.pagarEntrada` / `acoes.pagarRestante`).
+ */
+export function etapaDaParcela(e: {
+  parcela: Parcela;
+  /** `statusEfetivo` da encomenda. */
+  status: StatusEncomenda;
+  paga: boolean;
+  gatewayAtivo: boolean;
+  divergente: boolean;
+  emConfirmacao: boolean;
+}): EtapaPagamento {
+  if (e.paga) return "PAGO";
+  if (e.status === "EXPIRADA") return "EXPIRADO";
+  if (statusFinal(e.status)) return "CANCELADO";
+  if (e.divergente) return "CONFIRMANDO";
+  if (!e.gatewayAtivo) return "INDISPONIVEL";
+  if (e.emConfirmacao) return "CONFIRMANDO";
+  const pagavel = e.parcela === "ENTRADA" ? e.status === "AGUARDANDO_ENTRADA" : statusConfirmado(e.status);
+  return pagavel ? "PAGAR" : "INDISPONIVEL";
 }
 
 /** Valores do cancelamento pela loja (centavos): a padrão (devolve tudo) e a mínima a pedido da cliente. */

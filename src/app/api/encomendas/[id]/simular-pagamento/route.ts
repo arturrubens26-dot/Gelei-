@@ -8,9 +8,9 @@ const corpoSchema = z.object({ parcela: z.enum(["ENTRADA", "RESTANTE"], "Informe
 
 /**
  * POST /api/encomendas/[id]/simular-pagamento  { parcela } — DEMONSTRAÇÃO: paga a parcela da própria
- * encomenda pelo PIX simulado (o mesmo caminho de um pagamento real). Existe só com
- * PAGAMENTOS_SIMULADOS=true e sem Mercado Pago; fora disso responde 404.
- * Resposta: `{ status, entradaPaga, restantePaga, cobranca }` (como o GET .../pagamento).
+ * encomenda pelo pagamento simulado (o mesmo caminho de um pagamento real). Existe só com
+ * PAGAMENTOS_SIMULADOS=true e sem InfinitePay; fora disso responde 404.
+ * Resposta: `{ status, entradaPaga, restantePaga, etapa, cobranca }` (como o GET .../pagamento).
  */
 export const POST = comTratamento(
   "api/encomendas/simular-pagamento",

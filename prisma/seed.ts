@@ -198,7 +198,7 @@ async function semearKit() {
 }
 
 /**
- * Lembrancinhas (potinhos mini). A migração 20261022120000_lembrancinhas já cria a configuração
+ * Lembrancinhas (potinhos mini). A migração 20261023120000_lembrancinhas já cria a configuração
  * DESATIVADA, e nenhum sabor nasce "disponível em mini": rodar o seed não muda nada disso. Só com
  * SEED_LEMBRANCINHAS_ATIVAS=1, e só no banco LOCAL, ele marca os sabores do catálogo como mini e
  * ativa o recurso, para testar /lembrancinhas num banco novo. Isso pula de propósito a trava do painel

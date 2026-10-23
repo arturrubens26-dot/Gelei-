@@ -39,8 +39,8 @@ export const MAX_ENCOMENDAS_ABERTAS = 3;
 /** Solicitações de encomenda por conta por hora (em memória, por instância). */
 export const MAX_ENCOMENDAS_POR_HORA = 10;
 
-/** PIX gerados por parcela de uma encomenda (cada "Gerar novo PIX" conta um). */
-export const MAX_PIX_POR_PARCELA = 10;
+/** Links de pagamento por parcela de uma encomenda (cada "Pagar" depois de um link vencido conta um). */
+export const MAX_LINKS_POR_PARCELA = 10;
 
-/** PIX de encomenda gerados por conta por hora (todas as encomendas e parcelas). */
-export const MAX_PIX_ENCOMENDA_POR_HORA = 20;
+/** Links de pagamento de encomenda abertos por conta por hora (todas as encomendas e parcelas). */
+export const MAX_LINKS_ENCOMENDA_POR_HORA = 20;

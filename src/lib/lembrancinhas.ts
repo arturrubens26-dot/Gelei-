@@ -1,13 +1,14 @@
 import "server-only";
 import { cacheLife, cacheTag } from "next/cache";
 import type { ConfigLembrancinhas } from "@/generated/prisma/client";
+import { pendenciasLegais } from "@/lib/dados-loja";
 import { db } from "@/lib/db";
 import { POLITICA_VERSAO } from "@/lib/encomendas-politica";
 import { MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { separarNome } from "@/lib/produtos-regras";
 
-/** Id da linha única de configuração (criada DESATIVADA pela migração 20261022120000_lembrancinhas). */
+/** Id da linha única de configuração (criada DESATIVADA pela migração 20261023120000_lembrancinhas). */
 export const ID_CONFIG_LEMBRANCINHAS = "lembrancinhas";
 
 /** O que a página /lembrancinhas precisa (valores em reais e em centavos, para a conta da tela). */
@@ -40,8 +41,14 @@ export async function lerConfigLembrancinhas(): Promise<ConfigLembrancinhas | nu
 }
 
 /** Motivo para a página não aceitar solicitações; `null` = aberta. A mesma ordem dos 503 da API. */
-export function motivoLembrancinhasFechadas(entrada: { ativo: boolean; pagamentoDisponivel: boolean; sabores: number }): string | null {
-  if (!entrada.ativo) return "As encomendas de lembrancinhas voltam em breve.";
+export function motivoLembrancinhasFechadas(entrada: {
+  ativo: boolean;
+  /** CNPJ/CPF ou e-mail da loja ainda faltando em src/lib/dados-loja.ts (D13). */
+  dadosLegaisPendentes?: boolean;
+  pagamentoDisponivel: boolean;
+  sabores: number;
+}): string | null {
+  if (!entrada.ativo || entrada.dadosLegaisPendentes) return "As encomendas de lembrancinhas voltam em breve.";
   if (!entrada.pagamentoDisponivel) return "As encomendas pelo site ainda não estão abertas. Em breve você poderá encomendar por aqui.";
   if (entrada.sabores === 0) return "Nenhum sabor está disponível em mini no momento. Volte em breve.";
   return null;
@@ -67,7 +74,10 @@ export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
   ]);
   const ativo = config?.ativo ?? false;
   const sabores = produtos.map((p) => ({ productId: p.id, sabor: separarNome(p.nome).sabor, imagemUrl: p.imagemUrl }));
-  const motivoFechado = motivoLembrancinhasFechadas({ ativo, pagamentoDisponivel: pagamentoOnlineDisponivel(), sabores: sabores.length });
+  const motivoFechado = motivoLembrancinhasFechadas({
+    ativo,
+    dadosLegaisPendentes: pendenciasLegais().length > 0,
+    pagamentoDisponivel: pagamentoOnlineDisponivel(), sabores: sabores.length });
   // Centavos inteiros a partir do Decimal (sem passar por float).
   const precoPotinhoCentavos = config ? config.precoPotinho.mul(100).toNumber() : 0;
   return {

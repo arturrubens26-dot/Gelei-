@@ -1,90 +1,101 @@
 import "server-only";
-import { Prisma, type EncomendaPagamento } from "@/generated/prisma/client";
+import { Prisma, type Pagamento } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import {
-  STATUS_CONFIRMADOS,
-  referenciaDaParcela,
+  etapaDaParcela,
   statusConfirmado,
   statusEfetivo,
-  statusFinal,
-  validadeDoPix,
+  validadeDoLink,
   type Parcela,
   type StatusEncomenda,
 } from "@/lib/encomendas-regras";
 import { ErroNegocio } from "@/lib/erros";
 import { codigoPedido } from "@/lib/formatacao";
-import { MAX_PIX_POR_PARCELA } from "@/lib/limites";
-import type { StatusCobranca } from "@/lib/mercadopago-regras";
+import { criarLink, handleInfinitePay, infinitePayConfigurado, origemPublica } from "@/lib/infinitepay";
+import { itensDaParcela, referenciaDaEncomenda } from "@/lib/infinitepay-regras";
+import { MAX_LINKS_POR_PARCELA } from "@/lib/limites";
 import {
   FOLGA_PARA_PAGAR_MS,
-  INTERVALO_CONSULTA_AVISO_MS,
-  INTERVALO_CONSULTA_TELA_MS,
-  gatewayDaCobranca,
-  obterGateway,
+  MENSAGEM_AVISO_EM_CONFERENCIA,
+  MENSAGEM_RETORNO_RECENTE,
+  aprovarCobrancaSimulada,
+  candidatoGravado,
+  cobrancaComAviso,
+  confirmarCobranca,
+  gatewayAtivo,
+  pagamentoOnlineDisponivel,
+  paraCobrancaDTO,
+  paraEtapa,
+  urlDoAviso,
   type CobrancaDTO,
-  type Esperado,
-  type SituacaoNoGateway,
 } from "@/lib/pagamentos";
+import {
+  cobrancaDivergente,
+  cobrancaEmConfirmacao,
+  cobrancaParaEtapa,
+  retornoRecente,
+  type EtapaPagamento,
+  type StatusCobranca,
+} from "@/lib/pagamentos-regras";
 
 /**
- * Cobranças PIX das encomendas de lembrancinhas: ENTRADA e RESTANTE, cada uma com o seu
- * `external_reference` ("enc-<id>-ENTRADA" / "enc-<id>-RESTANTE"). Reaproveita os gateways de
- * src/lib/pagamentos.ts (Mercado Pago e simulado) sem mudar o fluxo dos pedidos.
+ * Cobranças das encomendas de lembrancinhas: a ENTRADA e o RESTANTE, cada uma com os seus links do
+ * checkout da InfinitePay (PIX ou cartão até 12x), na MESMA tabela `pagamentos` dos pedidos, com
+ * `encomenda_id` e `parcela` (plano 2026-10-21, seção 2.8).
  *
- * A mesma regra de ouro dos pedidos: a parcela só conta como paga quando ESTE servidor consulta o
- * gateway com o próprio token e confere referência (encomenda E parcela), valor, moeda e forma. O
- * aviso (webhook) e a tela da cliente só disparam a consulta.
+ * A mesma regra de ouro dos pedidos: a parcela só conta como paga depois do payment_check feito por
+ * ESTE servidor (`confirmarCobranca`, em src/lib/pagamentos.ts, a única porta), com a referência do
+ * NOSSO banco (`enc-<id>-<PARCELA>-<n>`). O efeito (entradaPagaEm, restantePagoEm, ou devolução
+ * pendente) fica no `switch` do alvo, lá. O aviso chega pela mesma rota dos pedidos
+ * (/api/webhooks/infinitepay/<referencia>/<token>) e o retorno do navegador por /pagamento/retorno.
+ *
+ * A InfinitePay não tem API para cancelar link nem para devolver: encerrar um link é só no nosso banco
+ * (na InfinitePay ele vale até o valid_until, no máximo 1 hora), e a devolução é 100% manual na v1 (a
+ * dona devolve pelo app e marca no painel).
  */
 
 export type { CobrancaDTO };
 
 const centavos = (valor: Prisma.Decimal) => valor.mul(100).toNumber();
 
-export function paraCobrancaDTO(p: EncomendaPagamento): CobrancaDTO {
-  return {
-    gateway: p.gateway === "mercadopago" ? "mercadopago" : "simulado",
-    status: p.status,
-    valor: p.valor.toNumber(),
-    copiaECola: p.copiaECola,
-    qrCodeBase64: p.qrCodeBase64,
-    expiraEm: p.expiraEm.toISOString(),
-  };
-}
+const MENSAGEM_DIVERGENCIA_PARCELA =
+  "Recebemos um pagamento desta parcela que precisa ser conferido. Não pague de novo: fale com a loja no Instagram @ge.leio.";
 
-/** A referência inclui a PARCELA: um PIX do restante com o mesmo valor não confere com a entrada. */
-const esperadoDe = (p: EncomendaPagamento): Esperado => ({
-  pedidoId: referenciaDaParcela(p.encomendaId, p.parcela),
-  valor: p.valor.toNumber(),
-});
-
-// --- devoluções -----------------------------------------------------------------------------------
+/** O que a confirmação olha numa cobrança (as colunas de `pagamentos` que entram na etapa). */
+type CobrancaParaEtapa = {
+  status: StatusCobranca;
+  statusGateway: string | null;
+  avisoTransacaoNsu: string | null;
+  avisoSlug: string | null;
+  avisadoEm: Date | null;
+  retornoEm: Date | null;
+};
 
 /**
- * O Mercado Pago avisou que um PIX foi devolvido (ESTORNADO): fecha as devoluções pendentes que o
- * total estornado já cobre, da mais antiga para a mais nova. Devolução parcial (só parte de um PIX)
- * não muda o status no Mercado Pago: essa a dona marca no painel.
+ * A cobrança está em conferência: paga com divergência, aviso da InfinitePay ainda não conferido, ou
+ * retorno do navegador há menos de 30 min. Enquanto isso, o dinheiro pode ter entrado.
  */
-export async function fecharDevolucoesPorEstorno(encomendaId: string, agora: Date): Promise<number> {
-  const [pagamentos, devolucoes] = await Promise.all([
-    db.encomendaPagamento.findMany({ where: { encomendaId, status: "ESTORNADO" }, select: { valor: true } }),
-    db.encomendaDevolucao.findMany({ where: { encomendaId }, orderBy: [{ criadaEm: "asc" }, { id: "asc" }] }),
-  ]);
-  const estornado = pagamentos.reduce((s, p) => s + centavos(p.valor), 0);
-  let coberto = devolucoes.filter((d) => d.status === "FEITA").reduce((s, d) => s + centavos(d.valor), 0);
-  let fechadas = 0;
-  for (const d of devolucoes) {
-    if (d.status !== "PENDENTE" || coberto + centavos(d.valor) > estornado) continue;
-    const { count } = await db.encomendaDevolucao.updateMany({
-      where: { id: d.id, status: "PENDENTE" },
-      data: { status: "FEITA", feitaEm: agora, observacao: "Estorno confirmado pelo Mercado Pago." },
-    });
-    if (count === 1) {
-      coberto += centavos(d.valor);
-      fechadas += 1;
-    }
+export function cobrancaEmConferencia(c: CobrancaParaEtapa, agora: number = Date.now()): boolean {
+  const avisadoEm = c.avisoTransacaoNsu && c.avisoSlug ? c.avisadoEm : null;
+  return cobrancaDivergente(c) || cobrancaEmConfirmacao({ status: c.status, avisadoEm, retornoEm: c.retornoEm }, agora);
+}
+
+/**
+ * Encerra no NOSSO banco os links ainda abertos da encomenda (de uma parcela, ou de todas): ao
+ * desistir, cancelar ou expirar. Não há cancelamento na API: na InfinitePay o link vale até vencer (no
+ * máximo 1 hora). Se ele for pago, a confirmação vê a encomenda encerrada e registra devolução
+ * pendente. `linkAberto`: havia link ainda valendo (o painel avisa a dona).
+ */
+export async function encerrarCobrancasDaEncomenda(encomendaId: string, parcela?: Parcela): Promise<{ linkAberto: boolean }> {
+  const agora = new Date();
+  const abertas = await db.pagamento.findMany({
+    where: { encomendaId, status: "PENDENTE", ...(parcela ? { parcela } : {}) },
+    select: { id: true, gateway: true, expiraEm: true },
+  });
+  if (abertas.length > 0) {
+    await db.pagamento.updateMany({ where: { id: { in: abertas.map((p) => p.id) }, status: "PENDENTE" }, data: { status: "CANCELADO" } });
   }
-  if (fechadas > 0) console.info(`[encomendas] ${fechadas} devolução(ões) da encomenda ${encomendaId} fechada(s) pelo estorno do Mercado Pago`);
-  return fechadas;
+  return { linkAberto: abertas.some((p) => p.gateway === "infinitepay" && p.expiraEm > agora) };
 }
 
 /** "Marquei como devolvida" no painel: fecha TODAS as devoluções pendentes da encomenda. */
@@ -96,161 +107,22 @@ export async function marcarDevolucoesFeitas(encomendaId: string, adminId: strin
   return count;
 }
 
-// --- aplicar o que o gateway disse ----------------------------------------------------------------
-
-type Efeito = "ja-aplicado" | "confirmou" | "quitou" | "PAGAMENTO_TARDIO" | "PAGAMENTO_DUPLICADO";
+// --- abrir o link da parcela ----------------------------------------------------------------------
 
 /**
- * Grava o que o gateway disse sobre a cobrança e aplica o efeito na encomenda:
- * - ENTRADA paga: AGUARDANDO_ENTRADA → CONFIRMADA (`entradaPagaEm` = data do pagamento);
- * - RESTANTE pago: quita (`restantePagoEm`, forma PIX);
- * - pago sem ter o que quitar (encomenda encerrada, parcela já paga): devolução PENDENTE e log;
- * - ESTORNADO: fecha as devoluções que o estorno cobre.
- * Idempotente e à prova de corrida: a passagem para "pago" é um UPDATE condicional (`aprovadoEm` nulo)
- * na MESMA transação do efeito; duas consultas simultâneas aplicam o efeito uma vez só.
+ * Link de pagamento da parcela para a cliente pagar (PIX ou cartão até 12x, na página da InfinitePay).
+ * - Encomenda de outra conta ou inexistente: 404. ENTRADA só em AGUARDANDO_ENTRADA; RESTANTE só com a
+ *   encomenda confirmada e ainda não quitada (409, com `detalhes.statusAtual`).
+ * - Pagamento da parcela com divergência, aviso em conferência ou retorno recente: 409 ("não pague de
+ *   novo" / "aguarde"); se a reconferência confirmar, 409 "acabou de ser confirmado".
+ * - Link PENDENTE que vale por mais de 5 min: devolve o mesmo. Os outros abertos viram CANCELADO no banco.
+ * - `valid_until` = min(agora + 60 min, prazo da entrada); na ENTRADA, com menos de 5 min até o prazo: 409.
+ * - No máximo 10 links por parcela (429). Duas chamadas ao mesmo tempo: a segunda gravação esbarra no
+ *   índice único da referência e devolve a primeira.
+ * - InfinitePay fora: 502; pagamento desligado: 503.
  */
-async function aplicarSituacao(p: EncomendaPagamento, s: SituacaoNoGateway, agora = new Date()): Promise<StatusCobranca> {
-  let status = s.status;
-  if (status === "APROVADO" && s.divergencia) {
-    // Não acontece num fluxo normal (a cobrança foi criada por nós, com o valor da parcela). Se
-    // acontecer, nada é quitado e o caso vai para conferência manual.
-    if (p.statusGateway !== s.statusGateway) {
-      console.error(
-        `[encomendas] PIX ${p.id} (${p.parcela}) da encomenda ${p.encomendaId} aprovado no gateway com ${s.divergencia}: ` +
-          "a parcela NÃO foi marcada como paga. Confira no painel do Mercado Pago.",
-      );
-    }
-    status = "PENDENTE";
-  }
-  const statusGateway = s.statusGateway.slice(0, 40);
-
-  // Um PIX já aprovado não "desaprova" (o Mercado Pago só o leva a devolvido/contestado).
-  if (p.status === "APROVADO" && status !== "APROVADO" && status !== "ESTORNADO") {
-    await db.encomendaPagamento.update({ where: { id: p.id }, data: { statusGateway, consultadoEm: agora } });
-    return p.status;
-  }
-
-  if (status === "APROVADO" && p.aprovadoEm === null) {
-    const aprovadoEm = s.aprovadoEm ?? agora;
-    const efeito = await db.$transaction(async (tx): Promise<Efeito> => {
-      const marcou = await tx.encomendaPagamento.updateMany({
-        where: { id: p.id, aprovadoEm: null },
-        data: { status: "APROVADO", statusGateway, consultadoEm: agora, aprovadoEm },
-      });
-      if (marcou.count === 0) return "ja-aplicado";
-      if (p.parcela === "ENTRADA") {
-        const r = await tx.encomenda.updateMany({
-          where: { id: p.encomendaId, status: "AGUARDANDO_ENTRADA", entradaPagaEm: null },
-          data: { status: "CONFIRMADA", entradaPagaEm: aprovadoEm },
-        });
-        if (r.count === 1) return "confirmou";
-      } else {
-        const r = await tx.encomenda.updateMany({
-          where: { id: p.encomendaId, status: { in: [...STATUS_CONFIRMADOS] }, restantePagoEm: null },
-          data: { restantePagoEm: aprovadoEm, restanteForma: "PIX", restanteForaDoSite: false },
-        });
-        if (r.count === 1) return "quitou";
-      }
-      // Pago, mas não havia o que quitar: encerrada antes do PIX cair (tardio) ou parcela já paga
-      // por outro PIX ou fora do site (duplicado). O dinheiro volta para a cliente.
-      const atual = await tx.encomenda.findUnique({ where: { id: p.encomendaId }, select: { status: true } });
-      const motivo = atual && statusFinal(atual.status) && atual.status !== "ENTREGUE" ? "PAGAMENTO_TARDIO" : "PAGAMENTO_DUPLICADO";
-      await tx.encomendaDevolucao.create({ data: { encomendaId: p.encomendaId, pagamentoId: p.id, motivo, valor: p.valor } });
-      return motivo;
-    });
-
-    if (efeito === "confirmou" || efeito === "quitou") {
-      console.info(`[encomendas] ${p.parcela === "ENTRADA" ? "entrada" : "restante"} da encomenda ${p.encomendaId} paga por PIX (${p.gateway})`);
-      // A parcela foi paga: os outros PIX dela ainda abertos são cancelados (não dá para pagar duas vezes).
-      const abertas = await db.encomendaPagamento.findMany({
-        where: { encomendaId: p.encomendaId, parcela: p.parcela, status: "PENDENTE", NOT: { id: p.id } },
-      });
-      for (const outra of abertas) {
-        await encerrarCobranca(outra).catch((e) =>
-          console.error(`[encomendas] não cancelou o PIX ${outra.id}: ${e instanceof Error ? e.message : "erro"}`),
-        );
-      }
-    } else if (efeito !== "ja-aplicado") {
-      console.error(
-        `[encomendas] PIX ${p.id} (${p.parcela}) pago na encomenda ${p.encomendaId} sem ter o que quitar (${efeito}): ` +
-          `devolução de ${p.valor.toFixed(2)} pendente no painel.`,
-      );
-    }
-    return "APROVADO";
-  }
-
-  const aprovadoEm = status === "APROVADO" || status === "ESTORNADO" ? (s.aprovadoEm ?? p.aprovadoEm ?? agora) : null;
-  await db.encomendaPagamento.update({ where: { id: p.id }, data: { status, statusGateway, consultadoEm: agora, aprovadoEm } });
-  if (status === "ESTORNADO" && p.status !== "ESTORNADO") {
-    console.warn(`[encomendas] PIX ${p.id} (${p.parcela}) da encomenda ${p.encomendaId} foi devolvido à cliente (${s.statusGateway}).`);
-    await fecharDevolucoesPorEstorno(p.encomendaId, agora);
-  }
-  return status;
-}
-
-/** Cancela um PIX aberto no gateway (ou descobre que ele foi pago no último instante). */
-async function encerrarCobranca(p: EncomendaPagamento): Promise<StatusCobranca> {
-  const situacao = await gatewayDaCobranca(p).cancelar(p.referenciaExterna, esperadoDe(p));
-  if (!situacao) return p.status;
-  return aplicarSituacao(p, situacao);
-}
-
-/** Pergunta ao gateway como está a cobrança (no máximo uma vez a cada `intervaloMinimoMs`). */
-async function sincronizarCobranca(p: EncomendaPagamento, intervaloMinimoMs = 0): Promise<StatusCobranca> {
-  if (intervaloMinimoMs > 0 && p.consultadoEm && Date.now() - p.consultadoEm.getTime() < intervaloMinimoMs) return p.status;
-  const situacao = await gatewayDaCobranca(p).consultar(p.referenciaExterna, esperadoDe(p));
-  return situacao ? aplicarSituacao(p, situacao) : p.status;
-}
-
-/**
- * Aviso do Mercado Pago que não era de um pedido (o webhook tenta os pedidos primeiro): só cobranças
- * de encomenda que NÓS criamos são consultadas; id desconhecido é ignorado sem consulta.
- */
-export async function processarAvisoDeEncomenda(pagamentoId: string): Promise<"consultado" | "desconhecido"> {
-  const p = await db.encomendaPagamento.findUnique({
-    where: { gateway_referenciaExterna: { gateway: "mercadopago", referenciaExterna: pagamentoId } },
-  });
-  if (!p) return "desconhecido";
-  await sincronizarCobranca(p, INTERVALO_CONSULTA_AVISO_MS);
-  return "consultado";
-}
-
-/**
- * Encerra no gateway os PIX ainda abertos da encomenda (de uma parcela, ou de todas): antes de
- * cancelar, expirar ou registrar o restante fora do site. Um que tenha sido pago no último instante
- * é aplicado (confirma, quita ou vira devolução). Falha do gateway não para quem chamou: `falhou`
- * avisa, e um pagamento que ainda cair depois vira devolução pendente pelo caminho normal.
- */
-export async function encerrarCobrancasDaEncomenda(
-  encomendaId: string,
-  parcela?: Parcela,
-): Promise<{ algumPago: boolean; falhou: boolean }> {
-  const abertas = await db.encomendaPagamento.findMany({ where: { encomendaId, status: "PENDENTE", ...(parcela ? { parcela } : {}) } });
-  let algumPago = false;
-  let falhou = false;
-  for (const p of abertas) {
-    try {
-      if ((await encerrarCobranca(p)) === "APROVADO") algumPago = true;
-    } catch (e) {
-      falhou = true;
-      console.error(`[encomendas] não cancelou o PIX ${p.id} da encomenda ${encomendaId}: ${e instanceof Error ? e.message : "erro"}`);
-    }
-  }
-  return { algumPago, falhou };
-}
-
-// --- tela da cliente ------------------------------------------------------------------------------
-
-const ROTULO_PARCELA: Record<Parcela, string> = { ENTRADA: "entrada", RESTANTE: "restante" };
-
-/**
- * PIX da parcela para a cliente pagar. Reaproveita o que ainda vale; senão, encerra os antigos no
- * gateway (e descobre se algum foi pago) e abre um novo, com a validade limitada ao prazo da entrada.
- * Duas chamadas ao mesmo tempo não abrem dois PIX: a mesma X-Idempotency-Key
- * ("geleio-enc-<id>-<parcela>-<n>") devolve o mesmo pagamento no Mercado Pago e a segunda gravação
- * esbarra no índice único.
- */
-export async function abrirCobrancaDaParcela(encomendaId: string, userId: string, parcela: Parcela, agora: Date): Promise<CobrancaDTO> {
+export async function abrirLinkDaParcela(encomendaId: string, userId: string, parcela: Parcela, agora: Date): Promise<CobrancaDTO> {
+  if (encomendaId.length === 0 || encomendaId.length > 100) throw new ErroNegocio(404, "Encomenda não encontrada.");
   const enc = await db.encomenda.findFirst({
     where: { id: encomendaId, userId },
     select: {
@@ -261,11 +133,117 @@ export async function abrirCobrancaDaParcela(encomendaId: string, userId: string
       restantePagoEm: true,
       valorEntrada: true,
       valorRestante: true,
+      telefone: true,
       user: { select: { email: true, nome: true } },
+      address: true,
       pagamentos: { where: { parcela }, orderBy: [{ criadoEm: "asc" }, { id: "asc" }] },
     },
   });
   if (!enc) throw new ErroNegocio(404, "Encomenda não encontrada.");
+  conferirParcelaPagavel(enc, parcela);
+
+  if (enc.pagamentos.some(cobrancaDivergente)) throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA_PARCELA);
+  // Aviso de pagamento não resolvido (de qualquer link da parcela): reconfere; se não fechar, NÃO abre
+  // link novo (o dinheiro pode ter entrado).
+  const comAviso = cobrancaComAviso(enc.pagamentos);
+  if (comAviso) {
+    const r = await confirmarCobranca(comAviso, candidatoGravado(comAviso)!, "gravado").catch(() => "TRANSITORIO" as const);
+    if (r === "APROVADO") throw new ErroNegocio(409, "O pagamento desta parcela acabou de ser confirmado.");
+    if (r === "DIVERGENTE") throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA_PARCELA);
+    if (r !== "INVALIDO") throw new ErroNegocio(409, MENSAGEM_AVISO_EM_CONFERENCIA);
+  }
+  if (enc.pagamentos.some((c) => (c.status === "PENDENTE" || c.status === "CANCELADO") && retornoRecente(c.retornoEm, agora.getTime()))) {
+    throw new ErroNegocio(409, MENSAGEM_RETORNO_RECENTE);
+  }
+  const gateway = gatewayAtivo();
+
+  const t = agora.getTime();
+  const abertas = enc.pagamentos.filter((p) => p.status === "PENDENTE");
+  const valendo = abertas.findLast(
+    (p) => p.gateway === gateway && p.expiraEm.getTime() > t + FOLGA_PARA_PAGAR_MS && (gateway === "simulado" || p.checkoutUrl),
+  );
+  if (valendo) return paraCobrancaDTO(valendo, t);
+
+  // A entrada tem prazo: o link novo nunca passa dele (e com menos de 5 min, não abre).
+  const validade = validadeDoLink(agora, parcela === "ENTRADA" ? enc.entradaAte : null);
+  if (!validade) throw new ErroNegocio(409, "O prazo para pagar a entrada terminou.", { statusAtual: enc.status });
+
+  if (abertas.length > 0) {
+    await db.pagamento.updateMany({ where: { id: { in: abertas.map((p) => p.id) }, status: "PENDENTE" }, data: { status: "CANCELADO" } });
+  }
+  if (enc.pagamentos.length >= MAX_LINKS_POR_PARCELA) {
+    throw new ErroNegocio(429, "Esta parcela já abriu pagamentos demais. Fale com a loja no Instagram @ge.leio.");
+  }
+
+  const referencia = referenciaDaEncomenda(enc.id, parcela, enc.pagamentos.length + 1);
+  const valor = parcela === "ENTRADA" ? enc.valorEntrada : enc.valorRestante;
+  let checkoutUrl: string | null = null;
+  let faturaSlug: string | null = null;
+  if (gateway === "infinitepay") {
+    const origem = origemPublica()!;
+    try {
+      const link = await criarLink({
+        handle: handleInfinitePay()!,
+        referencia,
+        itens: itensDaParcela({ codigo: codigoPedido(enc.id), parcela, valorCentavos: centavos(valor) }),
+        totalCentavos: centavos(valor),
+        urlRetorno: `${origem}/pagamento/retorno`,
+        urlAviso: urlDoAviso(origem, referencia),
+        validoAte: validade,
+        cliente: { nome: enc.user.nome, email: enc.user.email, telefone: enc.telefone },
+        endereco: enc.address,
+      });
+      checkoutUrl = link.url;
+      faturaSlug = link.slug;
+    } catch (e) {
+      console.error(`[encomendas] não abriu o link (${parcela}) da encomenda ${enc.id}: ${e instanceof Error ? e.message : "erro"}`);
+      throw new ErroNegocio(502, "Não conseguimos abrir o pagamento agora. Tente de novo em instantes.");
+    }
+  }
+
+  try {
+    // A criação do link levou até 10 s: a encomenda pode ter mudado (desistência, cancelamento,
+    // expiração, parcela paga). A linha fica travada (FOR UPDATE) enquanto o link é gravado.
+    const registro = await db.$transaction(async (tx) => {
+      const [atual] = await tx.$queryRaw<{ status: StatusEncomenda; entrada_paga: boolean; restante_pago: boolean }[]>`
+        SELECT "status"::text AS "status", "entrada_paga_em" IS NOT NULL AS "entrada_paga", "restante_pago_em" IS NOT NULL AS "restante_pago"
+        FROM "encomendas" WHERE "id" = ${enc.id} FOR UPDATE`;
+      if (!atual) throw new ErroNegocio(404, "Encomenda não encontrada.");
+      conferirParcelaPagavel(
+        { status: atual.status, entradaPagaEm: atual.entrada_paga ? agora : null, restantePagoEm: atual.restante_pago ? agora : null },
+        parcela,
+      );
+      return tx.pagamento.create({
+        data: {
+          encomendaId: enc.id,
+          parcela,
+          gateway,
+          referenciaExterna: referencia,
+          status: "PENDENTE",
+          statusGateway: "aberto",
+          valor,
+          checkoutUrl,
+          faturaSlug,
+          expiraEm: validade,
+        },
+      });
+    });
+    console.info(`[encomendas] link ${registro.id} (${parcela}) aberto para a encomenda ${enc.id} (${gateway}, ${referencia})`);
+    return paraCobrancaDTO(registro);
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const existente = await db.pagamento.findUnique({ where: { gateway_referenciaExterna: { gateway, referenciaExterna: referencia } } });
+      if (existente) return paraCobrancaDTO(existente);
+    }
+    throw e;
+  }
+}
+
+/** 409 se a parcela não pode ser paga agora (já paga, ou a encomenda não está no status certo). */
+function conferirParcelaPagavel(
+  enc: { status: StatusEncomenda; entradaPagaEm: Date | null; restantePagoEm: Date | null },
+  parcela: Parcela,
+): void {
   if (parcela === "ENTRADA") {
     if (enc.entradaPagaEm) throw new ErroNegocio(409, "A entrada desta encomenda já foi paga.", { statusAtual: enc.status });
     if (enc.status !== "AGUARDANDO_ENTRADA") throw new ErroNegocio(409, "Esta encomenda não está aguardando a entrada.", { statusAtual: enc.status });
@@ -275,136 +253,106 @@ export async function abrirCobrancaDaParcela(encomendaId: string, userId: string
       throw new ErroNegocio(409, "O restante só pode ser pago com a encomenda confirmada.", { statusAtual: enc.status });
     }
   }
-
-  const t = agora.getTime();
-  const abertas = enc.pagamentos.filter((p) => p.status === "PENDENTE");
-  const valendo = abertas.findLast((p) => p.expiraEm.getTime() > t + FOLGA_PARA_PAGAR_MS);
-  if (valendo) return paraCobrancaDTO(valendo);
-
-  // A entrada tem prazo; o PIX novo vence no máximo nele (mas nunca em menos de 30 minutos).
-  const validade = validadeDoPix(agora, parcela === "ENTRADA" ? enc.entradaAte : null);
-  if (!validade) {
-    const ultimoValendo = abertas.findLast((p) => p.expiraEm.getTime() > t);
-    if (ultimoValendo) return paraCobrancaDTO(ultimoValendo);
-    throw new ErroNegocio(409, "O prazo para pagar a entrada terminou.", { statusAtual: enc.status });
-  }
-
-  // PIX antigos ainda abertos: cancela no gateway antes de abrir outro (e descobre se algum foi pago).
-  for (const antiga of abertas) {
-    if ((await encerrarCobranca(antiga)) === "APROVADO") {
-      throw new ErroNegocio(409, "O pagamento acabou de ser confirmado.");
-    }
-  }
-  if (enc.pagamentos.length >= MAX_PIX_POR_PARCELA) {
-    throw new ErroNegocio(429, "Esta parcela já gerou PIX demais. Fale com a loja pelo WhatsApp.");
-  }
-
-  const valor = parcela === "ENTRADA" ? enc.valorEntrada : enc.valorRestante;
-  const gateway = obterGateway();
-  const criada = await gateway.criarCobrancaPix(
-    {
-      pedidoId: referenciaDaParcela(enc.id, parcela),
-      valor: valor.toNumber(),
-      descricao: `Geleiô - encomenda ${codigoPedido(enc.id)} (${ROTULO_PARCELA[parcela]})`,
-      email: enc.user.email,
-      nome: enc.user.nome,
-      expiraEm: validade,
-    },
-    `geleio-enc-${enc.id}-${parcela}-${enc.pagamentos.length + 1}`,
-  );
-
-  try {
-    const registro = await db.encomendaPagamento.create({
-      data: {
-        encomendaId: enc.id,
-        parcela,
-        gateway: gateway.nome,
-        referenciaExterna: criada.referenciaExterna,
-        status: criada.status,
-        statusGateway: criada.statusGateway.slice(0, 40),
-        valor,
-        copiaECola: criada.copiaECola,
-        qrCodeBase64: criada.qrCodeBase64,
-        expiraEm: criada.expiraEm,
-      },
-    });
-    console.info(`[encomendas] PIX ${registro.id} (${parcela}) aberto para a encomenda ${enc.id} (${gateway.nome})`);
-    return paraCobrancaDTO(registro);
-  } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      const existente = await db.encomendaPagamento.findUnique({
-        where: { gateway_referenciaExterna: { gateway: gateway.nome, referenciaExterna: criada.referenciaExterna } },
-      });
-      if (existente) return paraCobrancaDTO(existente);
-    }
-    throw e;
-  }
 }
+
+// --- tela da cliente ------------------------------------------------------------------------------
 
 export type SituacaoDaParcelaDTO = {
   /** Status efetivo da encomenda (com os prazos vencidos aplicados). */
   status: StatusEncomenda;
   entradaPaga: boolean;
   restantePaga: boolean;
-  /** Último PIX desta parcela, ou `null` se ainda não houve. */
+  /** Etapa do pagamento DESTA parcela (`etapaDaParcela`): PAGAR, CONFIRMANDO, PAGO, EXPIRADO, CANCELADO ou INDISPONIVEL. */
+  etapa: EtapaPagamento;
+  /** Último link desta parcela, ou `null` se ainda não houve (`checkoutUrl` só enquanto vale). */
   cobranca: CobrancaDTO | null;
 };
 
-/**
- * Situação de uma parcela para a tela da encomenda. Se o PIX dela ainda está aberto e a parcela é
- * esperada, pergunta ao gateway (no máximo a cada 8 s): confirma mesmo se o aviso atrasar. Falha do
- * gateway não derruba a tela: devolve o que o banco sabe. `null` = encomenda de outra pessoa ou inexistente.
- */
-export async function situacaoDaParcela(encomendaId: string, userId: string, parcela: Parcela, agora: Date): Promise<SituacaoDaParcelaDTO | null> {
-  const ler = () =>
-    db.encomenda.findFirst({
-      where: { id: encomendaId, userId },
-      select: {
-        status: true,
-        responderAte: true,
-        entradaAte: true,
-        entradaPagaEm: true,
-        restantePagoEm: true,
-        pagamentos: { where: { parcela }, orderBy: [{ criadoEm: "desc" }, { id: "desc" }] },
-      },
-    });
-  let enc = await ler();
-  if (!enc) return null;
+async function lerParaSituacao(encomendaId: string, userId: string) {
+  if (encomendaId.length === 0 || encomendaId.length > 100) return null;
+  return db.encomenda.findFirst({
+    where: { id: encomendaId, userId },
+    select: {
+      status: true,
+      responderAte: true,
+      entradaAte: true,
+      entradaPagaEm: true,
+      restantePagoEm: true,
+      // As duas parcelas (no máximo 10 links cada): o status efetivo olha a entrada em conferência.
+      pagamentos: { orderBy: [{ criadoEm: "desc" }, { id: "desc" }], take: 2 * MAX_LINKS_POR_PARCELA + 4 },
+    },
+  });
+}
 
-  const ultima = enc.pagamentos[0];
-  const esperada = parcela === "ENTRADA" ? enc.status === "AGUARDANDO_ENTRADA" : statusConfirmado(enc.status) && !enc.restantePagoEm;
-  if (esperada && ultima?.status === "PENDENTE") {
-    try {
-      await sincronizarCobranca(ultima, INTERVALO_CONSULTA_TELA_MS);
-      enc = (await ler()) ?? enc;
-    } catch (e) {
-      console.error(`[encomendas] consulta do PIX ${ultima.id} falhou: ${e instanceof Error ? e.message : "erro"}`);
-    }
-  }
-  const abertasDaEntrada = parcela === "ENTRADA" ? enc.pagamentos.filter((p) => p.status === "PENDENTE") : [];
-  const pixEntradaValidoAte = abertasDaEntrada.reduce<Date | null>((max, p) => (!max || p.expiraEm > max ? p.expiraEm : max), null);
-  const atual = enc.pagamentos[0];
+function montarSituacao(enc: NonNullable<Awaited<ReturnType<typeof lerParaSituacao>>>, parcela: Parcela, agora: Date): SituacaoDaParcelaDTO {
+  const t = agora.getTime();
+  const daParcela = enc.pagamentos.filter((p) => p.parcela === parcela);
+  const daEntrada = enc.pagamentos.filter((p) => p.parcela === "ENTRADA");
+  const linkEntradaValidoAte = daEntrada
+    .filter((p) => p.status === "PENDENTE")
+    .reduce<Date | null>((max, p) => (!max || p.expiraEm > max ? p.expiraEm : max), null);
+  const status = statusEfetivo(
+    {
+      status: enc.status,
+      responderAte: enc.responderAte,
+      entradaAte: enc.entradaAte,
+      linkEntradaValidoAte,
+      entradaEmConfirmacao: daEntrada.some((p) => cobrancaEmConferencia(p, t)),
+    },
+    agora,
+  );
+  const decide = cobrancaParaEtapa(daParcela.map(paraEtapa), t);
+  const ultima = daParcela[0] ?? null;
   return {
-    status: statusEfetivo({ status: enc.status, responderAte: enc.responderAte, entradaAte: enc.entradaAte, pixEntradaValidoAte }, agora),
+    status,
     entradaPaga: enc.entradaPagaEm !== null,
     restantePaga: enc.restantePagoEm !== null,
-    cobranca: atual ? paraCobrancaDTO(atual) : null,
+    etapa: etapaDaParcela({
+      parcela,
+      status,
+      paga: parcela === "ENTRADA" ? enc.entradaPagaEm !== null : enc.restantePagoEm !== null,
+      gatewayAtivo: pagamentoOnlineDisponivel(),
+      divergente: daParcela.some(cobrancaDivergente),
+      emConfirmacao: decide !== null && cobrancaEmConfirmacao(decide, t),
+    }),
+    cobranca: ultima ? paraCobrancaDTO(ultima, t) : null,
   };
 }
 
 /**
- * DEMONSTRAÇÃO (PAGAMENTOS_SIMULADOS=true, sem Mercado Pago): abre ou reaproveita o PIX simulado da
+ * Situação de uma parcela para a tela da encomenda. Com um aviso ainda não conferido, confere de novo
+ * no payment_check (no máximo a cada 8 s, por cobrança): confirma mesmo se o aviso atrasar. Falha da
+ * InfinitePay não derruba a tela: devolve o que o banco sabe. `null` = encomenda de outra pessoa ou
+ * inexistente.
+ */
+export async function situacaoDaParcela(encomendaId: string, userId: string, parcela: Parcela, agora: Date): Promise<SituacaoDaParcelaDTO | null> {
+  let enc = await lerParaSituacao(encomendaId, userId);
+  if (!enc) return null;
+  const esperada = parcela === "ENTRADA" ? enc.entradaPagaEm === null : enc.restantePagoEm === null;
+  const emAndamento = cobrancaComAviso(enc.pagamentos.filter((p) => p.parcela === parcela));
+  if (esperada && emAndamento && infinitePayConfigurado()) {
+    try {
+      await confirmarCobranca(emAndamento, candidatoGravado(emAndamento)!, "gravado");
+      enc = (await lerParaSituacao(encomendaId, userId)) ?? enc;
+    } catch (e) {
+      console.error(`[encomendas] conferência da cobrança ${emAndamento.id} falhou: ${e instanceof Error ? e.name : "erro"}`);
+    }
+  }
+  return montarSituacao(enc, parcela, agora);
+}
+
+/**
+ * DEMONSTRAÇÃO (PAGAMENTOS_SIMULADOS=true, sem InfinitePay): abre ou reaproveita o link simulado da
  * parcela e o aprova pelo MESMO caminho de um pagamento real (confirma, quita ou vira devolução, e o
  * Financeiro conta pela data de aprovação).
  */
 export async function simularPagamentoDaParcela(encomendaId: string, userId: string, parcela: Parcela, agora: Date): Promise<SituacaoDaParcelaDTO> {
-  await abrirCobrancaDaParcela(encomendaId, userId, parcela, agora);
-  const p = await db.encomendaPagamento.findFirst({
+  await abrirLinkDaParcela(encomendaId, userId, parcela, agora);
+  const p: Pagamento | null = await db.pagamento.findFirst({
     where: { encomendaId, parcela, gateway: "simulado", status: "PENDENTE", encomenda: { userId } },
     orderBy: [{ criadoEm: "desc" }, { id: "desc" }],
   });
-  if (!p) throw new ErroNegocio(409, "Não há PIX simulado aberto para esta parcela.");
-  await aplicarSituacao(p, { status: "APROVADO", statusGateway: "approved", aprovadoEm: agora, divergencia: null }, agora);
+  if (!p || !(await aprovarCobrancaSimulada(p))) throw new ErroNegocio(409, "Não há pagamento simulado aberto para esta parcela.");
   const situacao = await situacaoDaParcela(encomendaId, userId, parcela, agora);
   if (!situacao) throw new ErroNegocio(404, "Encomenda não encontrada.");
   return situacao;
