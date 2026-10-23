@@ -132,6 +132,62 @@ export function urlDaInfinitePay(valor: unknown, opcoes: { origemLocal?: string 
   return null;
 }
 
+const FORMATO_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Comprovante (receipt_url) do retorno ou do aviso: só o recibo DESTA transação,
+ * `https://recibo.infinitepay.io/<uuid>` com o uuid igual ao `transaction_nsu` (formato visto no
+ * ensaio de 2026-10-22). Qualquer outro host, caminho ou transação: `null` (o recibo não é gravado,
+ * e isso não impede a confirmação). `origemLocal` (servidor falso dos testes) aceita
+ * `<origem>/recibo/<uuid>` com a mesma regra.
+ */
+export function urlDoRecibo(valor: unknown, transacaoNsu: string, opcoes: { origemLocal?: string | null } = {}): string | null {
+  if (typeof valor !== "string" || valor.length > 500 || !FORMATO_UUID.test(transacaoNsu)) return null;
+  let url: URL;
+  try {
+    url = new URL(valor);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.search || url.hash) return null;
+  const mesmaTransacao = (segmento: string) => segmento.toLowerCase() === transacaoNsu.toLowerCase();
+  if (url.protocol === "https:" && url.hostname.toLowerCase() === "recibo.infinitepay.io" && !url.port) {
+    const m = /^\/([^/]+)$/.exec(url.pathname);
+    return m && mesmaTransacao(m[1]) ? url.toString() : null;
+  }
+  if (opcoes.origemLocal && url.origin === opcoes.origemLocal) {
+    const m = /^\/recibo\/([^/]+)$/.exec(url.pathname);
+    return m && mesmaTransacao(m[1]) ? url.toString() : null;
+  }
+  return null;
+}
+
+// --- canário de amarração (retorno do navegador) ----------------------------------------------
+
+/**
+ * order_nsu que nunca existe (não segue o formato das nossas referências): o "canário" consultado no
+ * payment_check com a MESMA transação e slug que a cliente trouxe no retorno.
+ */
+export function referenciaDoCanario(referencia: string): string {
+  return `${referencia}-x`;
+}
+
+/**
+ * O retorno do navegador é dado da cliente: ele só confirma se a InfinitePay AMARRA a transação ao
+ * order_nsu consultado. Isso foi visto no ensaio (PIX), mas não está documentado. Por isso, antes de
+ * confirmar pelo retorno, o servidor consulta a mesma transação com um order_nsu que nunca existe:
+ * - "AMARRA": o canário respondeu "não pago" (ou `success=false`): a API amarra, pode confirmar;
+ * - "NAO_AMARRA": o canário respondeu "pago": a API não amarra, e a transação pode ser de outra compra
+ *   (link manual da dona, outra pessoa de mesmo valor). NÃO confirma: o aviso decide;
+ * - "FALHOU": sem resposta válida (tempo, 5xx, 4xx): NÃO confirma (fail-closed); o aviso decide.
+ */
+export type DecisaoDoCanario = "AMARRA" | "NAO_AMARRA" | "FALHOU";
+
+export function decisaoDoCanario(canario: Conferencia | null): DecisaoDoCanario {
+  if (!canario) return "FALHOU";
+  return canario.success && canario.paid ? "NAO_AMARRA" : "AMARRA";
+}
+
 // --- corpo do POST /links ---------------------------------------------------------------------
 
 export type ItemDoLink = { description: string; quantity: number; price: number };
@@ -330,7 +386,7 @@ function candidatoDe(fonte: Record<string, unknown>, opcoes: { origemLocal?: str
   const slug = idExterno(fonte.invoice_slug) ?? idExterno(fonte.slug);
   if (!transacaoNsu || !slug) return null;
   const referencia = typeof fonte.order_nsu === "string" ? fonte.order_nsu.slice(0, 64) : null;
-  return { transacaoNsu, slug, comprovanteUrl: urlDaInfinitePay(fonte.receipt_url, opcoes), referencia };
+  return { transacaoNsu, slug, comprovanteUrl: urlDoRecibo(fonte.receipt_url, transacaoNsu, opcoes), referencia };
 }
 
 /** Corpo do aviso (webhook): simples ou dentro de `data`. Sem transação ou slug válidos: `null`. */

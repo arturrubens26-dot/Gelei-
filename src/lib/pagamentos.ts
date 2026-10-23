@@ -16,6 +16,8 @@ import {
   classificarConferencia,
   conferenciaAmarrada,
   conferirTokenDoAviso,
+  decisaoDoCanario,
+  referenciaDoCanario,
   itensDoLink,
   lerAviso,
   lerRetorno,
@@ -186,8 +188,11 @@ export type ResultadoConfirmacao = "APROVADO" | "PENDENTE" | "DIVERGENTE" | "INV
  * - "retorno": a query do redirect_url, ou seja, dado da CLIENTE (já conferido que a sessão é a dona
  *   do pedido). Confirma como os outros: quem amarra a transação a esta cobrança é o payment_check,
  *   consultado com o order_nsu do NOSSO banco (nunca o da query). Transação de outro link responde
- *   `paid=false` (ou `success=false`) e não confirma. O candidato do retorno nunca é gravado como
- *   candidato, e uma recusa dele não grava marca nenhuma (é dado da cliente).
+ *   `paid=false` (ou `success=false`) e não confirma. Antes de confirmar, o CANÁRIO (mesma transação
+ *   com um order_nsu que nunca existe) precisa responder "não pago"; se responder "pago" ou falhar, o
+ *   retorno não confirma (fail-closed) e o aviso decide. O candidato do retorno nunca é gravado como
+ *   candidato, e nenhuma recusa dele (não pago, divergência, transação já usada, canário) grava marca:
+ *   é dado da cliente. O comprovante só é gravado se for o recibo da própria transação (urlDoRecibo).
  */
 type OrigemCandidato = "aviso" | "gravado" | "retorno";
 
@@ -326,6 +331,12 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
     return "PENDENTE";
   }
   if (resultado.tipo === "DIVERGENTE") {
+    // Do retorno, uma transação de outro valor é dado da cliente: só loga. Gravar a marca travaria o
+    // pedido em "confirmando" com um alerta falso. Se o dinheiro entrou mesmo, o aviso marca.
+    if (daCliente) {
+      console.warn(`[pagamentos] cobrança ${p.id}: retorno com pagamento divergente (${resultado.motivo}); nada gravado, aguarda o aviso`);
+      return "PENDENTE";
+    }
     const marca = `${MARCA_DIVERGENTE}${resultado.motivo}`.slice(0, 40);
     if (p.statusGateway !== marca) {
       console.error(
@@ -335,6 +346,28 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
     }
     await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { statusGateway: marca } });
     return "DIVERGENTE";
+  }
+
+  // Do retorno, antes de confirmar, o canário: a mesma transação com um order_nsu que nunca existe
+  // precisa responder "não pago". Senão (a API não amarrou, ou não respondeu), o retorno não confirma
+  // nem grava nada: o aviso, que só chega pela URL com o token desta cobrança, decide.
+  if (daCliente) {
+    let canario = null;
+    try {
+      canario = await conferirPagamento(
+        { referencia: referenciaDoCanario(p.referenciaExterna), transacaoNsu: c.transacaoNsu, slug: c.slug },
+        TEMPO_CONFERENCIA_TELA_MS,
+      );
+    } catch {
+      canario = null;
+    }
+    const decisao = decisaoDoCanario(canario);
+    if (decisao !== "AMARRA") {
+      console.error(
+        `[pagamentos] cobrança ${p.id}: retorno NÃO confirmado (canário ${decisao === "NAO_AMARRA" ? "pago: a API não amarrou a transação" : "sem resposta"}); aguarda o aviso`,
+      );
+      return "PENDENTE";
+    }
   }
 
   // Aprovado: grava a transação (UNIQUE) e o pedido, juntos.
@@ -364,9 +397,8 @@ export async function confirmarCobranca(p: Pagamento, c: Candidato, origem: Orig
     pedidoMudou = pedido.count === 1;
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      // Esta transação já quitou outra cobrança: não paga duas.
-      if (daCliente) await marcar(p, "transacao-ja-usada");
-      else await descartarCandidato(p, c, "transacao-ja-usada");
+      // Esta transação já quitou outra cobrança: não paga duas. Do retorno (dado da cliente), não grava marca.
+      if (!daCliente) await descartarCandidato(p, c, "transacao-ja-usada");
       console.error(`[pagamentos] cobrança ${p.id}: a transação informada já quitou outra cobrança; recusada`);
       return "INVALIDO";
     }

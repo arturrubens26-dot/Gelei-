@@ -7,6 +7,7 @@ import {
   conferirTokenDoAviso,
   corpoDoLink,
   dataComFusoDeBrasilia,
+  decisaoDoCanario,
   divergenciaDaConferencia,
   itensDoLink,
   lerAviso,
@@ -17,10 +18,12 @@ import {
   origemDeTesteDe,
   origemPublicaDe,
   referenciaDaEncomenda,
+  referenciaDoCanario,
   referenciaDoPedido,
   somaDosItens,
   tokenDoAviso,
   urlDaInfinitePay,
+  urlDoRecibo,
   type Conferencia,
   type EntradaDoLink,
 } from "../src/lib/infinitepay-regras";
@@ -332,17 +335,21 @@ describe("payment_check", () => {
 });
 
 describe("aviso e retorno", () => {
-  const receipt = "https://recibo.infinitepay.io/abc";
+  const TX1 = "0b9c6a4e-1f2d-4c3b-8a7e-5d6f7a8b9c01";
+  const TX9 = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a";
+  const receipt = `https://recibo.infinitepay.io/${TX1}`;
 
   it("aviso simples ou dentro de data; prefere invoice_slug; comprovante só da InfinitePay", () => {
-    assert.deepEqual(lerAviso({ transaction_nsu: "tx-1", invoice_slug: "sl_1", order_nsu: "ped-a-1", receipt_url: receipt }), {
-      transacaoNsu: "tx-1",
+    assert.deepEqual(lerAviso({ transaction_nsu: TX1, invoice_slug: "sl_1", order_nsu: "ped-a-1", receipt_url: receipt }), {
+      transacaoNsu: TX1,
       slug: "sl_1",
       comprovanteUrl: receipt,
       referencia: "ped-a-1",
     });
     assert.equal(lerAviso({ data: { transaction_nsu: "tx-1", slug: "sl_1" } })?.slug, "sl_1");
-    assert.equal(lerAviso({ transaction_nsu: "tx-1", slug: "sl_1", receipt_url: "https://evil.com/r" })?.comprovanteUrl, null);
+    assert.equal(lerAviso({ transaction_nsu: TX1, slug: "sl_1", receipt_url: "https://evil.com/r" })?.comprovanteUrl, null);
+    // Recibo de OUTRA transação: não grava.
+    assert.equal(lerAviso({ transaction_nsu: TX9, slug: "sl_1", receipt_url: receipt })?.comprovanteUrl, null);
     assert.equal(lerAviso({ transaction_nsu: "tx-1", slug: "sl_1" })?.referencia, null);
   });
 
@@ -357,11 +364,15 @@ describe("aviso e retorno", () => {
   });
 
   it("retorno: referência e candidato da query", () => {
-    const q = new URLSearchParams({ order_nsu: "ped-a-1", transaction_nsu: "tx-9", slug: "sl-9", capture_method: "pix", receipt_url: receipt });
+    const recibo9 = `https://recibo.infinitepay.io/${TX9}`;
+    const q = new URLSearchParams({ order_nsu: "ped-a-1", transaction_nsu: TX9, slug: "sl-9", capture_method: "pix", receipt_url: recibo9 });
     assert.deepEqual(lerRetorno(q), {
       referencia: "ped-a-1",
-      candidato: { transacaoNsu: "tx-9", slug: "sl-9", comprovanteUrl: receipt, referencia: "ped-a-1" },
+      candidato: { transacaoNsu: TX9, slug: "sl-9", comprovanteUrl: recibo9, referencia: "ped-a-1" },
     });
+    // O recibo de outra transação, na query, não vale (a confirmação segue, sem comprovante).
+    q.set("receipt_url", receipt);
+    assert.equal(lerRetorno(q).candidato?.comprovanteUrl, null);
     assert.equal(lerRetorno(new URLSearchParams({ order_nsu: "ped-a-1", transaction_nsu: "tx-9", invoice_slug: "s2" })).candidato?.slug, "s2");
   });
 
@@ -387,5 +398,59 @@ describe("aviso e retorno", () => {
     assert.equal(lerRetorno(new URLSearchParams({ order_nsu: "x".repeat(65) })).referencia, null);
     assert.equal(lerRetorno(new URLSearchParams()).referencia, null);
     assert.equal(lerRetorno(new URLSearchParams({ order_nsu: "ped-a-1", transaction_nsu: "<script>", slug: "s" })).candidato, null);
+  });
+});
+
+describe("recibo da transação (receipt_url)", () => {
+  const tx = "3f2b8c1e-7a4d-4e9b-9c2a-1d5e6f7a8b9c";
+  it("só https://recibo.infinitepay.io/<uuid da própria transação>", () => {
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/${tx}`, tx), `https://recibo.infinitepay.io/${tx}`);
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/${tx.toUpperCase()}`, tx) !== null, true, "maiúsculas no uuid");
+  });
+  it("recusa outro host, outro caminho, outra transação, http, porta, query, credenciais e lixo", () => {
+    const recusados = [
+      `https://evil.example/${tx}`,
+      `https://checkout.infinitepay.io/${tx}`,
+      `https://recibo.infinitepay.io.evil.example/${tx}`,
+      `https://recibo.infinitepay.io/recibo/${tx}`,
+      `https://recibo.infinitepay.io/${tx}/x`,
+      "https://recibo.infinitepay.io/0b9c6a4e-1f2d-4c3b-8a7e-5d6f7a8b9c01",
+      `http://recibo.infinitepay.io/${tx}`,
+      `https://recibo.infinitepay.io:8443/${tx}`,
+      `https://recibo.infinitepay.io/${tx}?a=1`,
+      `https://recibo.infinitepay.io/${tx}#x`,
+      `https://user:pw@recibo.infinitepay.io/${tx}`,
+      "nada",
+      42,
+      null,
+    ];
+    for (const r of recusados) assert.equal(urlDoRecibo(r, tx), null, String(r));
+    assert.equal(urlDoRecibo(`https://recibo.infinitepay.io/tx_1`, "tx_1"), null, "transação que não é UUID");
+  });
+  it("servidor falso dos testes: <origem>/recibo/<uuid>, só com origemLocal", () => {
+    const local = "http://127.0.0.1:4030";
+    assert.equal(urlDoRecibo(`${local}/recibo/${tx}`, tx, { origemLocal: local }), `${local}/recibo/${tx}`);
+    assert.equal(urlDoRecibo(`${local}/recibo/${tx}`, tx), null);
+    assert.equal(urlDoRecibo(`${local}/outra/${tx}`, tx, { origemLocal: local }), null);
+  });
+});
+
+describe("canário de amarração do retorno", () => {
+  const conferencia = (c: Record<string, unknown>) => lerConferencia(c);
+  it("o canário consulta um order_nsu que não é referência nossa", () => {
+    assert.equal(referenciaDoCanario("ped-abc-1"), "ped-abc-1-x");
+    assert.equal(lerReferencia(referenciaDoCanario("ped-abc-1")), null);
+    assert.equal(lerReferencia(referenciaDoCanario("enc-abc-ENTRADA-2")), null);
+  });
+  it("não pago (o formato real para outro order_nsu) ou success=false: AMARRA, pode confirmar", () => {
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: false, amount: 0, paid_amount: 0, installments: null, capture_method: null })), "AMARRA");
+    assert.equal(decisaoDoCanario(conferencia({ success: false })), "AMARRA");
+  });
+  it("pago com um order_nsu que não existe: NAO_AMARRA, não confirma pelo retorno", () => {
+    assert.equal(decisaoDoCanario(conferencia({ success: true, paid: true, amount: 1500, paid_amount: 1500, installments: 1, capture_method: "pix" })), "NAO_AMARRA");
+  });
+  it("sem resposta válida (tempo, 5xx, 4xx, formato estranho): FALHOU, não confirma (fail-closed)", () => {
+    assert.equal(decisaoDoCanario(null), "FALHOU");
+    assert.equal(decisaoDoCanario(conferencia({ formato: "estranho" })), "FALHOU");
   });
 });
