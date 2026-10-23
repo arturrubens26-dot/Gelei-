@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { resumoEncomendasDashboard } from "@/lib/encomendas-admin";
 import {
   FUSO_LOJA,
   PADRAO_MES,
@@ -166,7 +167,7 @@ export async function alterarStatusPedido(
  * que ainda podem ser pagos: o pedido online com mais de 48 h expirou e não conta.
  */
 export async function resumoDashboard() {
-  const [porStatus, recentes, expirados] = await Promise.all([
+  const [porStatus, recentes, expirados, encomendas] = await Promise.all([
     db.order.groupBy({ by: ["status"], _count: { _all: true }, _sum: { total: true } }),
     db.order.findMany({
       orderBy: { createdAt: "desc" },
@@ -174,6 +175,7 @@ export async function resumoDashboard() {
       include: { user: { select: { nome: true } } },
     }),
     db.order.count({ where: { status: "PENDENTE", canal: "ONLINE", createdAt: { lte: new Date(Date.now() - PRAZO_PARA_PAGAR_MS) } } }),
+    resumoEncomendasDashboard(new Date()),
   ]);
 
   const contagem = (s: StatusPedido) => porStatus.find((l) => l.status === s)?._count._all ?? 0;
@@ -198,6 +200,8 @@ export async function resumoDashboard() {
       status: p.status,
       total: p.total.toNumber(),
     })),
+    /** Lembrancinhas: a responder (e o prazo mais próximo), entregas de hoje e devoluções pendentes. */
+    encomendas,
   };
 }
 

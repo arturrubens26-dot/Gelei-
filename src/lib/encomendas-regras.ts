@@ -499,6 +499,32 @@ export function etapaDaParcela(e: {
   return pagavel ? "PAGAR" : "INDISPONIVEL";
 }
 
+/**
+ * Alerta da encomenda no painel (um só, por prioridade):
+ * - DEVOLUCAO_PENDENTE: há dinheiro a devolver (desistência, cancelamento, pago tarde ou em dobro):
+ *   devolver pelo app da InfinitePay e marcar "Marquei como devolvida";
+ * - PAGO_COM_DIVERGENCIA: a InfinitePay diz "pago", mas o valor, o método ou as parcelas não conferem;
+ *   a parcela NÃO foi dada como paga. Conferir no app;
+ * - AVISO_NAO_CONFERIDO: chegou o aviso de pagamento, mas há mais de 30 min a conferência não fecha.
+ */
+export type AlertaEncomenda = "DEVOLUCAO_PENDENTE" | "PAGO_COM_DIVERGENCIA" | "AVISO_NAO_CONFERIDO";
+
+export function alertaDaEncomenda(e: { devolucaoPendente: boolean; pagamentoDivergente: boolean; avisoParadoHaMaisDe30Min: boolean }): AlertaEncomenda | null {
+  if (e.devolucaoPendente) return "DEVOLUCAO_PENDENTE";
+  if (e.pagamentoDivergente) return "PAGO_COM_DIVERGENCIA";
+  if (e.avisoParadoHaMaisDe30Min) return "AVISO_NAO_CONFERIDO";
+  return null;
+}
+
+/**
+ * Quanto a loja pode devolver ao cancelar (centavos): no mínimo o que a regra manda (tudo, quando a
+ * loja cancela; a regra do corte, quando a cliente pediu pelo WhatsApp), no máximo tudo o que foi pago.
+ */
+export function faixaDaDevolucaoNoCancelamento(enc: EncomendaParaRegras, agora: Date, aPedidoDaCliente: boolean): { minimo: number; maximo: number } {
+  const v = valoresDoCancelamento(enc, agora);
+  return { minimo: aPedidoDaCliente ? v.aPedidoDaCliente.devolucao : v.pelaLoja.devolucao, maximo: v.totalPago };
+}
+
 /** Valores do cancelamento pela loja (centavos): a padrão (devolve tudo) e a mínima a pedido da cliente. */
 export function valoresDoCancelamento(enc: EncomendaParaRegras, agora: Date) {
   const pago = pagoEmCentavos(enc);
@@ -923,7 +949,7 @@ export function mensagemWhatsApp(status: StatusEncomenda, d: DadosDaMensagem): s
     case "EXPIRADA":
       return `${ola} ${qual} expirou sem confirmação, e nada foi cobrado. Se ainda quiser, é só fazer uma nova solicitação.${veja}`;
     case "CANCELADA":
-      return `${ola} ${qual} foi cancelada.${d.devolucaoCentavos > 0 ? ` Vamos devolver ${brl(d.devolucaoCentavos)} por PIX em até 2 dias úteis.` : ""}${veja}`;
+      return `${ola} ${qual} foi cancelada.${d.devolucaoCentavos > 0 ? ` Vamos devolver ${brl(d.devolucaoCentavos)}, pelo mesmo meio do pagamento, em até 2 dias úteis.` : ""}${veja}`;
   }
 }
 

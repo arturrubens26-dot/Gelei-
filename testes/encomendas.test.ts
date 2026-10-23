@@ -18,6 +18,7 @@ import {
   acoesDaCliente,
   acoesDaLoja,
   agendaPorDia,
+  alertaDaEncomenda,
   calcularValores,
   configLembrancinhasSchema,
   conferirPotinhos,
@@ -28,6 +29,7 @@ import {
   diaValido,
   encomendaSchema,
   etapaDaParcela,
+  faixaDaDevolucaoNoCancelamento,
   faixaDeDatas,
   formatarPrazo,
   inicioDoDia,
@@ -500,6 +502,26 @@ describe("etapa do pagamento da parcela", () => {
     const restante = { ...base, parcela: "RESTANTE" as const };
     assert.equal(etapaDaParcela(restante), "INDISPONIVEL");
     for (const status of ["CONFIRMADA", "EM_PRODUCAO", "PRONTA"] as const) assert.equal(etapaDaParcela({ ...restante, status }), "PAGAR");
+  });
+});
+
+describe("painel: alerta e faixa da devolução no cancelamento", () => {
+  it("alerta por prioridade: devolução pendente, divergência, aviso parado", () => {
+    const nada = { devolucaoPendente: false, pagamentoDivergente: false, avisoParadoHaMaisDe30Min: false };
+    assert.equal(alertaDaEncomenda(nada), null);
+    assert.equal(alertaDaEncomenda({ ...nada, avisoParadoHaMaisDe30Min: true }), "AVISO_NAO_CONFERIDO");
+    assert.equal(alertaDaEncomenda({ ...nada, avisoParadoHaMaisDe30Min: true, pagamentoDivergente: true }), "PAGO_COM_DIVERGENCIA");
+    assert.equal(alertaDaEncomenda({ devolucaoPendente: true, pagamentoDivergente: true, avisoParadoHaMaisDe30Min: true }), "DEVOLUCAO_PENDENTE");
+  });
+  it("a loja devolve no mínimo tudo; a pedido da cliente, depois do corte, no mínimo o que a regra manda", () => {
+    const e = encomenda({ status: "CONFIRMADA", entradaPagaEm: new Date("2026-11-11T13:00:00Z") });
+    const antes = new Date(e.corteEm.getTime() - 1);
+    assert.deepEqual(faixaDaDevolucaoNoCancelamento(e, antes, false), { minimo: 6900, maximo: 6900 });
+    assert.deepEqual(faixaDaDevolucaoNoCancelamento(e, antes, true), { minimo: 6900, maximo: 6900 });
+    assert.deepEqual(faixaDaDevolucaoNoCancelamento(e, e.corteEm, true), { minimo: 0, maximo: 6900 });
+    const metade = { ...e, percentualRetido: 50 };
+    assert.deepEqual(faixaDaDevolucaoNoCancelamento(metade, e.corteEm, true), { minimo: 3450, maximo: 6900 });
+    assert.deepEqual(faixaDaDevolucaoNoCancelamento(encomenda({ status: "AGUARDANDO_ENTRADA" }), e.corteEm, false), { minimo: 0, maximo: 0 });
   });
 });
 
