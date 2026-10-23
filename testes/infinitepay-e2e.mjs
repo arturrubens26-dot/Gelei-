@@ -694,7 +694,7 @@ async function main() {
     confere(idorEnc.status === 404, "encomenda de outra conta → 404", idorEnc.status);
     const e1 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "ENTRADA" } });
     confere(e1.status === 200 && e1.json?.cobranca?.checkoutUrl?.startsWith(falsa.origem) && e1.json.cobranca.valor === 45, "entrada abre o link", e1.json);
-    const linkE1 = falsa.links.get(slugDe(e1.json.cobranca.checkoutUrl));
+    const linkE1 = falsa.links.get(codigoDe(e1.json.cobranca.checkoutUrl));
     confere(
       linkE1.order_nsu === `enc-${encId}-ENTRADA-1` && linkE1.amount === 4500 && linkE1.webhook_url.startsWith(`${BASE}/api/webhooks/infinitepay/enc-${encId}-ENTRADA-1/`),
       "link da entrada: order_nsu, valor e aviso da parcela",
@@ -704,7 +704,7 @@ async function main() {
     await sql("update pagamentos set expira_em = now() + interval '2 minutes' where encomenda_id = $1", [encId]);
     const e2 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "ENTRADA" } });
     confere(e2.status === 200 && e2.json?.cobranca?.checkoutUrl !== e1.json.cobranca.checkoutUrl, "link vencendo dá lugar a enc-<id>-ENTRADA-2", e2.json);
-    const pgE1 = await pagar({ slug: linkE1.slug, metodo: "pix" });
+    const pgE1 = await pagar({ codigo: linkE1.codigo, metodo: "pix" });
     confere(pgE1.aviso?.status === 200 && pgE1.aviso.corpo?.resultado === "aprovado", "aviso da entrada → 200 aprovado", pgE1.aviso);
     const [enc1] = await sql("select status, entrada_paga_em, restante_pago_em from encomendas where id = $1", [encId]);
     confere(enc1.status === "CONFIRMADA" && enc1.entrada_paga_em !== null && enc1.restante_pago_em === null, "entrada paga: CONFIRMADA (o restante não)", enc1);
@@ -713,7 +713,7 @@ async function main() {
     const sR = await a.req("GET", `/api/encomendas/${encId}/pagamento?parcela=RESTANTE`);
     confere(sR.json?.etapa === "PAGAR" && sR.json.cobranca === null, "situação do restante: PAGAR", sR.json);
     // O segundo link da entrada também é pago: não há o que quitar → devolução pendente.
-    const pgE2 = await pagar({ slug: slugDe(e2.json.cobranca.checkoutUrl), metodo: "pix" });
+    const pgE2 = await pagar({ codigo: codigoDe(e2.json.cobranca.checkoutUrl), metodo: "pix" });
     const devs = await sql("select motivo, valor::text, status, pagamento_id from encomenda_devolucoes where encomenda_id = $1", [encId]);
     confere(
       pgE2.aviso?.corpo?.resultado === "aprovado" && devs.length === 1 && devs[0].motivo === "PAGAMENTO_DUPLICADO" && devs[0].valor === "45.00" && devs[0].status === "PENDENTE",
@@ -725,14 +725,14 @@ async function main() {
     confere(naAba?.alerta === "DEVOLUCAO_PENDENTE" && naAba.devolucao.pendente === 45, "painel: aba Devoluções com o alerta", naAba);
     // A mesma transação da entrada apresentada ao link do restante não quita o restante.
     const r1 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "RESTANTE" } });
-    const linkR1 = falsa.links.get(slugDe(r1.json.cobranca.checkoutUrl));
+    const linkR1 = falsa.links.get(codigoDe(r1.json.cobranca.checkoutUrl));
     confere(r1.status === 200 && linkR1.order_nsu === `enc-${encId}-RESTANTE-1` && linkR1.amount === 4500, "restante abre o link da parcela", linkR1);
     const reusoEnc = await avisar(linkR1.webhook_url, { ...pgE1.corpoAviso, order_nsu: linkR1.order_nsu, invoice_slug: linkR1.slug });
     const reusoEncJson = await reusoEnc.json();
     const [enc2] = await sql("select restante_pago_em from encomendas where id = $1", [encId]);
     confere(reusoEnc.status === 200 && reusoEncJson.resultado === "invalido" && enc2.restante_pago_em === null, "transação da entrada no aviso do restante → invalido", reusoEncJson);
     await esperar(3_100);
-    const pgR = await pagar({ slug: linkR1.slug, metodo: "credit_card", parcelas: 2 });
+    const pgR = await pagar({ codigo: linkR1.codigo, metodo: "credit_card", parcelas: 2 });
     const [enc3] = await sql("select restante_pago_em, restante_forma from encomendas where id = $1", [encId]);
     confere(pgR.aviso?.corpo?.resultado === "aprovado" && enc3.restante_pago_em !== null && enc3.restante_forma === "CARTAO_CREDITO", "restante pago no cartão: quitada", enc3);
     const retEnc = await a.req("GET", `/pagamento/retorno${new URL(pgR.retorno).search}`);
@@ -757,7 +757,7 @@ async function main() {
     // Segunda encomenda: entrada paga, restante fora do site, cancelada pela loja com devolução.
     const enc2Id = await novaEncomenda("enc2", "AGUARDANDO_ENTRADA");
     const e21 = await a.req("POST", `/api/encomendas/${enc2Id}/pagamento`, { corpo: { parcela: "ENTRADA" } });
-    const pg21 = await pagar({ slug: slugDe(e21.json.cobranca.checkoutUrl), metodo: "pix" });
+    const pg21 = await pagar({ codigo: codigoDe(e21.json.cobranca.checkoutUrl), metodo: "pix" });
     confere(pg21.aviso?.corpo?.resultado === "aprovado", "encomenda 2: entrada paga", pg21.aviso);
     const fora = await acaoEnc(enc2Id, { acao: "registrar-restante", statusEsperado: "CONFIRMADA", formaPagamento: "DINHEIRO", observacao: "Na retirada (e2e)." });
     confere(
