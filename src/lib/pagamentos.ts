@@ -65,16 +65,13 @@ const MAX_COBRANCAS_POR_PEDIDO = 10;
 const INTERVALO_CONSULTA_TELA_MS = 8_000;
 /** Avisos repetidos em rajada não viram uma consulta cada. */
 const INTERVALO_CONSULTA_AVISO_MS = 3_000;
-/** O webhook responde logo (a InfinitePay prefere menos de 1 s); o retorno e a tela esperam mais. */
-const TEMPO_CONFERENCIA_AVISO_MS = 5_000;
-const TEMPO_CONFERENCIA_TELA_MS = 8_000;
 /**
- * O retorno do navegador faz até duas consultas (a principal e o canário) dentro de um orçamento só,
- * para a função não estourar o limite da Netlify: a principal usa no máximo 5 s, e o canário o que
- * sobrar. Sem pelo menos 1 s de sobra, não consulta.
+ * Toda conferência (aviso, tela e retorno) faz até duas consultas dentro de um orçamento só, para a
+ * função não estourar o limite da Netlify: a principal usa no máximo 5 s e, SÓ quando ela deu "pago"
+ * e confere, o canário usa o que sobrar. Sem pelo menos 1 s de sobra, não consulta.
  */
-const ORCAMENTO_RETORNO_MS = 8_000;
-const TEMPO_CONSULTA_RETORNO_MS = 5_000;
+const ORCAMENTO_CONFERENCIA_MS = 8_000;
+const TEMPO_CONSULTA_PRINCIPAL_MS = 5_000;
 const TEMPO_MINIMO_CONSULTA_MS = 1_000;
 
 // --- configuração -----------------------------------------------------------------------------
@@ -183,8 +180,8 @@ const MENSAGEM_RETORNO_RECENTE =
  *   order_nsu consultado não é o da transação). Nunca é divergência nem alerta;
  * - INVALIDO: candidato recusado de vez (`success=false`: slug errado ou transação inexistente;
  *   transação de outro pedido na resposta; slug diferente da fatura; já usada);
- * - TRANSITORIO: a InfinitePay não respondeu direito, ou ainda não acha a transação (HTTP 4xx logo
- *   depois do pagamento): o webhook responde 400 para ela repetir;
+ * - TRANSITORIO: a InfinitePay não respondeu direito (nem na consulta principal nem no canário), ou
+ *   ainda não acha a transação (HTTP 4xx logo depois do pagamento): o webhook responde 400 para ela repetir;
  * - ADIADO: conferida há instantes (a próxima tentativa confere).
  */
 export type ResultadoConfirmacao = "APROVADO" | "PENDENTE" | "DIVERGENTE" | "INVALIDO" | "TRANSITORIO" | "ADIADO";
@@ -196,11 +193,15 @@ export type ResultadoConfirmacao = "APROVADO" | "PENDENTE" | "DIVERGENTE" | "INV
  * - "retorno": a query do redirect_url, ou seja, dado da CLIENTE (já conferido que a sessão é a dona
  *   do pedido). Confirma como os outros: quem amarra a transação a esta cobrança é o payment_check,
  *   consultado com o order_nsu do NOSSO banco (nunca o da query). Transação de outro link responde
- *   `paid=false` (ou `success=false`) e não confirma. Antes de confirmar, o CANÁRIO (mesma transação
- *   com um order_nsu que nunca existe) precisa responder "não pago"; se responder "pago" ou falhar, o
- *   retorno não confirma (fail-closed) e o aviso decide. O candidato do retorno nunca é gravado como
+ *   `paid=false` (ou `success=false`) e não confirma. O candidato do retorno nunca é gravado como
  *   candidato, e nenhuma recusa dele (não pago, divergência, transação já usada, canário) grava marca:
  *   é dado da cliente. O comprovante só é gravado se for o recibo da própria transação (urlDoRecibo).
+ *
+ * Em TODA origem, antes de confirmar, vale o CANÁRIO: a mesma transação e slug consultados com um
+ * order_nsu que nunca existe precisam responder "não pago". Se responder "pago" (a API não amarrou a
+ * transação ao pedido): do retorno, não confirma e o aviso decide; do aviso ou da tela, grava
+ * `divergente:nao-amarra` para a dona conferir no app. Se não responder (tempo, 5xx, 4xx, formato
+ * estranho), não confirma (fail-closed): do aviso ou da tela, TRANSITORIO (a InfinitePay repete).
  */
 type OrigemCandidato = "aviso" | "gravado" | "retorno";
 
@@ -273,7 +274,7 @@ export async function confirmarCobranca(
   p: Pagamento,
   c: Candidato,
   origem: OrigemCandidato,
-  /** Instante (ms) até o qual esta chamada pode gastar com a InfinitePay; o retorno sempre tem um. */
+  /** Instante (ms) até o qual esta chamada pode gastar com a InfinitePay (padrão: 8 s a partir de agora). */
   prazoFinal?: number,
 ): Promise<ResultadoConfirmacao> {
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return "APROVADO";
@@ -291,10 +292,10 @@ export async function confirmarCobranca(
     return "INVALIDO";
   }
 
-  const prazo = prazoFinal ?? (daCliente ? Date.now() + ORCAMENTO_RETORNO_MS : undefined);
-  const tempoAte = (max: number) => (prazo === undefined ? max : Math.min(max, prazo - Date.now()));
+  const prazo = prazoFinal ?? Date.now() + ORCAMENTO_CONFERENCIA_MS;
+  const tempoAte = (max: number) => Math.min(max, prazo - Date.now());
   // Sem tempo no orçamento: nem reserva a vez (a tela confere de novo daqui a pouco).
-  if (prazo !== undefined && prazo - Date.now() < TEMPO_MINIMO_CONSULTA_MS) return "ADIADO";
+  if (prazo - Date.now() < TEMPO_MINIMO_CONSULTA_MS) return "ADIADO";
 
   // Reserva a vez (atômico): duas conferências da mesma cobrança não correm juntas.
   const intervalo = origem === "aviso" ? INTERVALO_CONSULTA_AVISO_MS : INTERVALO_CONSULTA_TELA_MS;
@@ -312,7 +313,7 @@ export async function confirmarCobranca(
   try {
     conferencia = await conferirPagamento(
       { referencia: p.referenciaExterna, transacaoNsu: c.transacaoNsu, slug: c.slug },
-      origem === "aviso" ? TEMPO_CONFERENCIA_AVISO_MS : tempoAte(daCliente ? TEMPO_CONSULTA_RETORNO_MS : TEMPO_CONFERENCIA_TELA_MS),
+      tempoAte(TEMPO_CONSULTA_PRINCIPAL_MS),
     );
   } catch (e) {
     const status = e instanceof ErroInfinitePay ? e.status : 0;
@@ -382,34 +383,48 @@ export async function confirmarCobranca(
     return "DIVERGENTE";
   }
 
-  // Do retorno, antes de confirmar, o canário: a mesma transação com um order_nsu que nunca existe
-  // precisa responder "não pago". Senão (a API não amarrou, ou não respondeu), o retorno não confirma
-  // nem grava nada: o aviso, que só chega pela URL com o token desta cobrança, decide.
-  if (daCliente) {
-    let canario = null;
-    let causa = "sem tempo no orçamento";
-    const tempoCanario = tempoAte(TEMPO_CONFERENCIA_TELA_MS);
-    if (tempoCanario >= TEMPO_MINIMO_CONSULTA_MS) {
-      try {
-        canario = await conferirPagamento(
-          { referencia: referenciaDoCanario(p.referenciaExterna), transacaoNsu: c.transacaoNsu, slug: c.slug },
-          tempoCanario,
-        );
-        causa = "resposta em formato inesperado";
-      } catch (e) {
-        // Só o status (ou "sem resposta"): nunca o corpo nem dado da cliente.
-        causa = e instanceof ErroInfinitePay ? (e.status === 0 ? e.message : `HTTP ${e.status}`) : "erro";
-      }
-    }
-    const decisao = decisaoDoCanario(canario);
-    if (decisao !== "AMARRA") {
-      console.error(
-        `[pagamentos] cobrança ${p.id}: retorno NÃO confirmado (canário ${decisao === "NAO_AMARRA" ? "com sinal de pagamento: a API não amarrou a transação" : `sem decisão: ${causa}`}); aguarda o aviso`,
+  // O canário, em TODA origem (aviso, tela e retorno), SÓ quando a consulta principal já deu "pago" e
+  // confere (uma consulta a mais por pagamento real): a mesma transação e slug com um order_nsu que
+  // nunca existe precisam responder "não pago". O token do aviso e o slug do recibo são conhecidos da
+  // cliente, então o aviso é dado dela como o retorno: quem amarra a transação a ESTA cobrança é a
+  // InfinitePay, e o canário confere que ela de fato amarra.
+  let canario = null;
+  let causa = "sem tempo no orçamento";
+  const tempoCanario = tempoAte(ORCAMENTO_CONFERENCIA_MS);
+  if (tempoCanario >= TEMPO_MINIMO_CONSULTA_MS) {
+    try {
+      canario = await conferirPagamento(
+        { referencia: referenciaDoCanario(p.referenciaExterna), transacaoNsu: c.transacaoNsu, slug: c.slug },
+        tempoCanario,
       );
-      // Nada foi decidido: devolve a vez reservada, para o aviso que chega logo em seguida não receber ADIADO.
-      await devolverReserva(p, agora);
-      return "PENDENTE";
+      causa = "resposta em formato inesperado";
+    } catch (e) {
+      // Só o status (ou "sem resposta"): nunca o corpo nem dado da cliente.
+      causa = e instanceof ErroInfinitePay ? (e.status === 0 ? e.message : `HTTP ${e.status}`) : "erro";
     }
+  }
+  const decisao = decisaoDoCanario(canario);
+  if (decisao === "NAO_AMARRA" && !daCliente) {
+    // Do aviso ou da tela: a dona confere no app (a transação pode ser de outra compra).
+    const marca = `${MARCA_DIVERGENTE}nao-amarra`;
+    if (p.statusGateway !== marca) {
+      console.error(
+        `[pagamentos] cobrança ${p.id} do pedido ${p.orderId}: o canário respondeu "pago" (a API não amarrou a transação); ` +
+          "o pedido NÃO foi marcado como pago. Confira no app InfinitePay.",
+      );
+    }
+    await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { statusGateway: marca } });
+    return "DIVERGENTE";
+  }
+  if (decisao !== "AMARRA") {
+    console.error(
+      `[pagamentos] cobrança ${p.id}: ${daCliente ? "retorno" : "conferência"} NÃO confirmada (canário ${
+        decisao === "NAO_AMARRA" ? "com sinal de pagamento: a API não amarrou a transação" : `sem decisão: ${causa}`
+      }); aguarda o aviso`,
+    );
+    // Nada foi decidido: devolve a vez reservada, para o aviso que chega logo em seguida não receber ADIADO.
+    await devolverReserva(p, agora);
+    return daCliente ? "PENDENTE" : "TRANSITORIO";
   }
 
   // Aprovado: grava a transação (UNIQUE) e o pedido, juntos.
@@ -680,7 +695,7 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
         await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { retornoEm: new Date() } });
       }
       // As consultas do retorno (a do aviso gravado, a principal e o canário) dividem um orçamento só.
-      const prazo = Date.now() + ORCAMENTO_RETORNO_MS;
+      const prazo = Date.now() + ORCAMENTO_CONFERENCIA_MS;
       const gravado = candidatoGravado(p);
       const r = gravado ? await confirmarCobranca(p, gravado, "gravado", prazo) : null;
       const mesmoDoAviso = gravado && candidato && gravado.transacaoNsu === candidato.transacaoNsu && gravado.slug === candidato.slug;

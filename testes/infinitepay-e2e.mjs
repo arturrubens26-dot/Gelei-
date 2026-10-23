@@ -152,7 +152,7 @@ async function main() {
     const consultas1 = falsa.chamadas.payment_check;
     const pg1 = await pagar({ codigo: link1.codigo, metodo: "pix" });
     confere(pg1.aviso?.status === 200 && pg1.aviso.corpo?.resultado === "aprovado", "aviso → 200 aprovado", pg1.aviso);
-    confere(falsa.chamadas.payment_check === consultas1 + 1, "o aviso faz UMA consulta (não chama o canário)", falsa.chamadas.payment_check - consultas1);
+    confere(falsa.chamadas.payment_check === consultas1 + 2, "o aviso que PAGA faz DUAS consultas (a principal e o canário)", falsa.chamadas.payment_check - consultas1);
     const s1 = await a.req("GET", `/api/orders/${p1.pedido.id}/pagamento`);
     confere(s1.json?.etapa === "PAGO" && s1.json.pedidoStatus === "PAGO", "etapa PAGO", s1.json);
     confere(s1.json?.cobranca?.metodo === "pix" && s1.json.cobranca.parcelas === 1 && s1.json.cobranca.valorPago === p1.pedido.total, "método, parcelas e valor pago");
@@ -216,7 +216,9 @@ async function main() {
     });
     confere(outroToken.status === 401, "token de outra cobrança → 401", outroToken.status);
     confere((await cobrancas(p3.pedido.id))[0].aviso_transacao_nsu === null, "banco: nada gravado");
+    const consultas3 = falsa.chamadas.payment_check;
     const falso = await pagar({ codigo: link3.codigo, metodo: "pix", avisoFalso: true });
+    confere(falsa.chamadas.payment_check === consultas3 + 1, "o aviso que NÃO paga faz UMA consulta (sem canário)", falsa.chamadas.payment_check - consultas3);
     confere(falso.aviso?.status === 200 && falso.aviso.corpo?.resultado === "invalido", "aviso com transação inexistente → 200 invalido", falso.aviso);
     const [c3] = await cobrancas(p3.pedido.id);
     confere((await statusPedido(p3.pedido.id)) === "PENDENTE" && c3.aviso_transacao_nsu === null && c3.status === "PENDENTE", "continua PENDENTE e o candidato foi apagado", c3);
@@ -289,8 +291,8 @@ async function main() {
     const repete = await fetch(link7.webhook_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pg7.corpoAviso) });
     confere(repete.status === 200 && (await statusPedido(p7.pedido.id)) === "PAGO", "repetição do aviso → PAGO", repete.status);
 
-    console.log("8. A mesma transação para duas cobranças (API hipotética que não amarra o pedido)");
-    modo({ naoAmarraPedido: true });
+    console.log("8. A mesma transação para duas cobranças (API hipotética que não amarra e engana o canário: o UNIQUE é a última barreira)");
+    modo({ naoAmarraPedido: true, canarioCego: true });
     const p8a = await novoPedido(a);
     const p8b = await novoPedido(a);
     const pg8 = await pagar({ codigo: codigoDe(p8a.pagamento.checkoutUrl), metodo: "pix" });
@@ -550,7 +552,13 @@ async function main() {
     confere((await statusPedido(outro24.pedido.id)) === "PENDENTE", "API que não amarra: o próprio retorno também não confirma (fail-closed)");
     await esperar(3_100); // o retorno reservou a vez desta cobrança
     const avisoOutro24 = await avisar(falsa.links.get(codigoDe(outro24.pagamento.checkoutUrl)).webhook_url, pgOutro24.corpoAviso);
-    confere(avisoOutro24.status === 200 && (await statusPedido(outro24.pedido.id)) === "PAGO", "o aviso confirma a compra de verdade", avisoOutro24.status);
+    // Com o canário também no aviso, uma API que não amarra nunca confirma sozinha: a dona confere no app.
+    const [cOutro24] = await cobrancas(outro24.pedido.id);
+    confere(
+      avisoOutro24.status === 200 && (await avisoOutro24.json()).resultado === "divergente" && (await statusPedido(outro24.pedido.id)) === "PENDENTE" && cOutro24.status_gateway === "divergente:nao-amarra",
+      "o aviso também não confirma: divergente:nao-amarra para a dona conferir no app",
+      cOutro24,
+    );
     modo({});
 
     // b) Canário com falha (500, 404, tempo): não confirma pelo retorno e não grava nada; depois confirma.
@@ -567,7 +575,7 @@ async function main() {
     }
 
     // b2) A vez reservada pelo retorno é devolvida quando o canário falha: o aviso que chega colado
-    //     (sem esperar os 3 s entre consultas) confirma, com uma consulta só.
+    //     (sem esperar os 3 s entre consultas) confirma, com duas consultas (a principal e o canário).
     for (const [rotulo, falha] of [["canário com 500", 500], ["canário com tempo esgotado", "tempo"]]) {
       const pc = await novoPedido(conta24);
       const pgc = await pagar({ codigo: codigoDe(pc.pagamento.checkoutUrl), metodo: "pix", aviso: false });
@@ -579,8 +587,8 @@ async function main() {
       const consultasAntes = falsa.chamadas.payment_check;
       const avisoColado = await avisar(falsa.links.get(codigoDe(pc.pagamento.checkoutUrl)).webhook_url, pgc.corpoAviso);
       confere(
-        avisoColado.status === 200 && (await statusPedido(pc.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultasAntes + 1,
-        `${rotulo}: o aviso colado confirma (sem ADIADO) com uma consulta`,
+        avisoColado.status === 200 && (await statusPedido(pc.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultasAntes + 2,
+        `${rotulo}: o aviso colado confirma (sem ADIADO), com a consulta e o canário`,
         { status: avisoColado.status, consultas: falsa.chamadas.payment_check - consultasAntes },
       );
     }
@@ -618,6 +626,39 @@ async function main() {
       const [c] = await cobrancas(p.pedido.id);
       confere((await statusPedido(p.pedido.id)) === "PAGO" && c.comprovante_url === null, `recibo de ${rotulo}: confirma sem gravar o comprovante`, c.comprovante_url);
     }
+
+    console.log("25. Canário também no aviso: a API que não amarra → divergente:nao-amarra; canário que falha → 400 sem prender a vez");
+    const conta25 = await novaConta("d");
+    modo({ naoAmarraPedido: true });
+    const p25 = await novoPedido(conta25);
+    const link25 = falsa.links.get(codigoDe(p25.pagamento.checkoutUrl));
+    const consultas25 = falsa.chamadas.payment_check;
+    const pg25 = await pagar({ codigo: link25.codigo, metodo: "pix" });
+    confere(pg25.aviso?.status === 200 && pg25.aviso.corpo?.resultado === "divergente", "aviso com a API que não amarra → 200 divergente", pg25.aviso);
+    confere(falsa.chamadas.payment_check === consultas25 + 2, "duas consultas (a principal e o canário)");
+    const [c25] = await cobrancas(p25.pedido.id);
+    confere(
+      (await statusPedido(p25.pedido.id)) === "PENDENTE" && c25.status === "PENDENTE" && c25.status_gateway === "divergente:nao-amarra" && c25.transacao_nsu === null,
+      "NÃO vira PAGO; marca divergente:nao-amarra e não grava a transação",
+      c25,
+    );
+    const ficha25 = await admin.req("GET", `/api/admin/orders/${p25.pedido.id}`);
+    confere(ficha25.json?.pedido?.pagamento?.alerta === "PAGO_COM_DIVERGENCIA", "painel: PAGO_COM_DIVERGENCIA (a dona confere no app)", ficha25.json?.pedido?.pagamento);
+    const s25 = await conta25.req("GET", `/api/orders/${p25.pedido.id}/pagamento`);
+    confere(s25.json?.etapa === "CONFIRMANDO", "a cliente vê CONFIRMANDO (não PAGAR)", s25.json?.etapa);
+    modo({});
+
+    // Canário que falha no aviso: 400 (a InfinitePay repete) e a vez é devolvida, então a repetição
+    // colada (sem esperar os 3 s entre consultas) confirma.
+    const p25b = await novoPedido(conta25);
+    modo({ falharCanario: 500 });
+    const pg25b = await pagar({ codigo: codigoDe(p25b.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg25b.aviso?.status === 400 && pg25b.aviso.corpo?.resultado === "transitorio", "canário com 500 no aviso → 400 transitorio", pg25b.aviso);
+    modo({});
+    const [c25b] = await cobrancas(p25b.pedido.id);
+    confere((await statusPedido(p25b.pedido.id)) === "PENDENTE" && c25b.status_gateway !== "pago", "continua PENDENTE", c25b.status_gateway);
+    const repete25b = await avisar(falsa.links.get(codigoDe(p25b.pagamento.checkoutUrl)).webhook_url, pg25b.corpoAviso);
+    confere(repete25b.status === 200 && (await statusPedido(p25b.pedido.id)) === "PAGO", "a repetição colada confirma (a vez foi devolvida)", repete25b.status);
 
     console.log("21. Token do aviso com segredo próprio");
     if (process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() && process.env.INFINITEPAY_WEBHOOK_SECRET.trim() !== process.env.SESSION_SECRET) {
