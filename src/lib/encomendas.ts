@@ -14,6 +14,7 @@ import {
   conferirPotinhos,
   FOLGA_DA_ENTRADA_MS,
   devolucaoNaDesistencia,
+  entradaEmFolgaAgora,
   horasParaPagarEntrada,
   linhaDoTempo,
   mesmaEncomenda,
@@ -100,8 +101,8 @@ export type EncomendaDTO = {
    */
   prazos: { responderAte: string; entradaAte: string | null; corteEm: string; horasParaPagarEntrada: number };
   /**
-   * A entrada passou de `prazos.entradaAte`, mas a encomenda ainda não expirou: há 30 min de folga para
-   * o aviso do pagamento chegar. Não dá para pagar mais; se ela acabou de pagar, a confirmação ainda
+   * A entrada passou de `prazos.entradaAte` e ainda está nos 30 min de folga (a encomenda não expirou):
+   * dá tempo de o aviso do pagamento chegar. Não dá para pagar mais; se ela acabou de pagar, a confirmação ainda
    * vale. Mostre "o prazo terminou; se você acabou de pagar, aguarde a confirmação".
    */
   entradaEmFolga: boolean;
@@ -303,7 +304,7 @@ export function paraEncomendaDTO(e: EncomendaCompleta, agora: Date): EncomendaDT
       corteEm: e.corteEm.toISOString(),
       horasParaPagarEntrada: horasParaPagarEntrada(e, agora),
     },
-    entradaEmFolga: efetivo === "AGUARDANDO_ENTRADA" && e.entradaAte !== null && agora.getTime() >= e.entradaAte.getTime(),
+    entradaEmFolga: entradaEmFolgaAgora(efetivo, e.entradaAte, agora),
     pagamentoEmConferencia: { entrada: Boolean(regras.entradaEmConfirmacao), restante: Boolean(regras.restanteEmConfirmacao) },
     entradaPagaEm: e.entradaPagaEm?.toISOString() ?? null,
     restantePagoEm: e.restantePagoEm?.toISOString() ?? null,

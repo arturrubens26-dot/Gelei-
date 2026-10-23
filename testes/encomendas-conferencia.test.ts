@@ -10,6 +10,7 @@ import {
   acoesDaLoja,
   acaoAdminSchema,
   conferenciaAte,
+  entradaEmFolgaAgora,
   estadoDaConferencia,
   fimDaFolgaDaEntrada,
   horasParaPagarEntrada,
@@ -43,24 +44,35 @@ describe("conferência que segura a encomenda: no máximo 24 h", () => {
     assert.equal(HORAS_MAX_EM_CONFERENCIA, 24);
   });
 
-  it("aviso não conferido segura por 24 h, contadas do primeiro aviso", () => {
-    assert.equal(estadoDaConferencia(comAviso(5 * MIN), T0), "CONFIRMANDO");
-    assert.equal(estadoDaConferencia(comAviso(24 * HORA - 1), T0), "CONFIRMANDO");
-    assert.equal(estadoDaConferencia(comAviso(24 * HORA), T0), null, "passou das 24 h: não segura mais");
-    assert.equal(estadoDaConferencia(comAviso(3 * 24 * HORA), T0), null);
+  it("candidato de aviso segura até 24 h depois do VENCIMENTO do link, não depois da hora do aviso", () => {
+    const vencimento = (haQuanto: number) => ({ expiraEm: new Date(T0 - haQuanto) });
+    assert.equal(estadoDaConferencia(comAviso(5 * MIN, vencimento(10 * MIN)), T0), "CONFIRMANDO");
+    assert.equal(estadoDaConferencia(comAviso(5 * MIN, vencimento(24 * HORA - 1)), T0), "CONFIRMANDO");
+    assert.equal(estadoDaConferencia(comAviso(5 * MIN, vencimento(24 * HORA)), T0), null, "passou das 24 h do vencimento: não segura mais");
+    assert.equal(estadoDaConferencia(comAviso(5 * MIN, vencimento(3 * 24 * HORA)), T0), null);
   });
 
-  it("aviso sem candidato gravado (nsu ou slug nulos) não segura", () => {
+  it("avisos novos (forjados ou repetidos) NÃO renovam a contagem: só o vencimento do link conta", () => {
+    // A cliente conhece o token do aviso da própria cobrança e pode mandar avisos falsos a qualquer hora.
+    // Um aviso de 1 minuto atrás, com o link vencido há 25 h, não segura (a hora do aviso não conta).
+    assert.equal(estadoDaConferencia(comAviso(MIN, { expiraEm: new Date(T0 - 25 * HORA) }), T0), null);
+    // Nem o aviso mais novo possível: nunca passa de vencimento + 24 h.
+    const fim = conferenciaAte(comAviso(0, { expiraEm: new Date(T0 - HORA) }), T0)!;
+    assert.equal(fim.getTime(), T0 - HORA + 24 * HORA);
+    assert.equal(estadoDaConferencia(comAviso(0, { expiraEm: new Date(T0 - HORA) }), fim.getTime()), null);
+  });
+
+  it("aviso sem candidato gravado (nsu, slug ou hora nulos) não segura", () => {
     assert.equal(estadoDaConferencia(cobranca({ avisadoEm: new Date(T0 - MIN) }), T0), null);
     assert.equal(estadoDaConferencia(cobranca({ avisoTransacaoNsu: "n", avisadoEm: new Date(T0 - MIN) }), T0), null);
+    assert.equal(estadoDaConferencia(cobranca({ avisoTransacaoNsu: "n", avisoSlug: "s" }), T0), null);
   });
 
-  it("divergência segura por 24 h do aviso (ou, sem aviso, do vencimento do link)", () => {
+  it("divergência segura por 24 h depois do vencimento do link, com ou sem aviso", () => {
     const divergente = { statusGateway: "divergente:valor" };
-    assert.equal(estadoDaConferencia(comAviso(HORA, divergente), T0), "DIVERGENTE");
-    assert.equal(estadoDaConferencia(comAviso(24 * HORA - 1, divergente), T0), "DIVERGENTE");
-    assert.equal(estadoDaConferencia(comAviso(24 * HORA, divergente), T0), null);
-    // Sem aviso gravado, vale o vencimento do link.
+    assert.equal(estadoDaConferencia(comAviso(HORA, { ...divergente, expiraEm: new Date(T0 - HORA) }), T0), "DIVERGENTE");
+    assert.equal(estadoDaConferencia(comAviso(HORA, { ...divergente, expiraEm: new Date(T0 - 24 * HORA + 1) }), T0), "DIVERGENTE");
+    assert.equal(estadoDaConferencia(comAviso(HORA, { ...divergente, expiraEm: new Date(T0 - 24 * HORA) }), T0), null);
     assert.equal(estadoDaConferencia(cobranca({ ...divergente, expiraEm: new Date(T0 - HORA) }), T0), "DIVERGENTE");
     assert.equal(estadoDaConferencia(cobranca({ ...divergente, expiraEm: new Date(T0 - 25 * HORA) }), T0), null);
   });
@@ -76,9 +88,9 @@ describe("conferência que segura a encomenda: no máximo 24 h", () => {
   });
 
   it("conferenciaAte diz quando a cobrança solta a encomenda", () => {
-    assert.equal(conferenciaAte(comAviso(HORA), T0)?.toISOString(), new Date(T0 - HORA + 24 * HORA).toISOString());
+    assert.equal(conferenciaAte(comAviso(HORA, { expiraEm: new Date(T0 - HORA) }), T0)?.toISOString(), new Date(T0 - HORA + 24 * HORA).toISOString());
     assert.equal(conferenciaAte(cobranca({ retornoEm: new Date(T0 - 10 * MIN) }), T0)?.toISOString(), new Date(T0 + 20 * MIN).toISOString());
-    assert.equal(conferenciaAte(comAviso(25 * HORA), T0), null);
+    assert.equal(conferenciaAte(comAviso(MIN, { expiraEm: new Date(T0 - 25 * HORA) }), T0), null);
     assert.equal(conferenciaAte(cobranca(), T0), null);
   });
 });
@@ -140,6 +152,15 @@ describe("folga de 30 min depois do prazo da entrada", () => {
     assert.equal(statusEfetivo(e, new Date(entradaAte.getTime() + 1_000)), "AGUARDANDO_ENTRADA");
     assert.equal(statusEfetivo(e, new Date(entradaAte.getTime() + 29 * MIN + 59_000)), "AGUARDANDO_ENTRADA");
     assert.equal(statusEfetivo(e, new Date(entradaAte.getTime() + 30 * MIN)), "EXPIRADA");
+  });
+
+  it("entradaEmFolgaAgora: só entre entradaAte e entradaAte + 30 min, com a encomenda ainda aguardando", () => {
+    assert.equal(entradaEmFolgaAgora("AGUARDANDO_ENTRADA", entradaAte, new Date(entradaAte.getTime() - 1)), false);
+    assert.equal(entradaEmFolgaAgora("AGUARDANDO_ENTRADA", entradaAte, entradaAte), true);
+    assert.equal(entradaEmFolgaAgora("AGUARDANDO_ENTRADA", entradaAte, new Date(entradaAte.getTime() + 29 * MIN)), true);
+    assert.equal(entradaEmFolgaAgora("AGUARDANDO_ENTRADA", entradaAte, new Date(entradaAte.getTime() + 30 * MIN)), false, "depois da folga: expirada ou segurada por conferência");
+    assert.equal(entradaEmFolgaAgora("EXPIRADA", entradaAte, entradaAte), false);
+    assert.equal(entradaEmFolgaAgora("AGUARDANDO_ENTRADA", null, entradaAte), false);
   });
 
   it("a transição EXPIRADA do sistema também só vale depois da folga", () => {

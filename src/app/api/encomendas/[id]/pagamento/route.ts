@@ -10,9 +10,11 @@ const corpoSchema = z.object({ parcela: parcelaSchema });
 
 /**
  * GET /api/encomendas/[id]/pagamento?parcela=ENTRADA|RESTANTE — situação da parcela para a tela da
- * cliente: `SituacaoDaParcelaDTO = { status, entradaPaga, restantePaga, etapa, cobranca: CobrancaDTO | null }`
- * (`status` = efetivo da encomenda; `etapa` = PAGAR | CONFIRMANDO | PAGO | EXPIRADO | CANCELADO |
- * INDISPONIVEL, desta parcela). Com aviso da InfinitePay ainda não conferido, o servidor confere de novo
+ * cliente: `SituacaoDaParcelaDTO = { status, entradaPaga, restantePaga, etapa, motivoIndisponivel,
+ * pagamentoEmConferencia, cobranca: CobrancaDTO | null }` (`status` = efetivo da encomenda; `etapa` =
+ * PAGAR | CONFIRMANDO | PAGO | EXPIRADO | CANCELADO | INDISPONIVEL, desta parcela;
+ * `pagamentoEmConferencia`: há aviso, retorno ou divergência segurando esta parcela, no máximo 24 h depois
+ * do vencimento do link: mostre "estamos conferindo", nunca "Pagar"). Com aviso ainda não conferido, o servidor confere de novo
  * no payment_check (no máximo a cada 8 s; a tela pergunta a cada 5 s).
  * 240 consultas a cada 10 min por conta; 404 para encomenda de outra pessoa.
  */

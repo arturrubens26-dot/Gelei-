@@ -217,13 +217,30 @@ const SEM_DIVERGENCIA = { NOT: { statusGateway: { startsWith: MARCA_DIVERGENTE }
 /**
  * Grava o candidato do AVISO (ainda não conferido). Não mexe em cobrança aprovada. O mesmo candidato
  * repetido (a InfinitePay reenvia o aviso) não renova `avisadoEm`: a janela de 30 min conta do primeiro.
+ *
+ * O PRIMEIRO candidato gravado fica: um aviso com outra transação não o sobrescreve. A página de pagamento
+ * da InfinitePay mostra o endereço do aviso com o token da cobrança, então a cliente pode mandar avisos
+ * forjados para a própria cobrança; se o último ganhasse, um aviso forjado apagaria o verdadeiro que ainda
+ * espera conferência (e a reconferência da tela o recusaria). Nada se perde: o aviso novo é conferido na
+ * hora mesmo sem ser gravado (`confirmarCobranca` recebe o candidato do próprio aviso), a InfinitePay
+ * repete o aviso verdadeiro enquanto não receber 200, e o retorno da cliente traz a transação de novo. O
+ * gravado só sai quando a conferência o recusa (`descartarCandidato`) ou a cobrança é aprovada.
  */
 async function registrarCandidato(p: Pagamento, c: Candidato): Promise<Pagamento> {
   if (p.status !== "PENDENTE" && p.status !== "CANCELADO") return p;
   const mesmo = p.avisoTransacaoNsu === c.transacaoNsu && p.avisoSlug === c.slug && p.avisadoEm !== null;
-  // updateMany com o status no filtro: se outra conferência aprovou no meio do caminho, nada muda.
+  if (!mesmo && candidatoGravado(p) !== null) {
+    console.warn(`[pagamentos] cobrança ${p.id}: aviso com outra transação enquanto há candidato gravado; o gravado fica`);
+    return p;
+  }
+  // updateMany com o status no filtro: se outra conferência aprovou no meio do caminho, nada muda. O filtro
+  // do candidato (vazio ou o mesmo) faz valer "o primeiro fica" também entre dois avisos simultâneos.
   await db.pagamento.updateMany({
-    where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
+    where: {
+      id: p.id,
+      status: { in: ["PENDENTE", "CANCELADO"] },
+      OR: [{ avisoTransacaoNsu: null }, { avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug }],
+    },
     data: mesmo
       ? { comprovanteUrl: c.comprovanteUrl }
       : { avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug, avisadoEm: new Date(), comprovanteUrl: c.comprovanteUrl },

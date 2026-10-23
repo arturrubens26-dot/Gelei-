@@ -19,6 +19,7 @@ import {
   agendaPorDia,
   alertaDaEncomenda,
   conferenciaAte,
+  entradaEmFolgaAgora,
   faixaDaDevolucaoNoCancelamento,
   linkWhatsApp,
   mensagemWhatsApp,
@@ -97,7 +98,7 @@ export type EncomendaAdminDTO = {
   restanteForaDoSite: boolean;
   /** Entrada registrada pela dona (fora do site, ou conferida no app InfinitePay). */
   entradaForaDoSite: boolean;
-  /** A entrada passou de `prazos.entradaAte` mas ainda está na folga de 30 min (ainda pode confirmar). */
+  /** A entrada passou de `prazos.entradaAte` e ainda está nos 30 min de folga (ainda pode confirmar). */
   entradaEmFolga: boolean;
   /** Pagamento em conferência por parcela (aviso, retorno ou divergência; no máximo 24 h). */
   pagamentoEmConferencia: { entrada: boolean; restante: boolean };
@@ -256,7 +257,7 @@ function paraAdminDTO(e: EncomendaCompleta & { user: { nome: string } }, agora: 
     restantePagoEm: e.restantePagoEm?.toISOString() ?? null,
     restanteForaDoSite: e.restanteForaDoSite,
     entradaForaDoSite: e.entradaForaDoSite,
-    entradaEmFolga: efetivo === "AGUARDANDO_ENTRADA" && e.entradaAte !== null && agora.getTime() >= e.entradaAte.getTime(),
+    entradaEmFolga: entradaEmFolgaAgora(efetivo, e.entradaAte, agora),
     pagamentoEmConferencia: { entrada: Boolean(regras.entradaEmConfirmacao), restante: Boolean(regras.restanteEmConfirmacao) },
     devolucao: resumoDaDevolucao(e),
     alerta: alertaDe(e, agora),

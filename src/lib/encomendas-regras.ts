@@ -89,11 +89,17 @@ export const HORAS_PARA_PAGAR_ENTRADA = 24;
  */
 export const FOLGA_DA_ENTRADA_MS = 30 * 60_000;
 /**
- * Quanto tempo, no máximo, um aviso da InfinitePay não conferido ou um pagamento com divergência SEGURA a
- * encomenda (ela não expira, a cliente não desiste e a dona não registra a parcela por fora). Passado isso,
+ * Quanto tempo, no máximo, um candidato de aviso não conferido ou um pagamento com divergência SEGURA a
+ * encomenda (ela não expira, a cliente não desiste e a dona não registra a parcela por fora), contado a
+ * partir do VENCIMENTO do link da cobrança (`expira_em`, um instante que só nós definimos). Passado isso,
  * a conferência deixa de segurar: o aviso e o alerta no painel continuam, e um pagamento que ainda se
  * confirme depois vira devolução pendente se a encomenda já tiver terminado. O retorno do navegador segura
- * 30 min (`JANELA_CONFIRMANDO_MS`) e não se renova depois de `expira_em` do link mais 30 min.
+ * 30 min (`JANELA_CONFIRMANDO_MS`) e só é gravado até 30 min depois do vencimento do link.
+ *
+ * Por que o vencimento do link e não a hora do aviso: o aviso pode ser FORJADO pela cliente (a página de
+ * pagamento da InfinitePay mostra o endereço do aviso com o token da cobrança dela), e cada aviso novo
+ * renovaria uma contagem a partir dele para sempre. O vencimento do link não se renova: o pagamento só
+ * pode ter entrado até ele, então o aviso e o retorno de verdade chegam antes de vencimento + algumas horas.
  */
 export const HORAS_MAX_EM_CONFERENCIA = 24;
 /** Validade de cada link de pagamento (`valid_until`): no máximo 1 hora, como nos pedidos. */
@@ -218,6 +224,17 @@ export function prazoDaEntrada(aprovadaEm: Date, corteEm: Date): Date {
 /** Quando a encomenda aguardando a entrada expira de fato: `entradaAte` mais a folga. */
 export function fimDaFolgaDaEntrada(entradaAte: Date): Date {
   return new Date(entradaAte.getTime() + FOLGA_DA_ENTRADA_MS);
+}
+
+/**
+ * A entrada passou do prazo (`entradaAte`) e ainda está nos 30 min de folga? Só enquanto o status efetivo
+ * segue AGUARDANDO_ENTRADA: depois da folga a encomenda expira (ou fica segurada por uma conferência, que
+ * a tela mostra por `pagamentoEmConferencia`, não como folga).
+ */
+export function entradaEmFolgaAgora(statusEfetivoAgora: StatusEncomenda, entradaAte: Date | null, agora: Date): boolean {
+  if (statusEfetivoAgora !== "AGUARDANDO_ENTRADA" || entradaAte === null) return false;
+  const t = agora.getTime();
+  return t >= entradaAte.getTime() && t < fimDaFolgaDaEntrada(entradaAte).getTime();
 }
 
 /**
@@ -505,27 +522,30 @@ const MAX_EM_CONFERENCIA_MS = HORAS_MAX_EM_CONFERENCIA * 3_600_000;
 
 /**
  * A cobrança está SEGURANDO a encomenda agora? Só enquanto o dinheiro pode estar entrando e a conferência
- * é recente: o aviso da InfinitePay (candidato gravado) e a divergência seguram por no máximo
- * `HORAS_MAX_EM_CONFERENCIA`, contadas do primeiro aviso (`avisadoEm`; sem ele, do vencimento do link);
- * o retorno do navegador segura 30 min. Passado isso a encomenda pode expirar, a cliente pode desistir e a
- * dona pode agir (o alerta no painel continua). Cobrança aprovada ou recusada não segura nada.
+ * é recente: um candidato de aviso gravado (qualquer um, verdadeiro ou forjado) e a divergência seguram
+ * até `HORAS_MAX_EM_CONFERENCIA` depois do VENCIMENTO do link (`expiraEm`: o que a cliente mexe nos
+ * avisos não muda isso); o retorno do navegador segura 30 min. Passado isso a encomenda pode expirar, a
+ * cliente pode desistir e a dona pode agir (o alerta no painel continua). Cobrança aprovada ou recusada não
+ * segura nada.
  */
 export function estadoDaConferencia(c: CobrancaParaConferencia, agora: number = Date.now()): EstadoDaConferencia | null {
   if (c.status !== "PENDENTE" && c.status !== "CANCELADO") return null;
-  const avisadoEm = c.avisoTransacaoNsu && c.avisoSlug ? c.avisadoEm : null;
-  if (cobrancaDivergente(c) && agora - (avisadoEm ?? c.expiraEm).getTime() < MAX_EM_CONFERENCIA_MS) return "DIVERGENTE";
-  if (avisadoEm && agora - avisadoEm.getTime() < MAX_EM_CONFERENCIA_MS) return "CONFIRMANDO";
+  const candidato = Boolean(c.avisoTransacaoNsu && c.avisoSlug && c.avisadoEm);
+  const dentroDoLimite = agora < c.expiraEm.getTime() + MAX_EM_CONFERENCIA_MS;
+  if (cobrancaDivergente(c) && dentroDoLimite) return "DIVERGENTE";
+  if (candidato && dentroDoLimite) return "CONFIRMANDO";
   if (retornoRecente(c.retornoEm, agora)) return "CONFIRMANDO";
   return null;
 }
 
 /** Até quando esta cobrança segura a encomenda (`null`: não está segurando). */
 export function conferenciaAte(c: CobrancaParaConferencia, agora: number = Date.now()): Date | null {
-  if (estadoDaConferencia(c, agora) === null) return null;
-  const avisadoEm = c.avisoTransacaoNsu && c.avisoSlug ? c.avisadoEm : null;
+  const estado = estadoDaConferencia(c, agora);
+  if (estado === null) return null;
+  const candidato = Boolean(c.avisoTransacaoNsu && c.avisoSlug && c.avisadoEm);
   const fins: number[] = [];
-  if (avisadoEm) fins.push(avisadoEm.getTime() + MAX_EM_CONFERENCIA_MS);
-  else if (cobrancaDivergente(c)) fins.push(c.expiraEm.getTime() + MAX_EM_CONFERENCIA_MS);
+  const fimDoAviso = c.expiraEm.getTime() + MAX_EM_CONFERENCIA_MS;
+  if ((cobrancaDivergente(c) || candidato) && agora < fimDoAviso) fins.push(fimDoAviso);
   if (retornoRecente(c.retornoEm, agora)) fins.push(c.retornoEm!.getTime() + JANELA_CONFIRMANDO_MS);
   return fins.length > 0 ? new Date(Math.max(...fins)) : null;
 }
