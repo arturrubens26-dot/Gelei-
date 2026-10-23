@@ -27,30 +27,28 @@ import {
   diaDaLoja,
   diaValido,
   encomendaSchema,
+  etapaDaParcela,
   faixaDeDatas,
   formatarPrazo,
   inicioDoDia,
-  lerReferenciaDaParcela,
   linhaDoTempo,
   linkWhatsApp,
   meioDia,
   mensagemWhatsApp,
   mesmaEncomenda,
-  normalizarTelefone,
   pesoDaEncomenda,
   prazoDaEntrada,
   prazosDaEncomenda,
-  referenciaDaParcela,
   statusEfetivo,
-  telefoneSchema,
   transicaoPermitida,
-  validadeDoPix,
+  validadeDoLink,
   validarDatas,
   valoresDoCancelamento,
   type EncomendaParaRegras,
   type StatusEncomenda,
 } from "@/lib/encomendas-regras";
-import { divergenciaDoPagamento } from "@/lib/mercadopago-regras";
+import { alvoDaCobranca, classificarConferencia, lerConferencia, referenciaDaEncomenda } from "@/lib/infinitepay-regras";
+import { telefoneSchema } from "@/lib/validacao";
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 const MIN = 60_000;
@@ -194,23 +192,25 @@ describe("prazos", () => {
   });
 });
 
-describe("validade do PIX", () => {
+describe("validade do link (valid_until)", () => {
   const agora = new Date("2026-11-11T12:00:00Z");
   it("limite em 2 h: vence em 60 min", () => {
-    assert.equal(validadeDoPix(agora, new Date(agora.getTime() + 2 * HORA))!.getTime(), agora.getTime() + 60 * MIN);
+    assert.equal(validadeDoLink(agora, new Date(agora.getTime() + 2 * HORA))!.getTime(), agora.getTime() + 60 * MIN);
   });
-  it("limite em 40 min: vence no limite", () => {
-    assert.equal(validadeDoPix(agora, new Date(agora.getTime() + 40 * MIN))!.getTime(), agora.getTime() + 40 * MIN);
+  it("limite em 40 min: vence no limite (nunca passa do prazo da entrada)", () => {
+    assert.equal(validadeDoLink(agora, new Date(agora.getTime() + 40 * MIN))!.getTime(), agora.getTime() + 40 * MIN);
   });
-  it("limite em 10 min: vence em 30 min (mínimo do Mercado Pago)", () => {
-    assert.equal(validadeDoPix(agora, new Date(agora.getTime() + 10 * MIN))!.getTime(), agora.getTime() + 30 * MIN);
+  it("limite em 10 min: vence em 10 min (sem o mínimo de 30 min do Mercado Pago)", () => {
+    assert.equal(validadeDoLink(agora, new Date(agora.getTime() + 10 * MIN))!.getTime(), agora.getTime() + 10 * MIN);
   });
-  it("limite já passado (ou agora): null", () => {
-    assert.equal(validadeDoPix(agora, new Date(agora.getTime() - 1)), null);
-    assert.equal(validadeDoPix(agora, agora), null);
+  it("menos de 5 min até o limite, ou já passou: null", () => {
+    assert.equal(validadeDoLink(agora, new Date(agora.getTime() + 5 * MIN))!.getTime(), agora.getTime() + 5 * MIN);
+    assert.equal(validadeDoLink(agora, new Date(agora.getTime() + 5 * MIN - 1)), null);
+    assert.equal(validadeDoLink(agora, new Date(agora.getTime() - 1)), null);
+    assert.equal(validadeDoLink(agora, agora), null);
   });
   it("sem limite (restante): 60 min", () => {
-    assert.equal(validadeDoPix(agora, null)!.getTime(), agora.getTime() + 60 * MIN);
+    assert.equal(validadeDoLink(agora, null)!.getTime(), agora.getTime() + 60 * MIN);
   });
 });
 
@@ -368,7 +368,7 @@ const encomenda = (extra: Partial<EncomendaParaRegras> = {}): EncomendaParaRegra
   responderAte: new Date("2026-11-11T15:00:00Z"),
   entradaAte: null,
   corteEm: new Date("2026-11-12T03:00:00Z"),
-  pixEntradaValidoAte: null,
+  linkEntradaValidoAte: null,
   entradaPagaEm: null,
   restantePagoEm: null,
   valorEntradaCentavos: 6900,
@@ -383,18 +383,26 @@ describe("status efetivo e ações", () => {
     assert.equal(statusEfetivo(e, new Date(e.responderAte.getTime() - 1)), "SOLICITADA");
     assert.equal(statusEfetivo(e, e.responderAte), "EXPIRADA");
   });
-  it("AGUARDANDO_ENTRADA vencida mas com PIX ainda valendo continua aguardando", () => {
+  it("AGUARDANDO_ENTRADA vencida mas com link ainda valendo continua aguardando", () => {
     const entradaAte = new Date("2026-11-12T03:00:00Z");
     const agora = new Date(entradaAte.getTime() + 5 * MIN);
-    const comPix = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte, pixEntradaValidoAte: new Date(entradaAte.getTime() + 20 * MIN) });
-    assert.equal(statusEfetivo(comPix, agora), "AGUARDANDO_ENTRADA");
-    assert.equal(statusEfetivo({ ...comPix, pixEntradaValidoAte: null }, agora), "EXPIRADA");
-    assert.equal(statusEfetivo(comPix, new Date(entradaAte.getTime() + 20 * MIN)), "EXPIRADA");
+    const comLink = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte, linkEntradaValidoAte: new Date(entradaAte.getTime() + 20 * MIN) });
+    assert.equal(statusEfetivo(comLink, agora), "AGUARDANDO_ENTRADA");
+    assert.equal(statusEfetivo({ ...comLink, linkEntradaValidoAte: null }, agora), "EXPIRADA");
+    assert.equal(statusEfetivo(comLink, new Date(entradaAte.getTime() + 20 * MIN)), "EXPIRADA");
   });
-  it("cliente: pagar a entrada só antes de entradaAte; o restante de CONFIRMADA em diante, até quitar", () => {
+  it("AGUARDANDO_ENTRADA vencida com pagamento da entrada em conferência NÃO expira", () => {
+    const entradaAte = new Date("2026-11-12T03:00:00Z");
+    const depois = new Date(entradaAte.getTime() + 3 * HORA);
+    const conferindo = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte, entradaEmConfirmacao: true });
+    assert.equal(statusEfetivo(conferindo, depois), "AGUARDANDO_ENTRADA");
+    assert.equal(statusEfetivo({ ...conferindo, entradaEmConfirmacao: false }, depois), "EXPIRADA");
+  });
+  it("cliente: pagar a entrada até 5 min antes de entradaAte; o restante de CONFIRMADA em diante, até quitar", () => {
     const entradaAte = new Date("2026-11-12T03:00:00Z");
     const aguardando = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte });
-    assert.equal(acoesDaCliente(aguardando, new Date(entradaAte.getTime() - 1)).pagarEntrada, true);
+    assert.equal(acoesDaCliente(aguardando, new Date(entradaAte.getTime() - 5 * MIN)).pagarEntrada, true);
+    assert.equal(acoesDaCliente(aguardando, new Date(entradaAte.getTime() - 5 * MIN + 1)).pagarEntrada, false);
     assert.equal(acoesDaCliente(aguardando, entradaAte).pagarEntrada, false);
     const confirmada = encomenda({ status: "CONFIRMADA", entradaAte, entradaPagaEm: new Date("2026-11-11T13:00:00Z") });
     assert.deepEqual(acoesDaCliente(confirmada, new Date("2026-11-11T14:00:00Z")), {
@@ -433,42 +441,76 @@ describe("status efetivo e ações", () => {
   });
 });
 
-describe("referência da parcela e conferência do pagamento", () => {
-  it("cada parcela tem a sua referência, e ela volta a ser lida", () => {
-    assert.equal(referenciaDaParcela("cm123", "ENTRADA"), "enc-cm123-ENTRADA");
-    assert.equal(referenciaDaParcela("cm123", "RESTANTE"), "enc-cm123-RESTANTE");
-    assert.deepEqual(lerReferenciaDaParcela("enc-cm123-RESTANTE"), { encomendaId: "cm123", parcela: "RESTANTE" });
-    assert.equal(lerReferenciaDaParcela("cm123"), null);
-    assert.equal(lerReferenciaDaParcela(null), null);
+describe("referência da parcela e conferência do pagamento (InfinitePay)", () => {
+  const linha = (extra: Partial<Parameters<typeof alvoDaCobranca>[0]>) => ({
+    orderId: null,
+    encomendaId: "cm123",
+    parcela: "ENTRADA" as "ENTRADA" | "RESTANTE" | null,
+    referenciaExterna: referenciaDaEncomenda("cm123", "ENTRADA", 1),
+    ...extra,
   });
-  it("um PIX do RESTANTE com o mesmo valor NÃO quita a ENTRADA (pedido diferente)", () => {
-    const pagamentoDoRestante = {
-      external_reference: referenciaDaParcela("cm123", "RESTANTE"),
-      transaction_amount: 69,
-      currency_id: "BRL",
-      payment_method_id: "pix",
-    };
-    assert.equal(divergenciaDoPagamento(pagamentoDoRestante, { pedidoId: referenciaDaParcela("cm123", "ENTRADA"), valor: 69 }), "pedido diferente");
-    assert.equal(divergenciaDoPagamento(pagamentoDoRestante, { pedidoId: referenciaDaParcela("cm123", "RESTANTE"), valor: 69 }), null);
-    // Nem quita um pedido comum com o id da encomenda.
-    assert.equal(divergenciaDoPagamento(pagamentoDoRestante, { pedidoId: "cm123", valor: 69 }), "pedido diferente");
+  it("cada parcela tem a sua referência por tentativa: enc-<id>-<PARCELA>-<n>", () => {
+    assert.equal(referenciaDaEncomenda("cm123", "ENTRADA", 1), "enc-cm123-ENTRADA-1");
+    assert.equal(referenciaDaEncomenda("cm123", "RESTANTE", 2), "enc-cm123-RESTANTE-2");
+  });
+  it("o alvo sai da linha conferida contra a referência gravada", () => {
+    assert.deepEqual(alvoDaCobranca(linha({})), { tipo: "encomenda", encomendaId: "cm123", parcela: "ENTRADA" });
+    assert.deepEqual(alvoDaCobranca(linha({ parcela: "RESTANTE", referenciaExterna: "enc-cm123-RESTANTE-3" })), {
+      tipo: "encomenda",
+      encomendaId: "cm123",
+      parcela: "RESTANTE",
+    });
+    assert.deepEqual(alvoDaCobranca({ orderId: "pd9", encomendaId: null, parcela: null, referenciaExterna: "ped-pd9-1" }), { tipo: "pedido", orderId: "pd9" });
+  });
+  it("linha da ENTRADA com a referência do RESTANTE (ou de outra encomenda) não quita nada", () => {
+    assert.equal(alvoDaCobranca(linha({ referenciaExterna: "enc-cm123-RESTANTE-1" })), null);
+    assert.equal(alvoDaCobranca(linha({ parcela: "RESTANTE" })), null);
+    assert.equal(alvoDaCobranca(linha({ referenciaExterna: "enc-outra-ENTRADA-1" })), null);
+    assert.equal(alvoDaCobranca(linha({ referenciaExterna: "ped-cm123-1" })), null);
+  });
+  it("alvo incoerente (o que a CHECK pagamentos_alvo recusa no banco): null", () => {
+    assert.equal(alvoDaCobranca(linha({ orderId: "pd9" })), null, "os dois alvos");
+    assert.equal(alvoDaCobranca(linha({ encomendaId: null, parcela: null, referenciaExterna: "ped-x-1" })), null, "nenhum alvo");
+    assert.equal(alvoDaCobranca(linha({ parcela: null })), null, "encomenda sem parcela");
+    assert.equal(alvoDaCobranca({ orderId: "pd9", encomendaId: null, parcela: "ENTRADA", referenciaExterna: "ped-pd9-1" }), null, "pedido com parcela");
+    assert.equal(alvoDaCobranca({ orderId: "pd9", encomendaId: null, parcela: null, referenciaExterna: "ped-outro-1" }), null, "pedido com referência de outro");
+  });
+  it("o RESTANTE NÃO quita a ENTRADA: transação do link do restante, conferida com a referência da entrada, é recusada", () => {
+    const conferencia = lerConferencia({ success: true, paid: true, amount: 6900, paid_amount: 6900, installments: 1, capture_method: "pix", order_nsu: "enc-cm123-RESTANTE-1" })!;
+    assert.deepEqual(classificarConferencia(conferencia, 6900, "enc-cm123-ENTRADA-1"), { tipo: "INVALIDO" });
+    assert.equal(classificarConferencia(conferencia, 6900, "enc-cm123-RESTANTE-1").tipo, "APROVADO");
+    // Nem quita um pedido comum.
+    assert.deepEqual(classificarConferencia(conferencia, 6900, "ped-cm123-1"), { tipo: "INVALIDO" });
   });
 });
 
-describe("telefone", () => {
-  it("normaliza celular e fixo com DDD", () => {
-    assert.equal(normalizarTelefone("(86) 99999-1234"), "86999991234");
-    assert.equal(normalizarTelefone("86 3222-1234"), "8632221234");
-    assert.equal(normalizarTelefone("+55 86 99999-1234"), "86999991234");
+describe("etapa do pagamento da parcela", () => {
+  const base = { parcela: "ENTRADA" as const, status: "AGUARDANDO_ENTRADA" as StatusEncomenda, paga: false, gatewayAtivo: true, divergente: false, emConfirmacao: false };
+  it("na ordem: paga, encerrada, divergente, desligado, em conferência, não pagável, pagar", () => {
+    assert.equal(etapaDaParcela({ ...base, paga: true, status: "CANCELADA" }), "PAGO");
+    assert.equal(etapaDaParcela({ ...base, status: "EXPIRADA" }), "EXPIRADO");
+    assert.equal(etapaDaParcela({ ...base, status: "RECUSADA" }), "CANCELADO");
+    assert.equal(etapaDaParcela({ ...base, divergente: true, gatewayAtivo: false }), "CONFIRMANDO");
+    assert.equal(etapaDaParcela({ ...base, gatewayAtivo: false, emConfirmacao: true }), "INDISPONIVEL");
+    assert.equal(etapaDaParcela({ ...base, emConfirmacao: true }), "CONFIRMANDO");
+    assert.equal(etapaDaParcela({ ...base, status: "SOLICITADA" }), "INDISPONIVEL");
+    assert.equal(etapaDaParcela(base), "PAGAR");
   });
-  it("recusa DDD com zero, 12 dígitos, celular sem o 9 e letras", () => {
-    for (const t of ["00999991234", "(86) 99999-12345", "869999912345", "86899991234", "86 9999-1234a", "", "0800 123 4567"]) {
-      assert.equal(normalizarTelefone(t), null, t);
-    }
+  it("o restante só é pagável com a encomenda confirmada", () => {
+    const restante = { ...base, parcela: "RESTANTE" as const };
+    assert.equal(etapaDaParcela(restante), "INDISPONIVEL");
+    for (const status of ["CONFIRMADA", "EM_PRODUCAO", "PRONTA"] as const) assert.equal(etapaDaParcela({ ...restante, status }), "PAGAR");
   });
-  it("o schema devolve só os dígitos", () => {
+});
+
+describe("telefone (a mesma regra dos pedidos)", () => {
+  it("o schema devolve só os dígitos, celular ou fixo com DDD", () => {
     assert.equal(telefoneSchema.parse("(86) 99999-1234"), "86999991234");
-    assert.equal(telefoneSchema.safeParse("00999991234").success, false);
+    assert.equal(telefoneSchema.parse("86 3222-1234"), "8632221234");
+    assert.equal(telefoneSchema.parse("+55 86 99999-1234"), "86999991234");
+  });
+  it("recusa DDD com zero, 12 dígitos e celular sem o 9", () => {
+    for (const t of ["00999991234", "(86) 99999-12345", "86899991234", ""]) assert.equal(telefoneSchema.safeParse(t).success, false, t);
   });
 });
 
