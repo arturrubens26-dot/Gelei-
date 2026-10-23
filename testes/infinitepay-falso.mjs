@@ -4,27 +4,37 @@
 // Uso no e2e:    import { iniciarInfinitePayFalsa } from "./infinitepay-falso.mjs"
 //
 // O site aponta para ela com INFINITEPAY_API_URL=http://127.0.0.1:4010 (o código só aceita
-// 127.0.0.1/localhost). Imita o que a documentação diz da API real:
-//   POST /links          (X-Api-Key) → 201 { url, slug }   (com o modo semSlug: só { url })
-//   POST /payment_check  (X-Api-Key) → { success, paid, amount, paid_amount, installments, capture_method }
-//   GET  /pagar/<slug>   página com botões PIX, Cartão 3x com juros, Valor errado e Aviso falso:
-//                        paga, manda o aviso (webhook) e leva o navegador ao redirect_url.
+// 127.0.0.1/localhost). Imita a API real como o ensaio com dinheiro real (2026-10-22) a mostrou:
+//   POST /links          (X-Api-Key) → { url }: sem slug, e o código no caminho do link NÃO é o slug da
+//                        fatura (com o modo comSlug, devolve também o slug, como a documentação sugere)
+//   POST /payment_check  (X-Api-Key) → { success, paid, amount, paid_amount, installments, capture_method },
+//                        sem order_nsu nem moeda. Amarra a transação ao pedido CONSULTADO:
+//                          - transação, slug e order_nsu certos → success:true, paid:true e os valores;
+//                          - slug errado (ou transação inexistente) → success:false;
+//                          - transação e slug certos com OUTRO order_nsu → success:true, paid:false, amount:0,
+//                            paid_amount:0, installments:null, capture_method:null.
+//   GET  /pagar/<código> página com botões PIX, Cartão 3x com juros, Valor errado e Aviso falso:
+//                        paga, manda o aviso (webhook) e leva o navegador ao redirect_url, com
+//                        capture_method, transaction_id (= transaction_nsu, UUID), transaction_nsu, slug,
+//                        order_nsu e receipt_url.
 // Controle dos testes (não existe na API real):
-//   POST /__teste/pagar  { slug, metodo?, parcelas?, valorErrado?, aviso? } → { transaction_nsu, slug, order_nsu, retorno, aviso }
-//   POST /__teste/modo   { falharConferencia?: 0|500|"tempo", falharLinks?: 0|500, semSlug?, naoAmarraPedido?,
-//                          semOrderNsu?, conferencia404? }
-//   (por padrão o payment_check devolve também o order_nsu da transação, amarrando-a ao pedido)
+//   POST /__teste/pagar  { codigo, metodo?, parcelas?, valorErrado?, aviso? } → { transaction_nsu, slug, order_nsu, retorno, aviso }
+//   POST /__teste/modo   { falharConferencia?: 0|500|"tempo", falharLinks?: 0|500, comSlug?, naoAmarraPedido?,
+//                          conferencia404? }   (naoAmarraPedido: uma API hipotética que NÃO amarra a transação)
 //   GET  /__teste/estado → links e transações
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 const JUROS_POR_PARCELA = 0.03; // só para o "cartão com juros" ficar maior que o valor do link
 
+export const MODO_PADRAO = Object.freeze({ falharConferencia: 0, falharLinks: 0, comSlug: false, naoAmarraPedido: false, conferencia404: false });
+
 export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", silencioso = false } = {}) {
-  const links = new Map(); // slug → { slug, order_nsu, amount, redirect_url, webhook_url, valid_until, single_payment, pagoPor }
+  // código do link → { codigo, slug, order_nsu, amount, redirect_url, webhook_url, valid_until, single_payment, pagoPor }
+  const links = new Map();
   const transacoes = new Map(); // transaction_nsu → { slug, order_nsu, amount, paid_amount, installments, capture_method }
-  const modo = { falharConferencia: 0, falharLinks: 0, semSlug: false, naoAmarraPedido: false, semOrderNsu: false, conferencia404: false };
+  const modo = { ...MODO_PADRAO };
   const chamadas = { links: 0, payment_check: 0 };
   const log = (...a) => silencioso || console.log("[infinitepay-falsa]", ...a);
 
@@ -51,20 +61,22 @@ export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", sile
   };
 
   /** Paga o link: cria a transação, manda o aviso (se pedido) e devolve a URL de retorno. */
-  async function pagar({ slug, metodo = "pix", parcelas, valorErrado = false, aviso = true, avisoFalso = false }) {
-    const link = links.get(slug);
+  async function pagar({ codigo, metodo = "pix", parcelas, valorErrado = false, aviso = true, avisoFalso = false }) {
+    const link = links.get(codigo);
     if (!link) return { erro: "link não existe", status: 404 };
     if (link.single_payment && link.pagoPor) return { erro: "link já pago", status: 409 };
     if (link.valid_until && Date.parse(link.valid_until) < Date.now()) return { erro: "link vencido", status: 410 };
+    const slug = link.slug;
     const nParcelas = metodo === "credit_card" ? Number(parcelas ?? 1) : 1;
     const amount = valorErrado ? link.amount - 100 : link.amount;
     const paid_amount = nParcelas > 1 ? Math.round(amount * (1 + JUROS_POR_PARCELA * nParcelas)) : amount;
-    const transaction_nsu = id("tx_");
+    const transaction_nsu = randomUUID(); // a real usa UUID
     if (!avisoFalso) {
       transacoes.set(transaction_nsu, { slug, order_nsu: link.order_nsu, amount, paid_amount, installments: nParcelas, capture_method: metodo });
       link.pagoPor = transaction_nsu;
     }
     const receipt_url = `${origem()}/recibo/${transaction_nsu}`;
+    // O formato do aviso (webhook) ainda não foi visto no ensaio: este segue a documentação.
     const corpoAviso = {
       invoice_slug: slug,
       amount,
@@ -92,7 +104,8 @@ export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", sile
       log(`aviso ${link.order_nsu} → ${resultadoAviso.status}`);
     }
     const retorno = new URL(link.redirect_url);
-    for (const [k, v] of Object.entries({ receipt_url, order_nsu: link.order_nsu, slug, capture_method: metodo, transaction_nsu })) {
+    const parametros = { capture_method: metodo, transaction_id: transaction_nsu, transaction_nsu, slug, order_nsu: link.order_nsu, receipt_url };
+    for (const [k, v] of Object.entries(parametros)) {
       retorno.searchParams.set(k, v);
     }
     return { status: 200, transaction_nsu, slug, order_nsu: link.order_nsu, retorno: retorno.toString(), aviso: resultadoAviso, corpoAviso };
@@ -100,7 +113,7 @@ export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", sile
 
   function pagina(link) {
     const botao = (rotulo, campos) =>
-      `<form method="post" action="/pagar/${link.slug}">${Object.entries(campos)
+      `<form method="post" action="/pagar/${link.codigo}">${Object.entries(campos)
         .map(([k, v]) => `<input type="hidden" name="${k}" value="${v}">`)
         .join("")}<button>${rotulo}</button></form>`;
     return `<!doctype html><meta charset="utf-8"><title>InfinitePay falsa</title>
@@ -131,8 +144,10 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
         if (!b.items.every((i) => Number.isInteger(i.price) && i.price > 0 && Number.isInteger(i.quantity) && i.quantity > 0)) {
           return json(res, 422, { message: "price/quantity inválidos" });
         }
-        const slug = id("fat_");
-        links.set(slug, {
+        const codigo = id("lnk_"); // vai no caminho do link
+        const slug = id("fat_"); // o slug da fatura: só aparece no retorno e no aviso
+        links.set(codigo, {
+          codigo,
           slug,
           order_nsu: b.order_nsu,
           amount,
@@ -144,9 +159,9 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
           handle: b.handle,
           pagoPor: null,
         });
-        log(`link ${b.order_nsu} R$ ${(amount / 100).toFixed(2)} → ${slug}`);
-        const urlPagar = `${origem()}/pagar/${slug}`;
-        return json(res, 201, modo.semSlug ? { url: urlPagar } : { url: urlPagar, slug });
+        log(`link ${b.order_nsu} R$ ${(amount / 100).toFixed(2)} → ${codigo} (fatura ${slug})`);
+        const urlPagar = `${origem()}/pagar/${codigo}`;
+        return json(res, 200, modo.comSlug ? { url: urlPagar, slug } : { url: urlPagar });
       }
 
       if (req.method === "POST" && caminho === "/payment_check") {
@@ -160,18 +175,23 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
         const b = await lerCorpo(req);
         if (modo.conferencia404) return json(res, 404, { message: "transaction not found" });
         const t = b && transacoes.get(b.transaction_nsu);
-        const confere = t && (modo.naoAmarraPedido || (t.order_nsu === b.order_nsu && t.slug === b.slug));
-        if (!confere) return json(res, 200, { success: false, paid: false });
-        return json(res, 200, {
+        const pago = (t) => ({
           success: true,
           paid: true,
           amount: t.amount,
           paid_amount: t.paid_amount,
           installments: t.installments,
           capture_method: t.capture_method,
-          // A API real pode não trazer: com semOrderNsu, a resposta não amarra a transação ao pedido.
-          ...(modo.semOrderNsu ? {} : { order_nsu: t.order_nsu }),
         });
+        // API hipotética que não amarra: qualquer transação existente responde "pago".
+        if (t && modo.naoAmarraPedido) return json(res, 200, pago(t));
+        // Slug errado (ou transação inexistente): success=false (ensaio: order_nsu certo e slug errado).
+        if (!t || t.slug !== b.slug) return json(res, 200, { success: false });
+        // Transação e slug certos, com OUTRO order_nsu: "não pago", com tudo zerado (ensaio, passo 6).
+        if (t.order_nsu !== b.order_nsu) {
+          return json(res, 200, { success: true, paid: false, amount: 0, paid_amount: 0, installments: null, capture_method: null });
+        }
+        return json(res, 200, pago(t));
       }
 
       const pagarMatch = /^\/pagar\/([A-Za-z0-9_-]+)$/.exec(caminho);
@@ -184,7 +204,7 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
       if (pagarMatch && req.method === "POST") {
         const b = (await lerCorpo(req)) ?? {};
         const r = await pagar({
-          slug: pagarMatch[1],
+          codigo: pagarMatch[1],
           metodo: b.metodo,
           parcelas: b.parcelas,
           valorErrado: Boolean(b.valorErrado),

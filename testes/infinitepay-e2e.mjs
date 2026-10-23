@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { iniciarInfinitePayFalsa } from "./infinitepay-falso.mjs";
+import { MODO_PADRAO, iniciarInfinitePayFalsa } from "./infinitepay-falso.mjs";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.E2E_BASE ?? "http://localhost:3100";
@@ -113,7 +113,8 @@ async function novoPedido(c) {
   return r.json;
 }
 
-const slugDe = (checkoutUrl) => new URL(checkoutUrl).pathname.split("/").pop();
+// O código no caminho do link (não é o slug da fatura, como na API real).
+const codigoDe = (checkoutUrl) => new URL(checkoutUrl).pathname.split("/").pop();
 const cobrancas = (pedidoId) => sql("select * from pagamentos where order_id = $1 order by criado_em, id", [pedidoId]);
 const statusPedido = async (pedidoId) => (await sql("select status from orders where id = $1", [pedidoId]))[0]?.status;
 // O site usa INFINITEPAY_WEBHOOK_SECRET (se definida) ou o SESSION_SECRET: rode este script com o
@@ -128,12 +129,7 @@ async function main() {
   await banco.connect();
   const falsa = await iniciarInfinitePayFalsa({ porta: Number(process.env.E2E_PORTA_FALSA ?? 4010), silencioso: true });
   const pagar = (corpo) => falsa.pagar(corpo);
-  const modo = (m) =>
-    Object.assign(
-      falsa.modo,
-      { falharConferencia: 0, falharLinks: 0, semSlug: false, naoAmarraPedido: false, semOrderNsu: false, conferencia404: false },
-      m,
-    );
+  const modo = (m) => Object.assign(falsa.modo, MODO_PADRAO, m);
 
   try {
     const produtos = await cliente().req("GET", "/api/products");
@@ -150,10 +146,10 @@ async function main() {
     const p1 = await novoPedido(a);
     confere(p1.pagamento?.gateway === "infinitepay" && p1.pagamento.checkoutUrl?.startsWith(falsa.origem), "pedido abre o link", p1.pagamento);
     confere(p1.pagamento?.status === "PENDENTE" && p1.pagamento.metodo === null, "cobrança pendente, sem método");
-    const link1 = falsa.links.get(slugDe(p1.pagamento.checkoutUrl));
+    const link1 = falsa.links.get(codigoDe(p1.pagamento.checkoutUrl));
     confere(link1.amount === Math.round(p1.pedido.total * 100) && link1.single_payment && /-03:00$/.test(link1.valid_until), "link: valor, single_payment e validade com fuso", link1);
     confere(link1.webhook_url.startsWith(`${BASE}/api/webhooks/infinitepay/ped-${p1.pedido.id}-1/`), "webhook com referência e token no caminho");
-    const pg1 = await pagar({ slug: link1.slug, metodo: "pix" });
+    const pg1 = await pagar({ codigo: link1.codigo, metodo: "pix" });
     confere(pg1.aviso?.status === 200 && pg1.aviso.corpo?.resultado === "aprovado", "aviso → 200 aprovado", pg1.aviso);
     const s1 = await a.req("GET", `/api/orders/${p1.pedido.id}/pagamento`);
     confere(s1.json?.etapa === "PAGO" && s1.json.pedidoStatus === "PAGO", "etapa PAGO", s1.json);
@@ -168,16 +164,38 @@ async function main() {
 
     console.log("2. Cartão 3x com juros confirmado pelo retorno (sem aviso)");
     const p2 = await novoPedido(a);
-    const pg2 = await pagar({ slug: slugDe(p2.pagamento.checkoutUrl), metodo: "credit_card", parcelas: 3, aviso: false });
+    const pg2 = await pagar({ codigo: codigoDe(p2.pagamento.checkoutUrl), metodo: "credit_card", parcelas: 3, aviso: false });
     const ret = new URL(pg2.retorno);
     const r2 = await a.req("GET", `/pagamento/retorno${ret.search}`);
     confere(r2.status === 303 && r2.local === `${BASE}/order-confirmation/${p2.pedido.id}?retorno=1`, "retorno → 303 para a confirmação limpa", r2);
     const s2 = await a.req("GET", `/api/orders/${p2.pedido.id}/pagamento`);
     confere(s2.json?.etapa === "PAGO" && s2.json.cobranca.parcelas === 3 && s2.json.cobranca.valorPago > s2.json.cobranca.valor, "PAGO com valor pago maior (juros)", s2.json?.cobranca);
 
+    console.log("2b. PIX confirmado só pelo retorno (o aviso nunca chega), no formato real");
+    const p2b = await novoPedido(a);
+    const link2b = falsa.links.get(codigoDe(p2b.pagamento.checkoutUrl));
+    confere(link2b.codigo !== link2b.slug && (await cobrancas(p2b.pedido.id))[0].fatura_slug === null, "link sem slug na criação (como a API real)");
+    const pg2b = await pagar({ codigo: link2b.codigo, metodo: "pix", aviso: false });
+    const q2b = new URL(pg2b.retorno).searchParams;
+    confere(q2b.get("transaction_id") === pg2b.transaction_nsu && /^[0-9a-f-]{36}$/.test(pg2b.transaction_nsu), "retorno com transaction_id = transaction_nsu (UUID)", Object.fromEntries(q2b));
+    const consultas2b = falsa.chamadas.payment_check;
+    const r2b = await a.req("GET", `/pagamento/retorno?${q2b}`);
+    confere(r2b.status === 303 && r2b.local === `${BASE}/order-confirmation/${p2b.pedido.id}?retorno=1`, "retorno → 303 sem a transação na URL", r2b);
+    confere((await statusPedido(p2b.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultas2b + 1, "o retorno sozinho marca PAGO (uma consulta)");
+    const [c2b] = await cobrancas(p2b.pedido.id);
+    confere(
+      c2b.status === "APROVADO" && c2b.transacao_nsu === pg2b.transaction_nsu && c2b.fatura_slug === link2b.slug && c2b.metodo === "pix" && c2b.retorno_em !== null && c2b.aviso_transacao_nsu === null,
+      "banco: transação, slug da fatura, método e retorno_em gravados",
+      c2b,
+    );
+    const ficha2b = await admin.req("GET", `/api/admin/orders/${p2b.pedido.id}`);
+    confere(ficha2b.json?.pedido?.status === "PAGO" && (ficha2b.json.pedido.pagamento?.alerta ?? null) === null, "painel: PAGO, sem alerta", ficha2b.json?.pedido?.pagamento);
+    const avisoTarde2b = await avisar(link2b.webhook_url, pg2b.corpoAviso);
+    confere(avisoTarde2b.status === 200 && (await avisoTarde2b.json()).resultado === "ja-aprovada", "o aviso que chega depois → 200 ja-aprovada");
+
     console.log("3. Aviso sem token, token errado e aviso falso");
     const p3 = await novoPedido(a);
-    const link3 = falsa.links.get(slugDe(p3.pagamento.checkoutUrl));
+    const link3 = falsa.links.get(codigoDe(p3.pagamento.checkoutUrl));
     const ref3 = `ped-${p3.pedido.id}-1`;
     const semToken = await fetch(`${BASE}/api/webhooks/infinitepay/${ref3}`, { method: "POST", body: "{}" });
     confere(semToken.status === 404 || semToken.status === 405, "sem token no caminho → rota não existe", semToken.status);
@@ -192,7 +210,7 @@ async function main() {
     });
     confere(outroToken.status === 401, "token de outra cobrança → 401", outroToken.status);
     confere((await cobrancas(p3.pedido.id))[0].aviso_transacao_nsu === null, "banco: nada gravado");
-    const falso = await pagar({ slug: link3.slug, metodo: "pix", avisoFalso: true });
+    const falso = await pagar({ codigo: link3.codigo, metodo: "pix", avisoFalso: true });
     confere(falso.aviso?.status === 200 && falso.aviso.corpo?.resultado === "invalido", "aviso com transação inexistente → 200 invalido", falso.aviso);
     const [c3] = await cobrancas(p3.pedido.id);
     confere((await statusPedido(p3.pedido.id)) === "PENDENTE" && c3.aviso_transacao_nsu === null && c3.status === "PENDENTE", "continua PENDENTE e o candidato foi apagado", c3);
@@ -204,7 +222,7 @@ async function main() {
 
     console.log("4. Valor diferente");
     await esperar(3_100); // o aviso anterior reservou a vez desta cobrança por 3 s
-    const errado = await pagar({ slug: link3.slug, metodo: "pix", valorErrado: true });
+    const errado = await pagar({ codigo: link3.codigo, metodo: "pix", valorErrado: true });
     confere(errado.aviso?.status === 200 && errado.aviso.corpo?.resultado === "divergente", "aviso → 200 divergente", errado.aviso);
     const [c3b] = await cobrancas(p3.pedido.id);
     confere((await statusPedido(p3.pedido.id)) === "PENDENTE" && c3b.status_gateway === "divergente:valor" && c3b.transacao_nsu === null, "NÃO vira PAGO; marca divergente:valor", c3b);
@@ -226,7 +244,7 @@ async function main() {
     const idorPost = await b.req("POST", `/api/orders/${p3.pedido.id}/pagamento`, { corpo: {} });
     confere(idorGet.status === 404 && idorPost.status === 404, "outra conta → 404 no GET e no POST", [idorGet.status, idorPost.status]);
     const p5 = await novoPedido(a);
-    const link5 = falsa.links.get(slugDe(p5.pagamento.checkoutUrl));
+    const link5 = falsa.links.get(codigoDe(p5.pagamento.checkoutUrl));
     const q5 = new URLSearchParams({ order_nsu: link5.order_nsu, transaction_nsu: "tx_forjada", slug: link5.slug });
     const idorRet = await b.req("GET", `/pagamento/retorno?${q5}`);
     confere(idorRet.status === 303 && idorRet.local === `${BASE}/meus-pedidos`, "retorno de outra conta → /meus-pedidos", idorRet);
@@ -244,7 +262,7 @@ async function main() {
     console.log("6. InfinitePay fora do ar: 400 para repetir, tela em CONFIRMANDO até voltar");
     const p6 = await novoPedido(a);
     modo({ falharConferencia: 500 });
-    const pg6 = await pagar({ slug: slugDe(p6.pagamento.checkoutUrl), metodo: "pix" });
+    const pg6 = await pagar({ codigo: codigoDe(p6.pagamento.checkoutUrl), metodo: "pix" });
     confere(pg6.aviso?.status === 400 && pg6.aviso.corpo?.resultado === "transitorio", "aviso → 400 transitorio", pg6.aviso);
     const s6 = await a.req("GET", `/api/orders/${p6.pedido.id}/pagamento`);
     confere(s6.json?.etapa === "CONFIRMANDO", "etapa CONFIRMANDO", s6.json?.etapa);
@@ -257,21 +275,21 @@ async function main() {
     const p7 = await novoPedido(a);
     modo({ falharConferencia: "tempo" });
     const inicio = Date.now();
-    const pg7 = await pagar({ slug: slugDe(p7.pagamento.checkoutUrl), metodo: "pix" });
+    const pg7 = await pagar({ codigo: codigoDe(p7.pagamento.checkoutUrl), metodo: "pix" });
     confere(pg7.aviso?.status === 400 && Date.now() - inicio < 9_000, "aviso → 400 em ~5 s", { aviso: pg7.aviso, ms: Date.now() - inicio });
     modo({});
     await esperar(3_100);
-    const link7 = falsa.links.get(slugDe(p7.pagamento.checkoutUrl));
+    const link7 = falsa.links.get(codigoDe(p7.pagamento.checkoutUrl));
     const repete = await fetch(link7.webhook_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pg7.corpoAviso) });
     confere(repete.status === 200 && (await statusPedido(p7.pedido.id)) === "PAGO", "repetição do aviso → PAGO", repete.status);
 
-    console.log("8. A mesma transação para duas cobranças (API que não amarra pedido, link sem slug)");
-    modo({ semSlug: true, naoAmarraPedido: true, semOrderNsu: true });
+    console.log("8. A mesma transação para duas cobranças (API hipotética que não amarra o pedido)");
+    modo({ naoAmarraPedido: true });
     const p8a = await novoPedido(a);
     const p8b = await novoPedido(a);
-    const pg8 = await pagar({ slug: slugDe(p8a.pagamento.checkoutUrl), metodo: "pix" });
+    const pg8 = await pagar({ codigo: codigoDe(p8a.pagamento.checkoutUrl), metodo: "pix" });
     confere(pg8.aviso?.corpo?.resultado === "aprovado", "primeira cobrança aprovada", pg8.aviso);
-    const link8b = falsa.links.get(slugDe(p8b.pagamento.checkoutUrl));
+    const link8b = falsa.links.get(codigoDe(p8b.pagamento.checkoutUrl));
     const reuso = await fetch(link8b.webhook_url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -288,7 +306,7 @@ async function main() {
     const cancela = await admin.req("PATCH", `/api/admin/orders/${p9.pedido.id}`, { corpo: { status: "CANCELADO" } });
     confere(cancela.status === 200 && /até 1 hora/.test(cancela.json?.aviso ?? ""), "cancelar avisa que o link ainda vale", cancela.json);
     confere((await cobrancas(p9.pedido.id))[0].status === "CANCELADO", "cobrança encerrada no banco");
-    const pg9 = await pagar({ slug: slugDe(p9.pagamento.checkoutUrl), metodo: "pix" });
+    const pg9 = await pagar({ codigo: codigoDe(p9.pagamento.checkoutUrl), metodo: "pix" });
     confere(pg9.aviso?.corpo?.resultado === "aprovado" && (await statusPedido(p9.pedido.id)) === "CANCELADO", "pago depois: cobrança aprovada, pedido continua CANCELADO", pg9.aviso);
     const ficha9 = await admin.req("GET", `/api/admin/orders/${p9.pedido.id}`);
     confere(ficha9.json?.pedido?.pagamento?.alerta === "PAGO_APOS_CANCELAMENTO", "ficha: PAGO_APOS_CANCELAMENTO", ficha9.json?.pedido?.pagamento);
@@ -302,8 +320,8 @@ async function main() {
     confere(novo.status === 200 && novo.json?.cobranca?.checkoutUrl && novo.json.cobranca.checkoutUrl !== p10.pagamento.checkoutUrl, "link vencendo dá lugar a outro", novo.json);
     const c10 = await cobrancas(p10.pedido.id);
     confere(c10.length === 2 && c10[0].status === "CANCELADO" && c10[1].referencia_externa === `ped-${p10.pedido.id}-2`, "o antigo vira CANCELADO; o novo é ped-<id>-2");
-    await pagar({ slug: slugDe(p10.pagamento.checkoutUrl), metodo: "pix" });
-    await pagar({ slug: slugDe(novo.json.cobranca.checkoutUrl), metodo: "credit_card", parcelas: 2 });
+    await pagar({ codigo: codigoDe(p10.pagamento.checkoutUrl), metodo: "pix" });
+    await pagar({ codigo: codigoDe(novo.json.cobranca.checkoutUrl), metodo: "credit_card", parcelas: 2 });
     const ficha10 = await admin.req("GET", `/api/admin/orders/${p10.pedido.id}`);
     confere(ficha10.json?.pedido?.pagamento?.alerta === "PAGO_EM_DOBRO" && ficha10.json.pedido.pagamento.metodo === "pix", "ficha: PAGO_EM_DOBRO com o método do primeiro", ficha10.json?.pedido?.pagamento);
     const lista = await admin.req("GET", "/api/admin/orders?status=PAGO");
@@ -336,57 +354,78 @@ async function main() {
     confere((await cobrancas(p12.pedido.id)).length === 1, "banco: uma cobrança só");
 
     console.log("14. Ataque: a cliente apresenta no retorno a transação de OUTRO link da loja, de mesmo valor");
-    // A API não amarra a transação ao pedido e a resposta não traz order_nsu: só o aviso pode confirmar.
-    modo({ naoAmarraPedido: true, semOrderNsu: true });
+    // O servidor consulta com o order_nsu do NOSSO banco (nunca o da query), e a API amarra a transação
+    // ao pedido consultado: transação de outro pedido → paid=false; slug errado → success=false.
     const alvo = await novoPedido(a); // o pedido que ela quer "pagar" de graça
-    const outro = await novoPedido(b); // outro link da loja, de mesmo valor, que ela pagou de verdade
-    const pgOutro = await pagar({ slug: slugDe(outro.pagamento.checkoutUrl), metodo: "pix", aviso: false });
-    const linkAlvo = falsa.links.get(slugDe(alvo.pagamento.checkoutUrl));
+    const outro = await novoPedido(b); // outro link da loja, de mesmo valor, pago de verdade
+    const pgOutro = await pagar({ codigo: codigoDe(outro.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    const linkAlvo = falsa.links.get(codigoDe(alvo.pagamento.checkoutUrl));
     const tentativas = [
-      { slug: linkAlvo.slug, rotulo: "com o slug do pedido" },
-      { slug: pgOutro.slug, rotulo: "com o slug do outro link" },
+      { slug: linkAlvo.slug, rotulo: "com o slug da fatura do pedido (success=false)" },
+      { slug: pgOutro.slug, rotulo: "com o slug do outro link (paid=false)" },
     ];
     for (const t of tentativas) {
+      const antes = falsa.chamadas.payment_check;
       const q = new URLSearchParams({ order_nsu: linkAlvo.order_nsu, transaction_nsu: pgOutro.transaction_nsu, slug: t.slug });
       const r = await a.req("GET", `/pagamento/retorno?${q}`);
+      confere(
+        r.status === 303 && (await statusPedido(alvo.pedido.id)) === "PENDENTE" && falsa.chamadas.payment_check === antes + 1,
+        `retorno ${t.rotulo}: consultado e recusado, continua PENDENTE`,
+        { r, consultas: falsa.chamadas.payment_check - antes },
+      );
       await esperar(8_300); // passa o intervalo entre consultas, para a próxima tentativa consultar de verdade
-      confere(r.status === 303 && (await statusPedido(alvo.pedido.id)) === "PENDENTE", `retorno ${t.rotulo}: continua PENDENTE`, r);
     }
     const [cAlvo] = await cobrancas(alvo.pedido.id);
-    confere(cAlvo.aviso_transacao_nsu === null && cAlvo.transacao_nsu === null && cAlvo.retorno_em !== null, "banco: a transação da cliente não foi gravada (só retorno_em)", cAlvo);
+    confere(
+      cAlvo.aviso_transacao_nsu === null && cAlvo.transacao_nsu === null && cAlvo.retorno_em !== null && cAlvo.status_gateway === "aberto",
+      "banco: nada gravado além do retorno_em (nem marca de não pago ou divergência)",
+      cAlvo,
+    );
+    const fichaAlvo = await admin.req("GET", `/api/admin/orders/${alvo.pedido.id}`);
+    confere((fichaAlvo.json?.pedido?.pagamento?.alerta ?? null) === null, "painel: nenhum alerta falso", fichaAlvo.json?.pedido?.pagamento);
     const sAlvo = await a.req("GET", `/api/orders/${alvo.pedido.id}/pagamento`);
     confere(sAlvo.json?.etapa === "CONFIRMANDO" && sAlvo.json.pedidoStatus === "PENDENTE", "tela em CONFIRMANDO pelo retorno, sem confirmar nada", sAlvo.json);
-    // O pagamento de verdade, pelo aviso, continua funcionando.
-    const pgAlvo = await pagar({ slug: linkAlvo.slug, metodo: "pix" });
+    // A transação do outro link continua valendo para o pedido dela, e o pagamento de verdade do alvo também.
+    await b.req("GET", `/pagamento/retorno${new URL(pgOutro.retorno).search}`);
+    confere((await statusPedido(outro.pedido.id)) === "PAGO", "o outro pedido confirma pelo próprio retorno");
+    const pgAlvo = await pagar({ codigo: linkAlvo.codigo, metodo: "pix" });
     confere(pgAlvo.aviso?.corpo?.resultado === "aprovado" && (await statusPedido(alvo.pedido.id)) === "PAGO", "o aviso de verdade confirma", pgAlvo.aviso);
-    // Link sem slug (fatura não amarrada): a transação do retorno nem é consultada.
-    modo({ naoAmarraPedido: true, semOrderNsu: true, semSlug: true });
+    // Com o slug da fatura gravado na criação do link, o retorno com outro slug nem é consultado.
+    modo({ comSlug: true });
     const alvo2 = await novoPedido(a);
-    const outro2 = await novoPedido(b);
-    const pgOutro2 = await pagar({ slug: slugDe(outro2.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    const linkAlvo2 = falsa.links.get(codigoDe(alvo2.pagamento.checkoutUrl));
+    confere((await cobrancas(alvo2.pedido.id))[0].fatura_slug === linkAlvo2.slug, "com slug na resposta de /links, a fatura fica gravada");
+    const pgAlvo2 = await pagar({ codigo: linkAlvo2.codigo, metodo: "pix", aviso: false });
+    const q2 = new URL(pgAlvo2.retorno).searchParams;
+    q2.set("slug", "fat_outra");
     const consultasAntes = falsa.chamadas.payment_check;
-    const q2 = new URLSearchParams({ order_nsu: `ped-${alvo2.pedido.id}-1`, transaction_nsu: pgOutro2.transaction_nsu, slug: pgOutro2.slug });
     await a.req("GET", `/pagamento/retorno?${q2}`);
-    confere((await statusPedido(alvo2.pedido.id)) === "PENDENTE" && falsa.chamadas.payment_check === consultasAntes, "sem slug na fatura: retorno nem consulta", falsa.chamadas.payment_check - consultasAntes);
+    confere(
+      (await statusPedido(alvo2.pedido.id)) === "PENDENTE" && falsa.chamadas.payment_check === consultasAntes,
+      "slug diferente da fatura gravada: o retorno nem consulta",
+      falsa.chamadas.payment_check - consultasAntes,
+    );
+    await a.req("GET", `/pagamento/retorno${new URL(pgAlvo2.retorno).search}`);
+    confere((await statusPedido(alvo2.pedido.id)) === "PAGO", "com o slug da fatura, o retorno confirma");
     modo({});
 
     console.log("15. payment_check responde 404 logo depois do pagamento");
     const p15 = await novoPedido(a);
     modo({ conferencia404: true });
-    const pg15 = await pagar({ slug: slugDe(p15.pagamento.checkoutUrl), metodo: "pix" });
+    const pg15 = await pagar({ codigo: codigoDe(p15.pagamento.checkoutUrl), metodo: "pix" });
     confere(pg15.aviso?.status === 400 && pg15.aviso.corpo?.resultado === "transitorio", "404 na janela → aviso 400 (a InfinitePay repete)", pg15.aviso);
     confere((await cobrancas(p15.pedido.id))[0].aviso_transacao_nsu === pg15.transaction_nsu, "o candidato continua gravado");
     modo({});
     await esperar(3_100);
-    const link15 = falsa.links.get(slugDe(p15.pagamento.checkoutUrl));
+    const link15 = falsa.links.get(codigoDe(p15.pagamento.checkoutUrl));
     const repete15 = await fetch(link15.webhook_url, { method: "POST", body: JSON.stringify(pg15.corpoAviso) });
     confere(repete15.status === 200 && (await statusPedido(p15.pedido.id)) === "PAGO", "a repetição confirma", repete15.status);
     // Depois da janela de 30 min, o 404 descarta o candidato.
     const p15b = await novoPedido(a);
     modo({ conferencia404: true });
-    const pg15b = await pagar({ slug: slugDe(p15b.pagamento.checkoutUrl), metodo: "pix" });
+    const pg15b = await pagar({ codigo: codigoDe(p15b.pagamento.checkoutUrl), metodo: "pix" });
     await sql("update pagamentos set avisado_em = now() - interval '31 minutes', consultado_em = null where order_id = $1", [p15b.pedido.id]);
-    const link15b = falsa.links.get(slugDe(p15b.pagamento.checkoutUrl));
+    const link15b = falsa.links.get(codigoDe(p15b.pagamento.checkoutUrl));
     const tarde = await fetch(link15b.webhook_url, { method: "POST", body: JSON.stringify(pg15b.corpoAviso) });
     const [c15b] = await cobrancas(p15b.pedido.id);
     confere(tarde.status === 200 && c15b.aviso_transacao_nsu === null && c15b.status_gateway === "invalido:http-404", "404 depois da janela → 200 e candidato descartado", c15b);
@@ -398,7 +437,7 @@ async function main() {
     const novo16 = await a.req("POST", `/api/orders/${p16.pedido.id}/pagamento`, { corpo: {} });
     confere(novo16.status === 200 && (await cobrancas(p16.pedido.id)).length === 2, "abriu um segundo link", novo16.status);
     modo({ falharConferencia: 500 });
-    await pagar({ slug: slugDe(p16.pagamento.checkoutUrl), metodo: "pix" }); // paga o PRIMEIRO link (ainda vale na InfinitePay)
+    await pagar({ codigo: codigoDe(p16.pagamento.checkoutUrl), metodo: "pix" }); // paga o PRIMEIRO link (ainda vale na InfinitePay)
     const s16 = await a.req("GET", `/api/orders/${p16.pedido.id}/pagamento`);
     confere(s16.json?.etapa === "CONFIRMANDO", "etapa CONFIRMANDO pela cobrança mais antiga com candidato", s16.json?.etapa);
     const bloqueado16 = await a.req("POST", `/api/orders/${p16.pedido.id}/pagamento`, { corpo: {} });
@@ -411,7 +450,7 @@ async function main() {
     console.log("17. Aviso que não fecha há mais de 30 min: continua CONFIRMANDO e o painel alerta; marcar pago à mão");
     const p17 = await novoPedido(a);
     modo({ falharConferencia: 401 });
-    const pg17 = await pagar({ slug: slugDe(p17.pagamento.checkoutUrl), metodo: "pix" });
+    const pg17 = await pagar({ codigo: codigoDe(p17.pagamento.checkoutUrl), metodo: "pix" });
     confere(pg17.aviso?.status === 400, "chave recusada (401) → aviso 400", pg17.aviso);
     await sql("update pagamentos set avisado_em = now() - interval '40 minutes', consultado_em = null where order_id = $1", [p17.pedido.id]);
     const s17 = await a.req("GET", `/api/orders/${p17.pedido.id}/pagamento`);
@@ -425,18 +464,23 @@ async function main() {
     confere((await cobrancas(p17.pedido.id)).every((c) => c.status !== "PENDENTE"), "marcar PAGO à mão encerra os links abertos");
     modo({});
     await esperar(3_100); // as reconferências acima reservaram a vez desta cobrança
-    const link17 = falsa.links.get(slugDe(p17.pagamento.checkoutUrl));
+    const link17 = falsa.links.get(codigoDe(p17.pagamento.checkoutUrl));
     const tarde17 = await avisar(link17.webhook_url, pg17.corpoAviso);
     const ficha17b = await admin.req("GET", `/api/admin/orders/${p17.pedido.id}`);
     confere(tarde17.status === 200 && ficha17b.json?.pedido?.pagamento?.alerta === "CONFIRMADO_APOS_BAIXA_MANUAL", "confirmado depois: alerta CONFIRMADO_APOS_BAIXA_MANUAL", ficha17b.json?.pedido?.pagamento);
 
-    console.log("18. Retorno sem confirmação possível: segura CONFIRMANDO e o link novo por 30 min");
-    modo({ semOrderNsu: true });
+    console.log("18. Retorno que ainda não confirma (a InfinitePay ainda não acha a transação): segura CONFIRMANDO e o link novo por 30 min");
     const p18 = await novoPedido(a);
-    const pg18 = await pagar({ slug: slugDe(p18.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    const pg18 = await pagar({ codigo: codigoDe(p18.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    modo({ conferencia404: true });
     const r18 = await a.req("GET", `/pagamento/retorno${new URL(pg18.retorno).search}`);
+    modo({});
     const [c18] = await cobrancas(p18.pedido.id);
-    confere(r18.status === 303 && c18.retorno_em !== null && c18.aviso_transacao_nsu === null && c18.status === "PENDENTE", "retorno grava só retorno_em", c18);
+    confere(
+      r18.status === 303 && c18.retorno_em !== null && c18.aviso_transacao_nsu === null && c18.status === "PENDENTE" && c18.status_gateway === "aberto",
+      "retorno grava só retorno_em",
+      c18,
+    );
     const s18 = await a.req("GET", `/api/orders/${p18.pedido.id}/pagamento`);
     confere(s18.json?.etapa === "CONFIRMANDO" && s18.json.pedidoStatus === "PENDENTE", "CONFIRMANDO sem confirmar", s18.json);
     const pagar18 = await a.req("POST", `/api/orders/${p18.pedido.id}/pagamento`, { corpo: {} });
@@ -445,15 +489,16 @@ async function main() {
     const s18b = await a.req("GET", `/api/orders/${p18.pedido.id}/pagamento`);
     confere(s18b.json?.etapa === "PAGAR", "depois de 30 min sem aviso, volta a PAGAR", s18b.json?.etapa);
     await esperar(3_100);
-    const aviso18 = await avisar(falsa.links.get(slugDe(p18.pagamento.checkoutUrl)).webhook_url, pg18.corpoAviso);
+    const aviso18 = await avisar(falsa.links.get(codigoDe(p18.pagamento.checkoutUrl)).webhook_url, pg18.corpoAviso);
     confere(aviso18.status === 200 && (await statusPedido(p18.pedido.id)) === "PAGO", "o aviso confirma", aviso18.status);
-    modo({});
 
-    console.log("19. Aviso com slug de outra fatura não apaga o candidato verdadeiro");
+    console.log("19. Aviso com slug de outra fatura não apaga o candidato verdadeiro (fatura com slug gravado)");
+    // A API real não devolve o slug em /links: esta proteção só vale se um dia devolver (aí o token do aviso continua sendo a barreira principal).
+    modo({ comSlug: true });
     const p19 = await novoPedido(a);
-    const link19 = falsa.links.get(slugDe(p19.pagamento.checkoutUrl));
+    const link19 = falsa.links.get(codigoDe(p19.pagamento.checkoutUrl));
     modo({ falharConferencia: 500 });
-    const pg19 = await pagar({ slug: link19.slug, metodo: "pix" });
+    const pg19 = await pagar({ codigo: link19.codigo, metodo: "pix" });
     const forjado = await avisar(link19.webhook_url, { transaction_nsu: "tx_forjada", invoice_slug: "fat_outra", order_nsu: link19.order_nsu });
     const forjadoJson = await forjado.json();
     const [c19] = await cobrancas(p19.pedido.id);
@@ -465,7 +510,7 @@ async function main() {
 
     console.log("20. Falha nossa no aviso responde 400 (a InfinitePay repete)");
     const p20 = await novoPedido(a);
-    const link20 = falsa.links.get(slugDe(p20.pagamento.checkoutUrl));
+    const link20 = falsa.links.get(codigoDe(p20.pagamento.checkoutUrl));
     const grande = await avisar(link20.webhook_url, JSON.stringify({ transaction_nsu: "tx", invoice_slug: link20.slug, lixo: "x".repeat(40_000) }));
     confere(grande.status === 400, "corpo grande demais → 400 (não 413/500)", grande.status);
     const ensaio = await avisar(`${BASE}/api/webhooks/infinitepay/ensaio-202610221200/ensaio`, "{}");
