@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { resumoEncomendasDashboard } from "@/lib/encomendas-admin";
+import { lembrancinhasDoMes, liquidoLembrancinhasPorMes, type LembrancinhasDoMesDTO } from "@/lib/encomendas-financeiro";
 import {
   FUSO_LOJA,
   PADRAO_MES,
@@ -205,9 +206,12 @@ export async function resumoDashboard() {
   };
 }
 
-/** Uma linha de "Movimentações do mês": venda paga (entrada) ou despesa (saída). */
+/**
+ * Uma linha de "Movimentações do mês": venda paga ou parcela de lembrancinhas (entrada), despesa
+ * (saída) ou devolução de lembrancinhas feita (sai da receita; `valor` positivo).
+ */
 export type MovimentacaoDTO = {
-  tipo: "entrada" | "saida";
+  tipo: "entrada" | "saida" | "devolucao";
   id: string;
   /** Dia no horário de Brasília, "AAAA-MM-DD". */
   dia: string;
@@ -243,6 +247,12 @@ export type FinanceiroDoMes = {
      * sabor) e o desconto dado: quanto os mesmos potes custariam avulsos, menos o preço da caixa.
      */
     kits: { caixas: number; valor: number; desconto: number };
+    /**
+     * Encomendas de lembrancinhas, por caixa: parcelas pela data do pagamento, devoluções pela data em
+     * que foram feitas. O `liquido` entra em `resumo.entradas` e na receita do gráfico; vendas e
+     * ticket médio continuam só com os pedidos.
+     */
+    lembrancinhas: LembrancinhasDoMesDTO;
   };
   saidas: { categoria: CategoriaDespesa; total: number; lancamentos: number }[];
   /** 12 meses terminando no mês escolhido (meses sem movimento vêm com zero). */
@@ -274,8 +284,8 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
   const proximo = somarMeses(mes, 1);
   const inicioEvolucao = somarMeses(mes, -(MESES_NO_GRAFICO - 1));
 
-  const [limites] = await db.$queryRaw<{ inicio: Date; fim: Date }[]>`
-    SELECT ${inicioDoMesSql(mes)} AS inicio, ${inicioDoMesSql(proximo)} AS fim`;
+  const [limites] = await db.$queryRaw<{ inicio: Date; fim: Date; inicioEvolucao: Date }[]>`
+    SELECT ${inicioDoMesSql(mes)} AS inicio, ${inicioDoMesSql(proximo)} AS fim, ${inicioDoMesSql(inicioEvolucao)} AS "inicioEvolucao"`;
   const vendasDoMes = {
     status: { in: [...STATUS_PAGOS] },
     createdAt: { gte: limites.inicio, lt: limites.fim },
@@ -291,7 +301,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
     WHERE status IN (${SQL_STATUS_PAGOS})
       AND created_at >= ${inicioDoMesSql(mes)} AND created_at < ${inicioDoMesSql(proximo)}`;
 
-  const [porCanal, porSabor, somaKits, somaDespesas, porCategoria, vendasMensais, despesasMensais, pedidos, despesas] = await Promise.all([
+  const [porCanal, porSabor, somaKits, somaDespesas, porCategoria, vendasMensais, despesasMensais, pedidos, despesas, lembrancinhas, lembrancinhasMensais] = await Promise.all([
     db.order.groupBy({ by: ["canal"], where: vendasDoMes, _sum: { total: true, deliveryFee: true }, _count: { _all: true } }),
     // Potes avulsos + potes dentro de caixas. O pote em kit vale a parte rateada do preço da caixa
     // (valor_rateado é de TODOS os potes daquele sabor numa caixa; × caixas).
@@ -354,6 +364,8 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       take: MAX_MOVIMENTACOES + 1,
       select: { id: true, data: true, descricao: true, categoria: true, valorTotal: true, createdAt: true },
     }),
+    lembrancinhasDoMes(limites.inicio, limites.fim),
+    liquidoLembrancinhasPorMes(limites.inicioEvolucao, limites.fim),
   ]);
 
   // Decimal (não float) para somar dinheiro sem erro de arredondamento; vira number só na saída.
@@ -361,6 +373,8 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
   const site = porCanal.find((l) => l.canal === "ONLINE");
   const presencial = porCanal.find((l) => l.canal === "PRESENCIAL");
   const entradas = porCanal.reduce((s, l) => s.add(l._sum.total ?? 0), zero);
+  // O resumo soma o líquido das lembrancinhas; o ticket médio continua só com os pedidos.
+  const entradasComLembrancinhas = entradas.add(lembrancinhas.resumo.liquido);
   const vendas = porCanal.reduce((s, l) => s + l._count._all, 0);
   const saidas = somaDespesas._sum.valorTotal ?? zero;
 
@@ -384,6 +398,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
         valor: p.total.toNumber(),
       },
     })),
+    ...lembrancinhas.movimentacoes.map(({ ordem, ...linha }) => ({ ordem, linha })),
     ...despesas.map((d) => ({
       ordem: d.createdAt.getTime(),
       linha: {
@@ -401,9 +416,9 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
     mes,
     mesAtual,
     resumo: {
-      entradas: entradas.toNumber(),
+      entradas: entradasComLembrancinhas.toNumber(),
       saidas: saidas.toNumber(),
-      resultado: entradas.sub(saidas).toNumber(),
+      resultado: entradasComLembrancinhas.sub(saidas).toNumber(),
       vendas,
       lancamentos: somaDespesas._count._all,
     },
@@ -427,6 +442,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
         valor: Number(String(somaKits[0]?.valor ?? 0)),
         desconto: Number(String(somaKits[0]?.desconto ?? 0)),
       },
+      lembrancinhas: lembrancinhas.resumo,
     },
     saidas: porCategoria
       .map((c) => ({ categoria: c.categoria, total: c._sum.valorTotal?.toNumber() ?? 0, lancamentos: c._count._all }))
@@ -436,7 +452,8 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       const linha = receitaPorMes.get(m);
       return {
         mes: m,
-        receita: linha ? Number(String(linha.receita)) : 0,
+        // Arredonda no centavo: a soma de float do líquido das lembrancinhas não deixa resto.
+        receita: Math.round(((linha ? Number(String(linha.receita)) : 0) + (lembrancinhasMensais.get(m) ?? 0)) * 100) / 100,
         pedidos: linha ? Number(linha.pedidos) : 0,
         despesas: despesaPorMes.get(m) ?? 0,
       };

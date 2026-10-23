@@ -99,9 +99,14 @@ export type PlannerMes = {
   truncado: boolean;
   totalDespesas: number;
   lancamentos: number;
-  /** Vendas pagas (Pago, Enviado, Entregue) criadas no mês, com frete. */
+  /**
+   * Vendas pagas (Pago, Enviado, Entregue) criadas no mês, com frete, MAIS o líquido das lembrancinhas
+   * (parcelas pagas − devoluções feitas no mês; o mesmo número do Financeiro).
+   */
   entradas: number;
   pedidosPagos: number;
+  /** A parte das lembrancinhas em `entradas` (reais; pode ser negativa num mês só de devoluções). */
+  lembrancinhas: number;
   saldo: number;
   /** Do maior gasto para o menor. */
   porCategoria: { categoria: CategoriaDespesa; total: number; lancamentos: number }[];

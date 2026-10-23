@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { liquidoLembrancinhasDoMes } from "@/lib/encomendas-financeiro";
 import { FUSO_LOJA, hojeNaLoja, somarMeses, type DespesaDTO, type PlannerMes } from "@/lib/despesas";
 import { ErroNegocio } from "@/lib/erros";
 import { SIGLA_INSUMO, arredondarQtd, fatorConversao } from "@/lib/producao";
@@ -117,7 +118,7 @@ export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
     createdAt: { gte: limites.inicio, lt: limites.fim },
   } satisfies Prisma.OrderWhereInput;
 
-  const [lista, soma, categorias, vendas] = await Promise.all([
+  const [lista, soma, categorias, vendas, lembrancinhas] = await Promise.all([
     db.expense.findMany({
       where: doMes,
       // Mais recentes primeiro; `id` desempata para a ordem não mudar entre recargas.
@@ -128,11 +129,13 @@ export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
     db.expense.aggregate({ where: doMes, _sum: { valorTotal: true }, _count: { _all: true } }),
     db.expense.groupBy({ by: ["categoria"], where: doMes, _sum: { valorTotal: true }, _count: { _all: true } }),
     db.order.aggregate({ where: vendasDoMes, _sum: { total: true }, _count: { _all: true } }),
+    // O mesmo líquido das lembrancinhas do Financeiro (parcelas pagas − devoluções feitas no mês).
+    liquidoLembrancinhasDoMes(limites.inicio, limites.fim),
   ]);
 
   // Saldo com Decimal (sem erro de arredondamento); vira number só na saída.
   const totalDespesas = soma._sum.valorTotal ?? new Prisma.Decimal(0);
-  const entradas = vendas._sum.total ?? new Prisma.Decimal(0);
+  const entradas = (vendas._sum.total ?? new Prisma.Decimal(0)).add(lembrancinhas);
 
   return {
     mes: alvo,
@@ -143,6 +146,7 @@ export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
     lancamentos: soma._count._all,
     entradas: entradas.toNumber(),
     pedidosPagos: vendas._count._all,
+    lembrancinhas,
     saldo: entradas.sub(totalDespesas).toNumber(),
     porCategoria: categorias
       .map((c) => ({ categoria: c.categoria, total: c._sum.valorTotal?.toNumber() ?? 0, lancamentos: c._count._all }))
