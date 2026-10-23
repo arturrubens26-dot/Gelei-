@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
+import { Campo, OpcaoDeEntrega, Secao } from "@/components/checkout/PartesDoFormulario";
+import { novaChave } from "@/components/checkout/novaChave";
 import { siteEmLocalhost, urlDaInfinitePay } from "@/components/checkout/urlDaInfinitePay";
 import { MiniaturaKit } from "@/components/kits/MiniaturaKit";
 import { calcularEntrega, mascararCep, type ResultadoEntrega } from "@/lib/carrinho/entrega";
@@ -37,29 +39,6 @@ type CamposEndereco = {
   cidade: string;
   estado: string;
 };
-
-/** Chave única por tentativa de compra (Idempotency-Key). `randomUUID` só existe em contexto seguro (HTTPS/localhost). */
-function novaChave(): string {
-  return (
-    globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
-  );
-}
-
-function Secao({ numero, titulo, children }: { numero: number; titulo: string; children: ReactNode }) {
-  const id = `secao-${numero}`;
-  return (
-    <section aria-labelledby={id} className="cartao p-5 shadow-sm sm:p-6">
-      <h2 id={id} className="mb-4 flex items-center gap-3 text-2xl font-bold">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secundaria font-textos text-base font-bold text-destaque" aria-hidden="true">
-          {numero}
-        </span>
-        {titulo}
-      </h2>
-      {children}
-    </section>
-  );
-}
 
 /**
  * Checkout: entregar em Teresina (taxa fixa do painel) ou retirar na loja (grátis), o WhatsApp da
@@ -739,79 +718,6 @@ export function CheckoutClient({
           </p>
         )}
       </Secao>
-    </div>
-  );
-}
-
-/** Uma das duas opções (entrega ou retirada): o cartão inteiro é o rótulo do radio. */
-function OpcaoDeEntrega({
-  nome,
-  marcado,
-  aoEscolher,
-  titulo,
-  preco,
-  descricao,
-}: {
-  nome: string;
-  marcado: boolean;
-  aoEscolher: () => void;
-  titulo: string;
-  preco: string;
-  descricao: string;
-}) {
-  return (
-    <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-accent2/70 p-3 has-checked:border-2 has-checked:border-secundaria has-checked:bg-accent1/20">
-      <input type="radio" name={nome} className="mt-1 size-4 shrink-0 accent-secundaria" checked={marcado} onChange={aoEscolher} />
-      <span className="min-w-0 text-sm leading-snug">
-        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
-          <span className="font-semibold">{titulo}</span>
-          <span className="font-semibold tabular-nums">{preco}</span>
-        </span>
-        <span className="mt-0.5 block text-xs text-primaria/80">{descricao}</span>
-      </span>
-    </label>
-  );
-}
-
-function Campo({
-  id,
-  rotulo,
-  valor,
-  aoMudar,
-  autoComplete,
-  className,
-  maxLength,
-  erro,
-}: {
-  id: string;
-  rotulo: string;
-  valor: string;
-  aoMudar: (valor: string) => void;
-  autoComplete: string;
-  className?: string;
-  maxLength?: number;
-  erro?: string;
-}) {
-  return (
-    <div className={className}>
-      <label htmlFor={id} className="mb-1 block text-sm font-semibold">
-        {rotulo}
-      </label>
-      <input
-        id={id}
-        value={valor}
-        onChange={(e) => aoMudar(e.target.value)}
-        autoComplete={autoComplete}
-        maxLength={maxLength}
-        className="campo"
-        aria-invalid={erro ? true : undefined}
-        aria-describedby={erro ? `${id}-erro` : undefined}
-      />
-      {erro && (
-        <p id={`${id}-erro`} className="mt-1 text-xs font-medium text-secundaria">
-          {erro}
-        </p>
-      )}
     </div>
   );
 }

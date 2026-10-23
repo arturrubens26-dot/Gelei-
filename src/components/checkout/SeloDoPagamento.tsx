@@ -16,7 +16,22 @@ export const ROTULO_ETAPA_PENDENTE: Record<EtapaPagamento, string> = {
 const ESTILO: Partial<Record<EtapaPagamento, string>> = {
   CONFIRMANDO: "border-secundaria bg-accent1/40",
   EXPIRADO: "border-primaria/40 bg-primaria/5",
+  CANCELADO: "border-primaria/40 bg-primaria/5",
+  PAGO: "border-accent3 bg-accent3/20",
 };
+
+/** Selo de uma etapa de pagamento, com o rótulo de cada tela (pedido pendente, parcela da encomenda). */
+export function SeloDaEtapa({ etapa, rotulo }: { etapa: EtapaPagamento; rotulo: string }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-3 py-0.5 text-xs font-bold text-primaria ${
+        ESTILO[etapa] ?? "border-accent2 bg-accent2/20"
+      }`}
+    >
+      {rotulo}
+    </span>
+  );
+}
 
 /**
  * Selo do pedido para a cliente: pago, enviado, entregue ou cancelado mostram o status do pedido;
@@ -24,13 +39,5 @@ const ESTILO: Partial<Record<EtapaPagamento, string>> = {
  */
 export function SeloDoPagamento({ status, etapa }: { status: StatusPedido; etapa: EtapaPagamento }) {
   if (status !== "PENDENTE") return <EtiquetaStatus status={status} />;
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-3 py-0.5 text-xs font-bold text-primaria ${
-        ESTILO[etapa] ?? "border-accent2 bg-accent2/20"
-      }`}
-    >
-      {ROTULO_ETAPA_PENDENTE[etapa]}
-    </span>
-  );
+  return <SeloDaEtapa etapa={etapa} rotulo={ROTULO_ETAPA_PENDENTE[etapa]} />;
 }
