@@ -12,7 +12,9 @@ import {
   acoesDaCliente,
   calcularValores,
   conferirPotinhos,
+  FOLGA_DA_ENTRADA_MS,
   devolucaoNaDesistencia,
+  horasParaPagarEntrada,
   linhaDoTempo,
   mesmaEncomenda,
   pesoDaEncomenda,
@@ -90,8 +92,25 @@ export type EncomendaDTO = {
   entrada: number;
   restante: number;
   pesoTotalGramas: number;
-  /** ISO. `entradaAte` só depois da aprovação. */
-  prazos: { responderAte: string; entradaAte: string | null; corteEm: string };
+  /**
+   * ISO. `entradaAte` só depois da aprovação: é o prazo que a cliente lê e o `valid_until` do link
+   * (depois dele não se abre link). `horasParaPagarEntrada`: as horas reais que ela tem (ou teve) para
+   * pagar, min(24 h, até o corte), para a tela não escrever "24 horas" fixo; antes da aprovação, o máximo
+   * possível agora.
+   */
+  prazos: { responderAte: string; entradaAte: string | null; corteEm: string; horasParaPagarEntrada: number };
+  /**
+   * A entrada passou de `prazos.entradaAte`, mas a encomenda ainda não expirou: há 30 min de folga para
+   * o aviso do pagamento chegar. Não dá para pagar mais; se ela acabou de pagar, a confirmação ainda
+   * vale. Mostre "o prazo terminou; se você acabou de pagar, aguarde a confirmação".
+   */
+  entradaEmFolga: boolean;
+  /**
+   * Há pagamento em conferência (aviso da InfinitePay ainda não conferido, retorno do navegador há menos
+   * de 30 min ou pago com divergência; no máximo 24 h) em cada parcela. Com `true`, a tela diz "estamos
+   * conferindo o seu pagamento" e NÃO mostra "Aprovada! Pague até…" nem "Pagar".
+   */
+  pagamentoEmConferencia: { entrada: boolean; restante: boolean };
   entradaPagaEm: string | null;
   restantePagoEm: string | null;
   /** Restante recebido pela loja fora do site (dinheiro, PIX direto). */
@@ -101,12 +120,20 @@ export type EncomendaDTO = {
   canceladaPor: Ator | null;
   devolucao: DevolucaoResumoDTO;
   acoes: {
+    /** `true` só quando o POST .../pagamento abriria o link (não nos últimos 5 min do prazo, nem em conferência). */
     pagarEntrada: boolean;
     pagarRestante: boolean;
     /** Prévia da desistência AGORA; mande `devolucaoCentavos` no POST .../desistir. */
     desistir: { devolucao: number; retido: number; devolucaoCentavos: number; retidoCentavos: number } | null;
+    /** Há pagamento em conferência: o POST de desistência responderia 409 "aguarde"; mostre o botão desabilitado. */
+    desistirBloqueado: boolean;
   };
-  politica: { versao: string; aceitaEm: string; percentualRetido: number; textos: string[] };
+  /**
+   * `percentualAceito`: o que a cliente aceitou ao solicitar (os `textos` são desse percentual: é o que ela
+   * leu). `percentualRetido`: o que vale de fato (na aprovação, desce se o painel baixou o percentual
+   * depois; nunca passa do aceito) e é o que a prévia da desistência usa.
+   */
+  politica: { versao: string; aceitaEm: string; percentualAceito: number; percentualRetido: number; textos: string[] };
   linhaDoTempo: { quando: string; texto: string }[];
 };
 
@@ -151,6 +178,7 @@ export type EncomendaCompleta = Prisma.EncomendaGetPayload<{ include: typeof inc
 /** O que as regras puras precisam (datas, valores em centavos, link da entrada aberto ou em conferência). */
 export function paraRegras(e: EncomendaCompleta, agora: Date = new Date()): EncomendaParaRegras {
   const daEntrada = e.pagamentos.filter((p) => p.parcela === "ENTRADA");
+  const t = agora.getTime();
   const linkEntradaValidoAte = daEntrada
     .filter((p) => p.status === "PENDENTE")
     .reduce<Date | null>((max, p) => (!max || p.expiraEm > max ? p.expiraEm : max), null);
@@ -160,7 +188,8 @@ export function paraRegras(e: EncomendaCompleta, agora: Date = new Date()): Enco
     entradaAte: e.entradaAte,
     corteEm: e.corteEm,
     linkEntradaValidoAte,
-    entradaEmConfirmacao: daEntrada.some((p) => cobrancaEmConferencia(p, agora.getTime())),
+    entradaEmConfirmacao: daEntrada.some((p) => cobrancaEmConferencia(p, t)),
+    restanteEmConfirmacao: e.pagamentos.some((p) => p.parcela === "RESTANTE" && cobrancaEmConferencia(p, t)),
     entradaPagaEm: e.entradaPagaEm,
     restantePagoEm: e.restantePagoEm,
     valorEntradaCentavos: centavos(e.valorEntrada),
@@ -199,7 +228,8 @@ export function textosDaPoliticaDe(e: EncomendaCompleta): string[] {
     restanteCentavos: centavos(e.valorRestante),
     freteCentavos: centavos(e.frete),
     modo: e.modoEntrega,
-    percentualRetido: e.percentualRetido,
+    // O texto que a cliente leu e aceitou (o percentual efetivo pode ser menor, a favor dela).
+    percentualRetido: e.percentualAceito,
   });
 }
 
@@ -211,6 +241,7 @@ export function linhaDoTempoDe(e: EncomendaCompleta): { quando: string; texto: s
     aprovadaEm: e.aprovadaEm,
     entradaAte: e.entradaAte,
     entradaPagaEm: e.entradaPagaEm,
+    entradaForaDoSite: e.entradaForaDoSite,
     producaoIniciadaEm: e.producaoIniciadaEm,
     prontaEm: e.prontaEm,
     restantePagoEm: e.restantePagoEm,
@@ -266,7 +297,14 @@ export function paraEncomendaDTO(e: EncomendaCompleta, agora: Date): EncomendaDT
     entrada: e.valorEntrada.toNumber(),
     restante: e.valorRestante.toNumber(),
     pesoTotalGramas: e.pesoTotalGramas,
-    prazos: { responderAte: e.responderAte.toISOString(), entradaAte: e.entradaAte?.toISOString() ?? null, corteEm: e.corteEm.toISOString() },
+    prazos: {
+      responderAte: e.responderAte.toISOString(),
+      entradaAte: e.entradaAte?.toISOString() ?? null,
+      corteEm: e.corteEm.toISOString(),
+      horasParaPagarEntrada: horasParaPagarEntrada(e, agora),
+    },
+    entradaEmFolga: efetivo === "AGUARDANDO_ENTRADA" && e.entradaAte !== null && agora.getTime() >= e.entradaAte.getTime(),
+    pagamentoEmConferencia: { entrada: Boolean(regras.entradaEmConfirmacao), restante: Boolean(regras.restanteEmConfirmacao) },
     entradaPagaEm: e.entradaPagaEm?.toISOString() ?? null,
     restantePagoEm: e.restantePagoEm?.toISOString() ?? null,
     restanteForaDoSite: e.restanteForaDoSite,
@@ -285,8 +323,15 @@ export function paraEncomendaDTO(e: EncomendaCompleta, agora: Date): EncomendaDT
             retidoCentavos: acoes.desistir.retido,
           }
         : null,
+      desistirBloqueado: acoes.desistirBloqueado,
     },
-    politica: { versao: e.politicaVersao, aceitaEm: e.politicaAceitaEm.toISOString(), percentualRetido: e.percentualRetido, textos: textosDaPoliticaDe(e) },
+    politica: {
+      versao: e.politicaVersao,
+      aceitaEm: e.politicaAceitaEm.toISOString(),
+      percentualAceito: e.percentualAceito,
+      percentualRetido: e.percentualRetido,
+      textos: textosDaPoliticaDe(e),
+    },
     linhaDoTempo: linhaDoTempoDe(e),
   };
 }
@@ -330,10 +375,11 @@ export async function buscarEncomendaDoUsuario(id: string, userId: string, agora
 /**
  * Grava os prazos vencidos (UPDATE condicional; seguro em paralelo com aprovação e pagamento):
  * - SOLICITADA sem resposta até `responderAte` → EXPIRADA (sem cobrança, em lote);
- * - AGUARDANDO_ENTRADA depois de `entradaAte` → EXPIRADA, mas só sem link da entrada ainda valendo e
- *   sem pagamento dela em conferência (aviso não conferido, retorno recente, divergência): o dinheiro
- *   pode ter entrado, e a confirmação ainda precisa achar a encomenda aguardando. Os links vencidos
- *   viram CANCELADO no banco; um pagamento que ainda chegue depois vira devolução pendente.
+ * - AGUARDANDO_ENTRADA 30 min depois de `entradaAte` (a folga, `FOLGA_DA_ENTRADA_MS`) → EXPIRADA, mas só
+ *   sem link da entrada ainda valendo e sem pagamento dela em conferência (aviso não conferido, retorno
+ *   recente, divergência; por no máximo 24 h): o dinheiro pode ter entrado, e a confirmação ainda precisa
+ *   achar a encomenda aguardando. Os links vencidos viram CANCELADO no banco; um pagamento que ainda
+ *   chegue depois vira devolução pendente.
  * A aprovação só passa com `responder_ate > agora` e a expiração só com `responder_ate <= agora`: as
  * duas nunca valem juntas.
  */
@@ -345,13 +391,15 @@ export async function expirarVencidas(agora: Date, filtro: { userId?: string; en
   let expiradas = await db.$executeRaw`
     UPDATE "encomendas" SET "status" = 'EXPIRADA', "encerrada_em" = "responder_ate"
     WHERE "status" = 'SOLICITADA' AND "responder_ate" <= ${agora} ${doFiltro}`;
+  // A entrada só expira depois da folga: quem paga no último minuto ainda confirma.
+  const fimDaFolga = new Date(agora.getTime() - FOLGA_DA_ENTRADA_MS);
 
   const vencidas = await db.encomenda.findMany({
     where: {
       ...(filtro.userId ? { userId: filtro.userId } : {}),
       ...(filtro.encomendaId ? { id: filtro.encomendaId } : {}),
       status: "AGUARDANDO_ENTRADA",
-      entradaAte: { lte: agora },
+      entradaAte: { lte: fimDaFolga },
     },
     select: {
       id: true,
@@ -374,7 +422,7 @@ export async function expirarVencidas(agora: Date, filtro: { userId?: string; en
         id: v.id,
         status: "AGUARDANDO_ENTRADA",
         entradaPagaEm: null,
-        entradaAte: { lte: agora },
+        entradaAte: { lte: fimDaFolga },
         pagamentos: { none: { parcela: "ENTRADA", status: "PENDENTE" } },
       },
       data: { status: "EXPIRADA", encerradaEm: ultimoVencimento > agora ? agora : ultimoVencimento },
@@ -400,8 +448,30 @@ function repeticao(existente: EncomendaCompleta, entrada: EncomendaEntrada, agor
       dataEntrega: diaDe(existente.dataEntrega),
       modoEntrega: existente.modoEntrega,
       telefone: existente.telefone,
+      observacao: existente.observacao,
+      addressId: existente.addressId,
+      endereco: existente.address
+        ? {
+            cep: existente.address.cep,
+            rua: existente.address.rua,
+            numero: existente.address.numero,
+            complemento: existente.address.complemento,
+            bairro: existente.address.bairro,
+            cidade: existente.address.cidade,
+            estado: existente.address.estado,
+          }
+        : null,
     },
-    entrada,
+    {
+      itens: entrada.itens,
+      dataFesta: entrada.dataFesta,
+      dataEntrega: entrada.dataEntrega,
+      modoEntrega: entrada.modoEntrega,
+      telefone: entrada.telefone,
+      observacao: entrada.observacao,
+      addressId: entrada.addressId ?? null,
+      endereco: entrada.endereco ?? null,
+    },
   );
   if (!mesma) throw new ErroNegocio(422, "Esta Idempotency-Key já foi usada em outra encomenda, com dados diferentes.");
   return paraEncomendaDTO(existente, agora);
@@ -424,7 +494,10 @@ const whereAbertas = (userId: string, agora: Date): Prisma.EncomendaWhereInput =
  * - 404 endereço salvo de outra pessoa; 422 CEP inválido ou que não bate com a cidade (`endereco.cep`);
  * - 422 entrega fora de Teresina (`detalhes.foraDaArea`, mensagem MENSAGEM_FORA_DA_AREA);
  * - 409 total mudou (preço, peso ou frete), com os valores atuais;
- * - 429 mais de 3 encomendas abertas (conferido dentro da transação, com trava por conta).
+ * - 429 mais de 3 encomendas abertas (conferido dentro da transação, com trava por conta; DEPOIS de
+ *   conferir a chave de novo, dentro da trava: dois envios simultâneos da mesma solicitação, com 2 já
+ *   abertas, devolvem a do primeiro (200), não 429).
+ * A repetição só vale com o MESMO conteúdo: potinhos, datas, modo, telefone, observação e endereço.
  */
 export async function criarEncomenda(
   userId: string,
@@ -516,9 +589,15 @@ export async function criarEncomenda(
 
   const prazos = prazosDaEncomenda(agora, entrada.dataEntrega);
   try {
-    const criada = await db.$transaction(async (tx) => {
+    const resultado = await db.$transaction(async (tx) => {
       // Trava por conta: duas solicitações simultâneas não passam juntas pela contagem de abertas.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`encomendas:${userId}`}))`;
+      // A chave vem ANTES do limite: o outro envio da mesma solicitação pode ter acabado de gravar.
+      const ja = await tx.encomenda.findUnique({
+        where: { userId_idempotencyKey: { userId, idempotencyKey: chave } },
+        include: incluirEncomenda,
+      });
+      if (ja) return { repetida: true, encomenda: ja } as const;
       const abertas = await tx.encomenda.count({ where: whereAbertas(userId, agora) });
       if (abertas >= MAX_ENCOMENDAS_ABERTAS) {
         throw new ErroNegocio(
@@ -530,7 +609,7 @@ export async function criarEncomenda(
         entrada.modoEntrega === "ENTREGA"
           ? (enderecoSalvoId ?? (await obterOuCriarEndereco(tx, userId, entrada.endereco!, { limitar: false })).id)
           : null;
-      return tx.encomenda.create({
+      const nova = await tx.encomenda.create({
         data: {
           userId,
           status: "SOLICITADA",
@@ -550,6 +629,7 @@ export async function criarEncomenda(
           responderAte: prazos.responderAte,
           corteEm: prazos.corteEm,
           percentualRetido: config.percentualRetido,
+          percentualAceito: entrada.percentualRetido,
           politicaVersao: POLITICA_VERSAO,
           politicaAceitaEm: agora,
           idempotencyKey: chave,
@@ -560,7 +640,10 @@ export async function criarEncomenda(
         },
         include: incluirEncomenda,
       });
+      return { repetida: false, encomenda: nova } as const;
     });
+    if (resultado.repetida) return { encomenda: repeticao(resultado.encomenda, entrada, agora), repetida: true };
+    const criada = resultado.encomenda;
     // O telefone nunca vai para log (LGPD).
     console.info(
       `[encomendas] encomenda ${criada.id} solicitada (potinhos=${criada.potinhos}, ${criada.modoEntrega}, total=${criada.total.toFixed(2)})`,

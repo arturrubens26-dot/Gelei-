@@ -13,7 +13,7 @@ import { FUSO_LOJA, formatarDia, hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ModoEntrega } from "@/lib/entrega-regras";
 import { normalizarComposicao, type SaborNoKit } from "@/lib/kits-regras";
-import type { EtapaPagamento } from "@/lib/pagamentos-regras";
+import { JANELA_CONFIRMANDO_MS, cobrancaDivergente, retornoRecente, type EtapaPagamento, type StatusCobranca } from "@/lib/pagamentos-regras";
 import { enderecoSchema, telefoneSchema } from "@/lib/validacao";
 import { FORMAS_PAGAMENTO, MAX_PRECO_UNITARIO_CENTAVOS, somarDias, textoLivreValido } from "@/lib/vendas";
 
@@ -79,6 +79,23 @@ export const DIAS_MIN_ATE_ENTREGA = 4;
 export const DIAS_CORTE_ANTES_DA_ENTREGA = 3;
 /** A cliente paga a entrada em até 24 h depois da aprovação, nunca depois do corte (D6). */
 export const HORAS_PARA_PAGAR_ENTRADA = 24;
+/**
+ * Folga depois do prazo da entrada: o link do checkout vale só até `entradaAte` (o `valid_until`), mas a
+ * encomenda só EXPIRA de fato 30 min depois. Quem paga no último minuto tem o aviso da InfinitePay (e a
+ * conferência) chegando segundos ou minutos depois, e não perde a encomenda por isso. Pago dentro da folga
+ * confirma normalmente; pago depois dela (já EXPIRADA) vira devolução (pagamento tardio). O prazo que a
+ * cliente lê continua sendo `entradaAte`; a folga é tolerância interna (o DTO só avisa `entradaEmFolga`).
+ * O restante não tem prazo de expiração: um link dele pago no último instante confirma a qualquer hora.
+ */
+export const FOLGA_DA_ENTRADA_MS = 30 * 60_000;
+/**
+ * Quanto tempo, no máximo, um aviso da InfinitePay não conferido ou um pagamento com divergência SEGURA a
+ * encomenda (ela não expira, a cliente não desiste e a dona não registra a parcela por fora). Passado isso,
+ * a conferência deixa de segurar: o aviso e o alerta no painel continuam, e um pagamento que ainda se
+ * confirme depois vira devolução pendente se a encomenda já tiver terminado. O retorno do navegador segura
+ * 30 min (`JANELA_CONFIRMANDO_MS`) e não se renova depois de `expira_em` do link mais 30 min.
+ */
+export const HORAS_MAX_EM_CONFERENCIA = 24;
 /** Validade de cada link de pagamento (`valid_until`): no máximo 1 hora, como nos pedidos. */
 export const LINK_MAX_MS = 60 * 60_000;
 /**
@@ -196,6 +213,27 @@ export function prazosDaEncomenda(criadaEm: Date, dataEntrega: string): { respon
 /** Até quando a cliente paga a entrada: 24 h depois da aprovação, nunca depois do corte (D6). */
 export function prazoDaEntrada(aprovadaEm: Date, corteEm: Date): Date {
   return menor(new Date(aprovadaEm.getTime() + HORAS_PARA_PAGAR_ENTRADA * 60 * 60_000), corteEm);
+}
+
+/** Quando a encomenda aguardando a entrada expira de fato: `entradaAte` mais a folga. */
+export function fimDaFolgaDaEntrada(entradaAte: Date): Date {
+  return new Date(entradaAte.getTime() + FOLGA_DA_ENTRADA_MS);
+}
+
+/**
+ * Quantas horas a cliente tem (ou teve) para pagar a entrada, para a tela não escrever "24 horas" fixo:
+ * depois da aprovação, o intervalo real entre a aprovação e `entradaAte` (24 h, ou menos se o corte vier
+ * antes); antes dela, o máximo possível agora, min(24 h, até o corte). Em horas, com 1 casa decimal.
+ */
+export function horasParaPagarEntrada(
+  e: { aprovadaEm: Date | null; entradaAte: Date | null; corteEm: Date },
+  agora: Date,
+): number {
+  const ms =
+    e.aprovadaEm && e.entradaAte
+      ? e.entradaAte.getTime() - e.aprovadaEm.getTime()
+      : Math.min(HORAS_PARA_PAGAR_ENTRADA * 3_600_000, e.corteEm.getTime() - agora.getTime());
+  return Math.max(0, Math.round((ms / 3_600_000) * 10) / 10);
 }
 
 /**
@@ -363,9 +401,11 @@ export const TRANSICOES_ENCOMENDA: Record<StatusEncomenda, readonly Transicao[]>
     { para: "CANCELADA", atores: ["CLIENTE"] },
   ],
   AGUARDANDO_ENTRADA: [
-    // Paga por um link que ainda valia: confirma mesmo depois de `entradaAte`.
-    { para: "CONFIRMADA", atores: ["SISTEMA"] },
-    { para: "EXPIRADA", atores: ["SISTEMA"], condicao: depoisDe((f) => f.entradaAte) },
+    // Paga por um link que ainda valia: confirma mesmo depois de `entradaAte` (dentro da folga). A loja
+    // também confirma, ao registrar a entrada recebida fora do site (ou conferida no app InfinitePay).
+    { para: "CONFIRMADA", atores: ["SISTEMA", "LOJA"] },
+    // Só depois da folga (`fimDaFolgaDaEntrada`): quem paga no último minuto ainda confirma.
+    { para: "EXPIRADA", atores: ["SISTEMA"], condicao: depoisDe((f) => (f.entradaAte ? fimDaFolgaDaEntrada(f.entradaAte) : null)) },
     { para: "CANCELADA", atores: ["CLIENTE", "LOJA"] },
   ],
   CONFIRMADA: [
@@ -410,10 +450,13 @@ export type EncomendaParaRegras = {
   linkEntradaValidoAte: Date | null;
   /**
    * Algum pagamento da ENTRADA está em conferência (aviso da InfinitePay ainda não conferido, retorno
-   * do navegador há menos de 30 min, ou pago com divergência): o dinheiro pode ter entrado, então a
-   * encomenda não expira por prazo enquanto isso.
+   * do navegador há menos de 30 min, ou pago com divergência; no máximo `HORAS_MAX_EM_CONFERENCIA`, ver
+   * `estadoDaConferencia`): o dinheiro pode ter entrado, então a encomenda não expira por prazo
+   * enquanto isso, e a cliente não abre outro link.
    */
   entradaEmConfirmacao?: boolean;
+  /** O mesmo para o RESTANTE (bloqueia novo link do restante, a desistência e o registro por fora). */
+  restanteEmConfirmacao?: boolean;
   entradaPagaEm: Date | null;
   restantePagoEm: Date | null;
   valorEntradaCentavos: number;
@@ -425,8 +468,9 @@ export type EncomendaParaRegras = {
  * Status como a cliente e a dona devem ver AGORA. A expiração é "preguiçosa" (gravada na próxima
  * leitura ou ação); até lá, a tela usa este status:
  * - SOLICITADA sem resposta até `responderAte` → EXPIRADA;
- * - AGUARDANDO_ENTRADA depois de `entradaAte` → EXPIRADA, a menos que ainda haja um link da entrada
- *   valendo (pode ser pago até o vencimento dele) ou um pagamento dela em conferência.
+ * - AGUARDANDO_ENTRADA 30 min depois de `entradaAte` (a folga, `FOLGA_DA_ENTRADA_MS`) → EXPIRADA, a menos
+ *   que ainda haja um link da entrada valendo (pode ser pago até o vencimento dele) ou um pagamento
+ *   dela em conferência (limitada a `HORAS_MAX_EM_CONFERENCIA`).
  */
 export function statusEfetivo(
   enc: Pick<EncomendaParaRegras, "status" | "responderAte" | "entradaAte" | "linkEntradaValidoAte" | "entradaEmConfirmacao">,
@@ -434,11 +478,56 @@ export function statusEfetivo(
 ): StatusEncomenda {
   const t = agora.getTime();
   if (enc.status === "SOLICITADA" && t >= enc.responderAte.getTime()) return "EXPIRADA";
-  if (enc.status === "AGUARDANDO_ENTRADA" && enc.entradaAte && t >= enc.entradaAte.getTime()) {
+  if (enc.status === "AGUARDANDO_ENTRADA" && enc.entradaAte && t >= fimDaFolgaDaEntrada(enc.entradaAte).getTime()) {
     const linkValendo = enc.linkEntradaValidoAte !== null && enc.linkEntradaValidoAte.getTime() > t;
     return linkValendo || enc.entradaEmConfirmacao ? "AGUARDANDO_ENTRADA" : "EXPIRADA";
   }
   return enc.status;
+}
+
+// --- conferência de pagamento (aviso, retorno, divergência) -----------------------------------------
+
+/** O que a conferência olha numa cobrança (as colunas de `pagamentos`). */
+export type CobrancaParaConferencia = {
+  status: StatusCobranca;
+  statusGateway: string | null;
+  avisoTransacaoNsu: string | null;
+  avisoSlug: string | null;
+  avisadoEm: Date | null;
+  retornoEm: Date | null;
+  expiraEm: Date;
+};
+
+/** DIVERGENTE: pago, mas valor/método/parcelas não conferem. CONFIRMANDO: aviso ou retorno sem desfecho. */
+export type EstadoDaConferencia = "DIVERGENTE" | "CONFIRMANDO";
+
+const MAX_EM_CONFERENCIA_MS = HORAS_MAX_EM_CONFERENCIA * 3_600_000;
+
+/**
+ * A cobrança está SEGURANDO a encomenda agora? Só enquanto o dinheiro pode estar entrando e a conferência
+ * é recente: o aviso da InfinitePay (candidato gravado) e a divergência seguram por no máximo
+ * `HORAS_MAX_EM_CONFERENCIA`, contadas do primeiro aviso (`avisadoEm`; sem ele, do vencimento do link);
+ * o retorno do navegador segura 30 min. Passado isso a encomenda pode expirar, a cliente pode desistir e a
+ * dona pode agir (o alerta no painel continua). Cobrança aprovada ou recusada não segura nada.
+ */
+export function estadoDaConferencia(c: CobrancaParaConferencia, agora: number = Date.now()): EstadoDaConferencia | null {
+  if (c.status !== "PENDENTE" && c.status !== "CANCELADO") return null;
+  const avisadoEm = c.avisoTransacaoNsu && c.avisoSlug ? c.avisadoEm : null;
+  if (cobrancaDivergente(c) && agora - (avisadoEm ?? c.expiraEm).getTime() < MAX_EM_CONFERENCIA_MS) return "DIVERGENTE";
+  if (avisadoEm && agora - avisadoEm.getTime() < MAX_EM_CONFERENCIA_MS) return "CONFIRMANDO";
+  if (retornoRecente(c.retornoEm, agora)) return "CONFIRMANDO";
+  return null;
+}
+
+/** Até quando esta cobrança segura a encomenda (`null`: não está segurando). */
+export function conferenciaAte(c: CobrancaParaConferencia, agora: number = Date.now()): Date | null {
+  if (estadoDaConferencia(c, agora) === null) return null;
+  const avisadoEm = c.avisoTransacaoNsu && c.avisoSlug ? c.avisadoEm : null;
+  const fins: number[] = [];
+  if (avisadoEm) fins.push(avisadoEm.getTime() + MAX_EM_CONFERENCIA_MS);
+  else if (cobrancaDivergente(c)) fins.push(c.expiraEm.getTime() + MAX_EM_CONFERENCIA_MS);
+  if (retornoRecente(c.retornoEm, agora)) fins.push(c.retornoEm!.getTime() + JANELA_CONFIRMANDO_MS);
+  return fins.length > 0 ? new Date(Math.max(...fins)) : null;
 }
 
 const pagoEmCentavos = (enc: EncomendaParaRegras) => ({
@@ -453,18 +542,29 @@ export type AcoesDaCliente = {
   pagarRestante: boolean;
   /** Prévia da desistência agora (centavos), ou `null` se não dá para desistir. */
   desistir: { devolucao: number; retido: number } | null;
+  /**
+   * Há pagamento em conferência (entrada ou restante): o POST de desistência responderia 409 "aguarde".
+   * `desistir` ainda traz a prévia, para a tela mostrar o botão desabilitado com o motivo.
+   */
+  desistirBloqueado: boolean;
 };
 
 export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCliente {
   const status = statusEfetivo(enc, agora);
   const aberta = (STATUS_ABERTOS as readonly StatusEncomenda[]).includes(status);
   return {
-    // Com menos de 5 min até o prazo da entrada, não se abre link novo (validadeDoLink).
-    pagarEntrada: status === "AGUARDANDO_ENTRADA" && enc.entradaAte !== null && validadeDoLink(agora, enc.entradaAte) !== null,
-    pagarRestante: statusConfirmado(status) && enc.restantePagoEm === null,
+    // Só quando o POST abriria o link: com menos de 5 min até o prazo da entrada (validadeDoLink), ou com
+    // pagamento em conferência, o POST responde 409 e o botão não aparece.
+    pagarEntrada:
+      status === "AGUARDANDO_ENTRADA" &&
+      enc.entradaAte !== null &&
+      validadeDoLink(agora, enc.entradaAte) !== null &&
+      !enc.entradaEmConfirmacao,
+    pagarRestante: statusConfirmado(status) && enc.restantePagoEm === null && !enc.restanteEmConfirmacao,
     desistir: aberta
       ? devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pagoEmCentavos(enc), quem: "CLIENTE", percentualRetido: enc.percentualRetido })
       : null,
+    desistirBloqueado: aberta && Boolean(enc.entradaEmConfirmacao || enc.restanteEmConfirmacao),
   };
 }
 
@@ -548,6 +648,7 @@ export const ACOES_ADMIN = [
   "iniciar-producao",
   "marcar-pronta",
   "marcar-entregue",
+  "registrar-entrada",
   "registrar-restante",
   "cancelar",
   "devolucao-feita",
@@ -566,9 +667,16 @@ export type AcaoDaLoja = {
   aviso: string | null;
 };
 
+/** Aviso de quem cancela com pagamento em conferência (não bloqueia: é a saída da dona). */
+export const AVISO_CANCELAR_EM_CONFERENCIA =
+  "Há um pagamento sendo conferido. Confira no app InfinitePay antes de cancelar: se o dinheiro tiver entrado " +
+  "(ou entrar depois), ele aparece como devolução pendente e você devolve pelo app.";
+
 /**
  * Botões da ficha no painel, conforme o status efetivo. "Avisar no WhatsApp" (`avisada`) aparece
- * sempre; "Marquei como devolvida", só com devolução pendente.
+ * sempre; "Marquei como devolvida", só com devolução pendente. Registrar a entrada ou o restante por
+ * fora fica desabilitado enquanto aquela parcela tem pagamento em conferência (no máximo
+ * `HORAS_MAX_EM_CONFERENCIA`); cancelar continua valendo, com o aviso de conferir no app.
  */
 export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: boolean; modo: ModoEntrega }, agora: Date): AcaoDaLoja[] {
   const status = statusEfetivo(enc, agora);
@@ -583,14 +691,35 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
     ...extra,
   });
   const lista: AcaoDaLoja[] = [];
+  const motivoConferencia = (parcela: string) =>
+    `Há um pagamento ${parcela} sendo conferido. Confira no app InfinitePay: se o dinheiro entrou, aguarde a confirmação; ` +
+    `a conferência libera esta ação sozinha em até ${HORAS_MAX_EM_CONFERENCIA} h.`;
+  const entrada = () => [
+    acao("registrar-entrada", "Entrada recebida fora do site", {
+      ...(enc.entradaEmConfirmacao ? { permitida: false, motivo: motivoConferencia("da entrada") } : {}),
+      aviso: "Use só se a cliente pagou a entrada em dinheiro ou PIX direto, ou se você conferiu no app InfinitePay que o dinheiro entrou.",
+    }),
+  ];
   const restante = () =>
-    quitada ? [] : [acao("registrar-restante", "Restante recebido fora do site", { aviso: "Use só se a cliente pagou o restante em dinheiro ou PIX direto." })];
+    quitada
+      ? []
+      : [
+          acao("registrar-restante", "Restante recebido fora do site", {
+            ...(enc.restanteEmConfirmacao ? { permitida: false, motivo: motivoConferencia("do restante") } : {}),
+            aviso: "Use só se a cliente pagou o restante em dinheiro ou PIX direto.",
+          }),
+        ];
   const cancelar = () =>
     acao("cancelar", "Cancelar encomenda", {
       aviso:
-        enc.entradaPagaEm || enc.restantePagoEm
-          ? "O que a cliente pagou fica como devolução pendente: devolva pelo app da InfinitePay e marque aqui."
-          : null,
+        [
+          enc.entradaPagaEm || enc.restantePagoEm
+            ? "O que a cliente pagou fica como devolução pendente: devolva pelo app da InfinitePay e marque aqui."
+            : null,
+          enc.entradaEmConfirmacao || enc.restanteEmConfirmacao ? AVISO_CANCELAR_EM_CONFERENCIA : null,
+        ]
+          .filter(Boolean)
+          .join(" ") || null,
     });
 
   switch (status) {
@@ -598,7 +727,7 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
       lista.push(acao("aprovar", "Aprovar", { aviso: `Responda até ${formatarPrazo(enc.responderAte)}.` }), acao("recusar", "Recusar"));
       break;
     case "AGUARDANDO_ENTRADA":
-      lista.push(cancelar());
+      lista.push(...entrada(), cancelar());
       break;
     case "CONFIRMADA":
       lista.push(
@@ -638,17 +767,53 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
 // A referência de cada cobrança (order_nsu enc-<id>-<PARCELA>-<n>) fica em src/lib/infinitepay-regras.ts
 // (referenciaDaEncomenda); o telefone segue a regra dos pedidos (telefoneSchema, em src/lib/validacao.ts).
 
+/** Os campos de um endereço, como ficam gravados (o endereço novo já passou pelo `enderecoSchema`). */
+export type CamposDoEndereco = {
+  cep: string;
+  rua: string;
+  numero: string;
+  complemento: string | null;
+  bairro: string;
+  cidade: string;
+  estado: string;
+};
+
 export type ConteudoDaEncomenda = {
   itens: readonly SaborNoKit[];
   dataFesta: string;
   dataEntrega: string;
   modoEntrega: ModoEntrega;
   telefone: string;
+  /** Texto livre da cliente (já aparado; `null` se vazio). */
+  observacao: string | null;
+  /** Entrega: o endereço salvo escolhido (`addressId`), se foi esse o caso. */
+  addressId?: string | null;
+  /** Entrega: os campos do endereço (de um endereço novo, ou os gravados na encomenda). */
+  endereco?: CamposDoEndereco | null;
 };
+
+const mesmosCampos = (a: CamposDoEndereco, b: CamposDoEndereco) =>
+  a.cep === b.cep &&
+  a.rua === b.rua &&
+  a.numero === b.numero &&
+  (a.complemento ?? null) === (b.complemento ?? null) &&
+  a.bairro === b.bairro &&
+  a.cidade === b.cidade &&
+  a.estado === b.estado;
+
+/** Na entrega: o mesmo endereço salvo (por id) ou os mesmos campos. Na retirada não há o que comparar. */
+function mesmoEndereco(a: ConteudoDaEncomenda, b: ConteudoDaEncomenda): boolean {
+  if (a.modoEntrega === "RETIRADA" && b.modoEntrega === "RETIRADA") return true;
+  if (a.addressId && b.addressId) return a.addressId === b.addressId;
+  if (a.endereco && b.endereco) return mesmosCampos(a.endereco, b.endereco);
+  return false;
+}
 
 /**
  * Idempotência: a solicitação reenviada com a mesma Idempotency-Key é a MESMA encomenda? Mesmos
- * potinhos por sabor (em qualquer ordem, linhas repetidas somadas), mesmas datas, modo e telefone.
+ * potinhos por sabor (em qualquer ordem, linhas repetidas somadas), mesmas datas, modo, telefone,
+ * observação e endereço. Qualquer diferença (a cliente corrigiu o endereço e reenviou com a mesma chave,
+ * por exemplo) é outra solicitação: 422, nunca a encomenda antiga devolvida em silêncio.
  */
 export function mesmaEncomenda(a: ConteudoDaEncomenda, b: ConteudoDaEncomenda): boolean {
   const mapa = (c: ConteudoDaEncomenda) => new Map(normalizarComposicao(c.itens).map((i) => [i.productId, i.quantidade]));
@@ -660,7 +825,9 @@ export function mesmaEncomenda(a: ConteudoDaEncomenda, b: ConteudoDaEncomenda): 
     a.dataFesta === b.dataFesta &&
     a.dataEntrega === b.dataEntrega &&
     a.modoEntrega === b.modoEntrega &&
-    a.telefone === b.telefone
+    a.telefone === b.telefone &&
+    (a.observacao ?? null) === (b.observacao ?? null) &&
+    mesmoEndereco(a, b)
   );
 }
 
@@ -751,6 +918,12 @@ export const acaoAdminSchema = z.discriminatedUnion(
     z.object({ acao: z.literal("marcar-pronta"), statusEsperado: statusEsperadoSchema }),
     z.object({ acao: z.literal("marcar-entregue"), statusEsperado: statusEsperadoSchema }),
     z.object({
+      acao: z.literal("registrar-entrada"),
+      statusEsperado: statusEsperadoSchema,
+      formaPagamento: z.enum(FORMAS_PAGAMENTO, "Escolha a forma de pagamento."),
+      observacao: textoOpcional(TAMANHO_MAX_TEXTO),
+    }),
+    z.object({
       acao: z.literal("registrar-restante"),
       statusEsperado: statusEsperadoSchema,
       formaPagamento: z.enum(FORMAS_PAGAMENTO, "Escolha a forma de pagamento."),
@@ -764,7 +937,17 @@ export const acaoAdminSchema = z.discriminatedUnion(
       /** A cliente pediu (pelo WhatsApp): o mínimo a devolver é o da política, não o total. */
       aPedidoDaCliente: z.boolean().default(false),
     }),
-    z.object({ acao: z.literal("devolucao-feita"), statusEsperado: statusEsperadoSchema, observacao: textoOpcional(TAMANHO_MAX_TEXTO) }),
+    z.object({
+      acao: z.literal("devolucao-feita"),
+      statusEsperado: statusEsperadoSchema,
+      /** Os ids das devoluções que a tela mostrava como pendentes (`devolucoes[].id`): só essas fecham. */
+      devolucaoIds: z
+        .array(z.string().min(1).max(100), "Escolha as devoluções feitas.")
+        .min(1, "Escolha as devoluções feitas.")
+        .max(50, "Devoluções demais de uma vez.")
+        .transform((ids) => [...new Set(ids)]),
+      observacao: textoOpcional(TAMANHO_MAX_TEXTO),
+    }),
     z.object({ acao: z.literal("avisada"), statusEsperado: statusEsperadoSchema, status: statusEsperadoSchema }),
   ],
   "Ação inválida.",
@@ -866,6 +1049,8 @@ export type FatosDaLinhaDoTempo = {
   aprovadaEm: Date | null;
   entradaAte: Date | null;
   entradaPagaEm: Date | null;
+  /** Entrada registrada pela dona (fora do site, ou conferida no app InfinitePay). */
+  entradaForaDoSite: boolean;
   producaoIniciadaEm: Date | null;
   prontaEm: Date | null;
   restantePagoEm: Date | null;
@@ -885,7 +1070,7 @@ export function linhaDoTempo(f: FatosDaLinhaDoTempo): { quando: string; texto: s
     if (quando) eventos.push({ quando, texto });
   };
   marcar(f.aprovadaEm, f.entradaAte ? `A Geleiô aprovou. Entrada a pagar até ${formatarPrazo(f.entradaAte)}.` : "A Geleiô aprovou.");
-  marcar(f.entradaPagaEm, "Entrada paga: encomenda confirmada.");
+  marcar(f.entradaPagaEm, f.entradaForaDoSite ? "Entrada recebida pela Geleiô (fora do site): encomenda confirmada." : "Entrada paga: encomenda confirmada.");
   marcar(f.producaoIniciadaEm, "Produção iniciada.");
   marcar(f.prontaEm, `Pronta para a ${palavra}.`);
   marcar(f.restantePagoEm, f.restanteForaDoSite ? "Restante recebido pela Geleiô (fora do site)." : "Restante pago: encomenda quitada.");
@@ -929,9 +1114,22 @@ export type DadosDaMensagem = {
   devolucaoCentavos: number;
 };
 
+/**
+ * O primeiro nome da conta para o texto do WhatsApp. O nome é digitado pela cliente e a mensagem sai da
+ * conta da dona: só LETRAS (sem links, números, símbolos nem caracteres de controle), no máximo 30. Sem
+ * nenhuma letra, a saudação genérica.
+ */
+export function primeiroNomeSeguro(nome: string): string {
+  for (const pedaco of nome.trim().split(/\s+/)) {
+    const letras = pedaco.replace(/[^\p{L}]/gu, "");
+    if (letras) return letras.slice(0, 30);
+  }
+  return "tudo bem";
+}
+
 /** Texto pronto para a dona mandar pelo WhatsApp (link "Avisar no WhatsApp" do painel). */
 export function mensagemWhatsApp(status: StatusEncomenda, d: DadosDaMensagem): string {
-  const primeiroNome = d.nome.trim().split(/\s+/)[0] || "tudo bem";
+  const primeiroNome = primeiroNomeSeguro(d.nome);
   const ola = `Oi, ${primeiroNome}! Aqui é da Geleiô.`;
   const qual = `Sua encomenda ${d.codigo} (${d.potinhos} potinhos, festa em ${formatarDia(d.dataFesta)})`;
   const palavra = palavraDoModo(d.modo);

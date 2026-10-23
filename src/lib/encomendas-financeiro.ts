@@ -8,8 +8,8 @@ import { codigoPedido } from "@/lib/formatacao";
  * Dinheiro das encomendas de lembrancinhas no Financeiro e nas Despesas, por CAIXA (decisão 3.8 do
  * plano, coerente com o README):
  * - entra cada parcela paga pelo site na data em que foi aprovada (`pagamentos.aprovado_em`, com o
- *   valor da parcela: os juros do parcelado ficam com a InfinitePay) e o restante recebido fora do site
- *   na data do registro (`encomendas.restante_pago_em`);
+ *   valor da parcela: os juros do parcelado ficam com a InfinitePay), e a entrada ou o restante
+ *   recebidos fora do site na data do registro (`encomendas.entrada_paga_em` / `restante_pago_em`);
  * - a devolução FEITA sai da receita no mês em que foi feita (`encomenda_devolucoes.feita_em`);
  * - os potinhos por sabor contam as encomendas ENTREGUES no mês (`entregue_em`), num bloco à parte.
  * Vendas e ticket médio continuam só com os pedidos.
@@ -20,11 +20,13 @@ export type LembrancinhasDoMesDTO = {
   sinais: number;
   /** Restantes pagos pelo site no mês. */
   restantes: number;
+  /** Entradas recebidas fora do site (dinheiro, PIX direto) ou dadas como recebidas pela dona, registradas no mês. */
+  sinaisForaDoSite: number;
   /** Restantes recebidos fora do site (dinheiro, PIX direto) e registrados no mês. */
   restantesForaDoSite: number;
   /** Devoluções feitas no mês (saem da receita). */
   devolucoes: number;
-  /** sinais + restantes + restantesForaDoSite − devoluções: o que entra no resumo e no gráfico. */
+  /** sinais + sinaisForaDoSite + restantes + restantesForaDoSite − devoluções: o que entra no resumo e no gráfico. */
   liquido: number;
   /** Encomendas com algum dinheiro (entrada ou devolução) no mês. */
   encomendas: number;
@@ -50,15 +52,18 @@ const MAX_LINHAS = 100;
 export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ resumo: LembrancinhasDoMesDTO; movimentacoes: MovimentacaoLembrancinha[] }> {
   const pagas = { encomendaId: { not: null }, status: { in: ["APROVADO", "ESTORNADO"] }, aprovadoEm: { gte: inicio, lt: fim } } satisfies Prisma.PagamentoWhereInput;
   const foraDoSite = { restanteForaDoSite: true, restantePagoEm: { gte: inicio, lt: fim } } satisfies Prisma.EncomendaWhereInput;
+  const entradaForaDoSite = { entradaForaDoSite: true, entradaPagaEm: { gte: inicio, lt: fim } } satisfies Prisma.EncomendaWhereInput;
   const feitas = { status: "FEITA", feitaEm: { gte: inicio, lt: fim } } satisfies Prisma.EncomendaDevolucaoWhereInput;
 
-  const [porParcela, somaFora, somaDevolucoes, idsPagas, idsFora, idsDevolucoes, potinhos, linhasPagas, linhasFora, linhasDevolucoes] =
+  const [porParcela, somaFora, somaSinaisFora, somaDevolucoes, idsPagas, idsFora, idsSinaisFora, idsDevolucoes, potinhos, linhasPagas, linhasFora, linhasSinaisFora, linhasDevolucoes] =
     await Promise.all([
       db.pagamento.groupBy({ by: ["parcela"], where: pagas, _sum: { valor: true } }),
       db.encomenda.aggregate({ where: foraDoSite, _sum: { valorRestante: true } }),
+      db.encomenda.aggregate({ where: entradaForaDoSite, _sum: { valorEntrada: true } }),
       db.encomendaDevolucao.aggregate({ where: feitas, _sum: { valor: true } }),
       db.pagamento.findMany({ where: pagas, select: { encomendaId: true }, distinct: ["encomendaId"] }),
       db.encomenda.findMany({ where: foraDoSite, select: { id: true } }),
+      db.encomenda.findMany({ where: entradaForaDoSite, select: { id: true } }),
       db.encomendaDevolucao.findMany({ where: feitas, select: { encomendaId: true }, distinct: ["encomendaId"] }),
       db.$queryRaw<{ productId: string; nome: string; potinhos: number; valor: unknown }[]>`
         SELECT ei.product_id AS "productId", p.nome, SUM(ei.quantidade)::int AS potinhos, SUM(ei.preco_unitario * ei.quantidade) AS valor
@@ -80,6 +85,12 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
         take: MAX_LINHAS,
         select: { id: true, valorRestante: true, restantePagoEm: true, user: { select: { nome: true } } },
       }),
+      db.encomenda.findMany({
+        where: entradaForaDoSite,
+        orderBy: [{ entradaPagaEm: "desc" }, { id: "desc" }],
+        take: MAX_LINHAS,
+        select: { id: true, valorEntrada: true, entradaPagaEm: true, user: { select: { nome: true } } },
+      }),
       db.encomendaDevolucao.findMany({
         where: feitas,
         orderBy: [{ feitaEm: "desc" }, { id: "desc" }],
@@ -92,8 +103,14 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
   const sinais = porParcela.find((l) => l.parcela === "ENTRADA")?._sum.valor ?? zero;
   const restantes = porParcela.find((l) => l.parcela === "RESTANTE")?._sum.valor ?? zero;
   const fora = somaFora._sum.valorRestante ?? zero;
+  const sinaisFora = somaSinaisFora._sum.valorEntrada ?? zero;
   const devolucoes = somaDevolucoes._sum.valor ?? zero;
-  const encomendas = new Set([...idsPagas.map((l) => l.encomendaId), ...idsFora.map((l) => l.id), ...idsDevolucoes.map((l) => l.encomendaId)]);
+  const encomendas = new Set([
+    ...idsPagas.map((l) => l.encomendaId),
+    ...idsFora.map((l) => l.id),
+    ...idsSinaisFora.map((l) => l.id),
+    ...idsDevolucoes.map((l) => l.encomendaId),
+  ]);
 
   const movimentacoes: MovimentacaoLembrancinha[] = [
     ...linhasPagas.map((p) => ({
@@ -104,6 +121,15 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
       detalhe: "Lembrancinhas (site)",
       valor: p.valor.toNumber(),
       ordem: p.aprovadoEm!.getTime(),
+    })),
+    ...linhasSinaisFora.map((e) => ({
+      tipo: "entrada" as const,
+      id: `${e.id}-entrada`,
+      dia: hojeNaLoja(e.entradaPagaEm!),
+      descricao: `Lembrancinhas ${codigoPedido(e.id)} · entrada · ${e.user.nome}`,
+      detalhe: "Lembrancinhas (fora do site)",
+      valor: e.valorEntrada.toNumber(),
+      ordem: e.entradaPagaEm!.getTime(),
     })),
     ...linhasFora.map((e) => ({
       tipo: "entrada" as const,
@@ -128,10 +154,11 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
   return {
     resumo: {
       sinais: sinais.toNumber(),
+      sinaisForaDoSite: sinaisFora.toNumber(),
       restantes: restantes.toNumber(),
       restantesForaDoSite: fora.toNumber(),
       devolucoes: devolucoes.toNumber(),
-      liquido: sinais.add(restantes).add(fora).sub(devolucoes).toNumber(),
+      liquido: sinais.add(sinaisFora).add(restantes).add(fora).sub(devolucoes).toNumber(),
       encomendas: encomendas.size,
       potinhosEntregues: potinhos.map((l) => ({ productId: l.productId, nome: l.nome, potinhos: Number(l.potinhos), valor: SOMA(l.valor) })),
     },
@@ -153,6 +180,10 @@ export async function liquidoLembrancinhasPorMes(inicio: Date, fim: Date): Promi
       SELECT ${mes(Prisma.raw("aprovado_em"))} AS mes, valor AS v
       FROM pagamentos
       WHERE encomenda_id IS NOT NULL AND status IN ('APROVADO', 'ESTORNADO') AND aprovado_em >= ${inicio} AND aprovado_em < ${fim}
+      UNION ALL
+      SELECT ${mes(Prisma.raw("entrada_paga_em"))}, valor_entrada
+      FROM encomendas
+      WHERE entrada_fora_do_site AND entrada_paga_em >= ${inicio} AND entrada_paga_em < ${fim}
       UNION ALL
       SELECT ${mes(Prisma.raw("restante_pago_em"))}, valor_restante
       FROM encomendas

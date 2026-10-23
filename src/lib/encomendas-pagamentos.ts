@@ -2,7 +2,9 @@ import "server-only";
 import { Prisma, type Pagamento } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import {
+  estadoDaConferencia,
   etapaDaParcela,
+  type CobrancaParaConferencia,
   type MotivoIndisponivel,
   statusConfirmado,
   statusEfetivo,
@@ -26,18 +28,10 @@ import {
   gatewayAtivo,
   pagamentoOnlineDisponivel,
   paraCobrancaDTO,
-  paraEtapa,
   urlDoAviso,
   type CobrancaDTO,
 } from "@/lib/pagamentos";
-import {
-  cobrancaDivergente,
-  cobrancaEmConfirmacao,
-  cobrancaParaEtapa,
-  retornoRecente,
-  type EtapaPagamento,
-  type StatusCobranca,
-} from "@/lib/pagamentos-regras";
+import { retornoRecente, type EtapaPagamento } from "@/lib/pagamentos-regras";
 
 /**
  * Cobranças das encomendas de lembrancinhas: a ENTRADA e o RESTANTE, cada uma com os seus links do
@@ -62,23 +56,14 @@ const centavos = (valor: Prisma.Decimal) => valor.mul(100).toNumber();
 const MENSAGEM_DIVERGENCIA_PARCELA =
   "Recebemos um pagamento desta parcela que precisa ser conferido. Não pague de novo: fale com a loja no Instagram @ge.leio.";
 
-/** O que a confirmação olha numa cobrança (as colunas de `pagamentos` que entram na etapa). */
-type CobrancaParaEtapa = {
-  status: StatusCobranca;
-  statusGateway: string | null;
-  avisoTransacaoNsu: string | null;
-  avisoSlug: string | null;
-  avisadoEm: Date | null;
-  retornoEm: Date | null;
-};
-
 /**
- * A cobrança está em conferência: paga com divergência, aviso da InfinitePay ainda não conferido, ou
- * retorno do navegador há menos de 30 min. Enquanto isso, o dinheiro pode ter entrado.
+ * A cobrança está SEGURANDO a encomenda: paga com divergência ou aviso da InfinitePay ainda não conferido
+ * (por no máximo `HORAS_MAX_EM_CONFERENCIA`, ver `estadoDaConferencia`), ou retorno do navegador há menos
+ * de 30 min. Enquanto isso o dinheiro pode ter entrado: a encomenda não expira, a cliente não desiste e
+ * a dona não registra a parcela por fora. Depois do limite, nada disso segura mais.
  */
-export function cobrancaEmConferencia(c: CobrancaParaEtapa, agora: number = Date.now()): boolean {
-  const avisadoEm = c.avisoTransacaoNsu && c.avisoSlug ? c.avisadoEm : null;
-  return cobrancaDivergente(c) || cobrancaEmConfirmacao({ status: c.status, avisadoEm, retornoEm: c.retornoEm }, agora);
+export function cobrancaEmConferencia(c: CobrancaParaConferencia, agora: number = Date.now()): boolean {
+  return estadoDaConferencia(c, agora) !== null;
 }
 
 /**
@@ -99,13 +84,35 @@ export async function encerrarCobrancasDaEncomenda(encomendaId: string, parcela?
   return { linkAberto: abertas.some((p) => p.gateway === "infinitepay" && p.expiraEm > agora) };
 }
 
-/** "Marquei como devolvida" no painel: fecha TODAS as devoluções pendentes da encomenda. */
-export async function marcarDevolucoesFeitas(encomendaId: string, adminId: string, observacao: string | null, agora: Date): Promise<number> {
-  const { count } = await db.encomendaDevolucao.updateMany({
-    where: { encomendaId, status: "PENDENTE" },
-    data: { status: "FEITA", feitaEm: agora, observacao, registradaPorId: adminId },
+/**
+ * "Marquei como devolvida" no painel: fecha SÓ as devoluções que a tela mostrava (`ids`), todas ou nenhuma,
+ * numa transação. Se alguma já não está pendente (outra aba fechou, ou o id não é desta encomenda),
+ * nada muda e devolve `false` (a ação responde 409 "devolucao-mudou"). Uma devolução nova, que apareceu
+ * depois da tela, continua pendente para a dona ver e devolver à parte.
+ */
+export async function marcarDevolucoesFeitas(
+  encomendaId: string,
+  ids: readonly string[],
+  adminId: string,
+  observacao: string | null,
+  agora: Date,
+): Promise<boolean> {
+  const unicos = [...new Set(ids)];
+  if (unicos.length === 0) return false;
+  return db.$transaction(async (tx) => {
+    const { count } = await tx.encomendaDevolucao.updateMany({
+      where: { id: { in: unicos }, encomendaId, status: "PENDENTE" },
+      data: { status: "FEITA", feitaEm: agora, observacao, registradaPorId: adminId },
+    });
+    if (count !== unicos.length) {
+      // Desfaz o que fechou: tudo ou nada.
+      throw new ErroNegocio(409, "As devoluções mudaram.", { motivo: "devolucao-mudou" });
+    }
+    return true;
+  }).catch((e) => {
+    if (e instanceof ErroNegocio && e.status === 409) return false;
+    throw e;
   });
-  return count;
 }
 
 // --- abrir o link da parcela ----------------------------------------------------------------------
@@ -143,17 +150,22 @@ export async function abrirLinkDaParcela(encomendaId: string, userId: string, pa
   if (!enc) throw new ErroNegocio(404, "Encomenda não encontrada.");
   conferirParcelaPagavel(enc, parcela);
 
-  if (enc.pagamentos.some(cobrancaDivergente)) throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA_PARCELA);
-  // Aviso de pagamento não resolvido (de qualquer link da parcela): reconfere; se não fechar, NÃO abre
-  // link novo (o dinheiro pode ter entrado).
+  // Conferência recente (no máximo HORAS_MAX_EM_CONFERENCIA para o aviso e a divergência): o dinheiro pode
+  // ter entrado, então NÃO abre link novo. Passado o limite, um aviso que nunca fechou deixa de bloquear
+  // (a dona já teve tempo de conferir no app e agir).
+  const t0 = agora.getTime();
+  if (enc.pagamentos.some((p) => estadoDaConferencia(p, t0) === "DIVERGENTE")) throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA_PARCELA);
+  // Aviso de pagamento não resolvido (de qualquer link da parcela, de qualquer idade): reconfere, porque
+  // pode confirmar; se não fechar e a conferência ainda é recente, não abre link.
   const comAviso = cobrancaComAviso(enc.pagamentos);
   if (comAviso) {
     const r = await confirmarCobranca(comAviso, candidatoGravado(comAviso)!, "gravado").catch(() => "TRANSITORIO" as const);
     if (r === "APROVADO") throw new ErroNegocio(409, "O pagamento desta parcela acabou de ser confirmado.");
-    if (r === "DIVERGENTE") throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA_PARCELA);
-    if (r !== "INVALIDO") throw new ErroNegocio(409, MENSAGEM_AVISO_EM_CONFERENCIA);
+    const aindaSegura = estadoDaConferencia(comAviso, t0) === "CONFIRMANDO";
+    if (r === "DIVERGENTE" && aindaSegura) throw new ErroNegocio(409, MENSAGEM_DIVERGENCIA_PARCELA);
+    if (r !== "INVALIDO" && r !== "DIVERGENTE" && aindaSegura) throw new ErroNegocio(409, MENSAGEM_AVISO_EM_CONFERENCIA);
   }
-  if (enc.pagamentos.some((c) => (c.status === "PENDENTE" || c.status === "CANCELADO") && retornoRecente(c.retornoEm, agora.getTime()))) {
+  if (enc.pagamentos.some((c) => (c.status === "PENDENTE" || c.status === "CANCELADO") && retornoRecente(c.retornoEm, t0))) {
     throw new ErroNegocio(409, MENSAGEM_RETORNO_RECENTE);
   }
   const gateway = gatewayAtivo();
@@ -270,6 +282,13 @@ export type SituacaoDaParcelaDTO = {
    * antes da entrada paga) ou "PAGAMENTO_FORA_DO_AR" (pagamento pelo site desligado).
    */
   motivoIndisponivel: MotivoIndisponivel | null;
+  /**
+   * Esta parcela tem pagamento em conferência (aviso da InfinitePay ainda não conferido, retorno do
+   * navegador há menos de 30 min ou divergência; no máximo 24 h): o dinheiro pode ter entrado. Mostre
+   * "estamos conferindo o seu pagamento", nunca "Pagar" nem "Aprovada! Pague até…". É o mesmo sinal que
+   * deixa `etapa` em CONFIRMANDO (ou o 409 do POST).
+   */
+  pagamentoEmConferencia: boolean;
   /** Último link desta parcela, ou `null` se ainda não houve (`checkoutUrl` só enquanto vale). */
   cobranca: CobrancaDTO | null;
 };
@@ -307,8 +326,8 @@ function montarSituacao(enc: NonNullable<Awaited<ReturnType<typeof lerParaSituac
     },
     agora,
   );
-  const decide = cobrancaParaEtapa(daParcela.map(paraEtapa), t);
   const ultima = daParcela[0] ?? null;
+  const estados = daParcela.map((p) => estadoDaConferencia(p, t));
   return {
     status,
     entradaPaga: enc.entradaPagaEm !== null,
@@ -318,9 +337,10 @@ function montarSituacao(enc: NonNullable<Awaited<ReturnType<typeof lerParaSituac
       status,
       paga: parcela === "ENTRADA" ? enc.entradaPagaEm !== null : enc.restantePagoEm !== null,
       gatewayAtivo: pagamentoOnlineDisponivel(),
-      divergente: daParcela.some(cobrancaDivergente),
-      emConfirmacao: decide !== null && cobrancaEmConfirmacao(decide, t),
+      divergente: estados.includes("DIVERGENTE"),
+      emConfirmacao: estados.includes("CONFIRMANDO"),
     }),
+    pagamentoEmConferencia: estados.some((e) => e !== null),
     cobranca: ultima ? paraCobrancaDTO(ultima, t) : null,
   };
 }

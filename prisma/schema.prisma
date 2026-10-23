@@ -73,6 +73,7 @@ model User {
   encomendas            Encomenda[]          @relation("EncomendasDoCliente")
   /// Restantes de encomenda recebidos fora do site que este admin registrou (auditoria, decisão D8).
   restantesRegistrados  Encomenda[]          @relation("RestantesRegistrados")
+  entradasRegistradas   Encomenda[]          @relation("EntradasRegistradas")
   /// Devoluções de encomenda que este admin marcou como feitas (auditoria).
   devolucoesRegistradas EncomendaDevolucao[] @relation("DevolucoesRegistradas")
 
@@ -648,8 +649,10 @@ model Encomenda {
   responderAte            DateTime             @map("responder_ate")
   corteEm                 DateTime             @map("corte_em")
   entradaAte              DateTime?            @map("entrada_ate")
-  /// Percentual da entrada retido se a cliente desistir depois do corte. Gravado na solicitação (o
-  /// que a cliente aceitou) e congelado na aprovação: nunca sobe depois do aceite.
+  /// Percentual da entrada que a cliente ACEITOU ao solicitar (o texto da política que ela leu). Nunca muda.
+  percentualAceito        Int                  @map("percentual_aceito")
+  /// Percentual da entrada retido se a cliente desistir depois do corte: o que vale de fato. Começa igual
+  /// ao aceito e, na aprovação, desce se o painel o baixou depois; nunca sobe acima do aceito (CHECK).
   percentualRetido        Int                  @map("percentual_retido")
   politicaVersao          String               @map("politica_versao") @db.VarChar(20)
   politicaAceitaEm        DateTime             @map("politica_aceita_em")
@@ -658,6 +661,13 @@ model Encomenda {
   criadaEm                DateTime             @default(now()) @map("criada_em")
   aprovadaEm              DateTime?            @map("aprovada_em")
   entradaPagaEm           DateTime?            @map("entrada_paga_em")
+  /// Entrada recebida fora do site e registrada pela dona (dinheiro, PIX direto), ou dada como recebida
+  /// depois de uma conferência que não fechou: forma, observação e quem registrou. Pelo site, tudo
+  /// isto fica vazio (a forma está na cobrança, em `pagamentos`).
+  entradaForma            PaymentMethod?       @map("entrada_forma")
+  entradaForaDoSite       Boolean              @default(false) @map("entrada_fora_do_site")
+  entradaObservacao       String?              @map("entrada_observacao") @db.VarChar(300)
+  entradaRegistradaPorId  String?              @map("entrada_registrada_por_id")
   producaoIniciadaEm      DateTime?            @map("producao_iniciada_em")
   prontaEm                DateTime?            @map("pronta_em")
   /// Quitação. Pelo site: PIX (`restanteForma` = PIX, `restanteForaDoSite` = false). Fora do site
@@ -679,6 +689,7 @@ model Encomenda {
   user                    User                 @relation("EncomendasDoCliente", fields: [userId], references: [id], onDelete: Restrict)
   address                 Address?             @relation(fields: [addressId], references: [id], onDelete: Restrict)
   restanteRegistradoPor   User?                @relation("RestantesRegistrados", fields: [restanteRegistradoPorId], references: [id], onDelete: SetNull)
+  entradaRegistradaPor    User?                @relation("EntradasRegistradas", fields: [entradaRegistradaPorId], references: [id], onDelete: SetNull)
   itens                   EncomendaItem[]
   /// Cobranças da ENTRADA e do RESTANTE (tabela `pagamentos`, a mesma dos pedidos).
   pagamentos              Pagamento[]
@@ -693,6 +704,7 @@ model Encomenda {
   @@index([restantePagoEm])
   @@index([addressId])
   @@index([restanteRegistradoPorId])
+  @@index([entradaRegistradaPorId])
   @@map("encomendas")
 }
 

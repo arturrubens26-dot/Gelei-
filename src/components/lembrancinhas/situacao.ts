@@ -14,6 +14,8 @@ type Encomenda = Pick<
   | "entrada"
   | "restante"
   | "entradaPagaEm"
+  | "entradaEmFolga"
+  | "pagamentoEmConferencia"
   | "restantePagoEm"
   | "motivoRecusa"
   | "motivoCancelamento"
@@ -36,6 +38,9 @@ export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: stri
       : e.devolucao.status === "FEITA"
         ? ` Devolvemos ${formatarBRL(e.devolucao.devolvido)}.`
         : "";
+  // Fora de EXPIRADA e CANCELADA, uma devolução só existe por pagamento em duplicidade (a entrada ou o
+  // restante pagos duas vezes): conta isso à cliente em vez de deixar o dinheiro sem explicação.
+  const aMais = devolucao ? ` Recebemos um pagamento a mais desta encomenda.${devolucao}` : "";
 
   switch (e.statusEfetivo) {
     case "SOLICITADA":
@@ -45,9 +50,25 @@ export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: stri
         acao: false,
       };
     case "AGUARDANDO_ENTRADA":
+      // Pagamento em conferência: nunca "Aprovada! Pague até…" (a cliente pagaria de novo).
+      if (e.pagamentoEmConferencia.entrada) {
+        return {
+          titulo: "Estamos confirmando o seu pagamento",
+          texto: `Recebemos o aviso do pagamento da entrada de ${formatarBRL(e.entrada)} e estamos conferindo com a InfinitePay. Não pague de novo: se demorar, fale com a loja no Instagram @ge.leio.`,
+          acao: false,
+        };
+      }
+      // Depois do prazo e antes de expirar (folga de 30 min): já não se paga, mas a confirmação ainda vale.
+      if (e.entradaEmFolga) {
+        return {
+          titulo: "O prazo da entrada terminou",
+          texto: `O prazo para pagar a entrada${e.prazos.entradaAte ? ` (até ${prazo(e.prazos.entradaAte)})` : ""} terminou. Se você acabou de pagar, aguarde alguns minutos: a confirmação ainda vale. Senão, a encomenda expira em instantes e nada é cobrado.`,
+          acao: false,
+        };
+      }
       return {
         titulo: "Aprovada! Falta a entrada",
-        texto: `Pague a entrada de ${formatarBRL(e.entrada)}${e.prazos.entradaAte ? ` até ${prazo(e.prazos.entradaAte)}` : ""} para confirmar a encomenda.`,
+        texto: `Pague a entrada de ${formatarBRL(e.entrada)}${e.prazos.entradaAte ? ` até ${prazo(e.prazos.entradaAte)}` : ""} para confirmar a encomenda.${aMais}`,
         acao: true,
       };
     case "CONFIRMADA":
@@ -60,18 +81,23 @@ export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: stri
             ? "Seus potinhos estão sendo preparados"
             : `Pronta para a ${palavra}`;
       const falta = e.restantePagoEm === null;
+      const conferindo = falta && e.pagamentoEmConferencia.restante;
       return {
         titulo: fase,
         texto: `${palavra[0].toUpperCase()}${palavra.slice(1)} em ${dia}; o horário a gente combina no WhatsApp.${
-          falta ? ` Falta o restante de ${formatarBRL(e.restante)}, até o dia da ${palavra}.` : " Tudo pago."
-        }`,
-        acao: falta && statusConfirmado(e.statusEfetivo),
+          conferindo
+            ? ` Estamos conferindo o pagamento do restante de ${formatarBRL(e.restante)}; não pague de novo.`
+            : falta
+              ? ` Falta o restante de ${formatarBRL(e.restante)}, até o dia da ${palavra}.`
+              : " Tudo pago."
+        }${aMais}`,
+        acao: falta && !conferindo && statusConfirmado(e.statusEfetivo),
       };
     }
     case "ENTREGUE":
       return {
         titulo: e.modoEntrega === "RETIRADA" ? "Retirada na loja" : "Entregue",
-        texto: "Obrigada pela encomenda! Esperamos que a festa seja linda.",
+        texto: `Obrigada pela encomenda! Esperamos que a festa seja linda.${aMais}`,
         acao: false,
       };
     case "RECUSADA":
@@ -81,6 +107,14 @@ export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: stri
         acao: false,
       };
     case "EXPIRADA":
+      // Pagou depois do prazo: o dinheiro entrou e vai voltar. Nunca "nada foi cobrado".
+      if (e.devolucao.status !== "NAO_SE_APLICA") {
+        return {
+          titulo: "Encomenda expirada",
+          texto: `Recebemos o seu pagamento depois do prazo, quando a encomenda já tinha expirado.${devolucao} Se ainda quiser, faça uma nova solicitação.`,
+          acao: false,
+        };
+      }
       return {
         titulo: "Encomenda expirada",
         texto: e.prazos.entradaAte

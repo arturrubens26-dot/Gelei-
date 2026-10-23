@@ -90,6 +90,7 @@ CREATE TABLE "encomendas" (
     "responder_ate" TIMESTAMP(3) NOT NULL,
     "corte_em" TIMESTAMP(3) NOT NULL,
     "entrada_ate" TIMESTAMP(3),
+    "percentual_aceito" INTEGER NOT NULL,
     "percentual_retido" INTEGER NOT NULL,
     "politica_versao" VARCHAR(20) NOT NULL,
     "politica_aceita_em" TIMESTAMP(3) NOT NULL,
@@ -97,6 +98,10 @@ CREATE TABLE "encomendas" (
     "criada_em" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "aprovada_em" TIMESTAMP(3),
     "entrada_paga_em" TIMESTAMP(3),
+    "entrada_forma" "PaymentMethod",
+    "entrada_fora_do_site" BOOLEAN NOT NULL DEFAULT false,
+    "entrada_observacao" VARCHAR(300),
+    "entrada_registrada_por_id" TEXT,
     "producao_iniciada_em" TIMESTAMP(3),
     "pronta_em" TIMESTAMP(3),
     "restante_pago_em" TIMESTAMP(3),
@@ -167,6 +172,9 @@ CREATE INDEX "encomendas_address_id_idx" ON "encomendas"("address_id");
 CREATE INDEX "encomendas_restante_registrado_por_id_idx" ON "encomendas"("restante_registrado_por_id");
 
 -- CreateIndex
+CREATE INDEX "encomendas_entrada_registrada_por_id_idx" ON "encomendas"("entrada_registrada_por_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "encomendas_user_id_idempotency_key_key" ON "encomendas"("user_id", "idempotency_key");
 
 -- CreateIndex
@@ -201,6 +209,9 @@ ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_address_id_fkey" FOREIGN KEY
 
 -- AddForeignKey
 ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_restante_registrado_por_id_fkey" FOREIGN KEY ("restante_registrado_por_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_entrada_registrada_por_id_fkey" FOREIGN KEY ("entrada_registrada_por_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "encomenda_itens" ADD CONSTRAINT "encomenda_itens_encomenda_id_fkey" FOREIGN KEY ("encomenda_id") REFERENCES "encomendas"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -267,6 +278,16 @@ ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_status_coerente" CHECK (
   AND ("status" NOT IN ('RECUSADA', 'EXPIRADA', 'CANCELADA') OR "encerrada_em" IS NOT NULL)
   AND (("restante_pago_em" IS NULL) = ("restante_forma" IS NULL))
   AND (NOT "restante_fora_do_site" OR "restante_pago_em" IS NOT NULL));
+
+-- Percentual da política: o que a cliente aceitou (0 a 100) e o que vale de fato, que nunca passa do aceito.
+ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_percentuais" CHECK (
+  "percentual_aceito" BETWEEN 0 AND 100 AND "percentual_retido" <= "percentual_aceito");
+
+-- Entrada registrada pela dona (fora do site, ou dada como recebida depois de uma conferência que não
+-- fechou): exige a data, a forma e a encomenda já confirmada; pelo site, esses campos ficam vazios.
+ALTER TABLE "encomendas" ADD CONSTRAINT "encomendas_entrada_fora_do_site" CHECK (
+  (NOT "entrada_fora_do_site" OR ("entrada_paga_em" IS NOT NULL AND "entrada_forma" IS NOT NULL))
+  AND ("entrada_fora_do_site" OR ("entrada_forma" IS NULL AND "entrada_observacao" IS NULL AND "entrada_registrada_por_id" IS NULL)));
 
 -- Itens.
 ALTER TABLE "encomenda_itens" ADD CONSTRAINT "encomenda_itens_valores" CHECK ("quantidade" BETWEEN 1 AND 200 AND "preco_unitario" > 0);

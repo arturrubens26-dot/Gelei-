@@ -11,11 +11,14 @@ import {
   marcarDevolucoesFeitas,
 } from "@/lib/encomendas-pagamentos";
 import {
+  AVISO_CANCELAR_EM_CONFERENCIA,
   ROTULO_STATUS_ENCOMENDA,
   STATUS_CONFIRMADOS,
+  statusFinal,
   acoesDaLoja,
   agendaPorDia,
   alertaDaEncomenda,
+  conferenciaAte,
   faixaDaDevolucaoNoCancelamento,
   linkWhatsApp,
   mensagemWhatsApp,
@@ -92,6 +95,12 @@ export type EncomendaAdminDTO = {
   entradaPagaEm: string | null;
   restantePagoEm: string | null;
   restanteForaDoSite: boolean;
+  /** Entrada registrada pela dona (fora do site, ou conferida no app InfinitePay). */
+  entradaForaDoSite: boolean;
+  /** A entrada passou de `prazos.entradaAte` mas ainda está na folga de 30 min (ainda pode confirmar). */
+  entradaEmFolga: boolean;
+  /** Pagamento em conferência por parcela (aviso, retorno ou divergência; no máximo 24 h). */
+  pagamentoEmConferencia: { entrada: boolean; restante: boolean };
   devolucao: DevolucaoResumoDTO;
   alerta: AlertaEncomenda | null;
   /** Último status avisado à cliente pelo WhatsApp (botão "Avisei no WhatsApp"). */
@@ -119,8 +128,10 @@ export type PagamentoDaEncomendaDTO = {
   criadoEm: string;
   expiraEm: string;
   aprovadoEm: string | null;
-  /** Aviso/retorno ainda sendo conferido, ou pago com divergência. */
+  /** Aviso/retorno ainda sendo conferido, ou pago com divergência, e dentro do limite de 24 h. */
   emConferencia: boolean;
+  /** Até quando esta cobrança segura a encomenda (ISO); null se não está segurando. */
+  conferenciaAte: string | null;
   divergente: boolean;
 };
 
@@ -161,7 +172,12 @@ export type EncomendaAdminDetalheDTO = Omit<EncomendaAdminDTO, "cliente"> & {
   restanteForma: FormaPagamento | null;
   restanteObservacao: string | null;
   restanteRegistradoPor: string | null;
-  politica: { versao: string; aceitaEm: string; percentualRetido: number; textos: string[] };
+  /** Entrada registrada pela dona (`registrar-entrada`): forma, observação e quem registrou. */
+  entradaForma: FormaPagamento | null;
+  entradaObservacao: string | null;
+  entradaRegistradaPor: string | null;
+  /** `textos`: a política que a cliente aceitou (`percentualAceito`); `percentualRetido` é o que vale de fato. */
+  politica: { versao: string; aceitaEm: string; percentualAceito: number; percentualRetido: number; textos: string[] };
   linhaDoTempo: { quando: string; texto: string }[];
   pagamentos: PagamentoDaEncomendaDTO[];
   devolucoes: DevolucaoDaEncomendaDTO[];
@@ -191,15 +207,22 @@ const incluirAdmin = {
   ...incluirEncomenda,
   user: { select: { id: true, nome: true, email: true } },
   restanteRegistradoPor: { select: { nome: true } },
+  entradaRegistradaPor: { select: { nome: true } },
 } satisfies Prisma.EncomendaInclude;
 
 type EncomendaAdminCompleta = Prisma.EncomendaGetPayload<{ include: typeof incluirAdmin }>;
 
 function alertaDe(e: EncomendaCompleta, agora: Date): AlertaEncomenda | null {
   const t = agora.getTime();
+  const aberta = !statusFinal(e.status);
   return alertaDaEncomenda({
     devolucaoPendente: e.devolucoes.some((d) => d.status === "PENDENTE"),
-    pagamentoDivergente: e.pagamentos.some(cobrancaDivergente),
+    // Divergência só importa enquanto a parcela não foi dada como paga (pelo site ou registrada pela dona).
+    pagamentoDivergente:
+      aberta &&
+      e.pagamentos.some(
+        (p) => cobrancaDivergente(p) && (p.parcela === "ENTRADA" ? e.entradaPagaEm === null : e.restantePagoEm === null),
+      ),
     avisoParadoHaMaisDe30Min: e.pagamentos.some(
       (p) =>
         (p.status === "PENDENTE" || p.status === "CANCELADO") &&
@@ -211,7 +234,8 @@ function alertaDe(e: EncomendaCompleta, agora: Date): AlertaEncomenda | null {
 }
 
 function paraAdminDTO(e: EncomendaCompleta & { user: { nome: string } }, agora: Date): EncomendaAdminDTO {
-  const efetivo = statusEfetivo(paraRegras(e, agora), agora);
+  const regras = paraRegras(e, agora);
+  const efetivo = statusEfetivo(regras, agora);
   return {
     id: e.id,
     codigo: codigoPedido(e.id),
@@ -231,6 +255,9 @@ function paraAdminDTO(e: EncomendaCompleta & { user: { nome: string } }, agora: 
     entradaPagaEm: e.entradaPagaEm?.toISOString() ?? null,
     restantePagoEm: e.restantePagoEm?.toISOString() ?? null,
     restanteForaDoSite: e.restanteForaDoSite,
+    entradaForaDoSite: e.entradaForaDoSite,
+    entradaEmFolga: efetivo === "AGUARDANDO_ENTRADA" && e.entradaAte !== null && agora.getTime() >= e.entradaAte.getTime(),
+    pagamentoEmConferencia: { entrada: Boolean(regras.entradaEmConfirmacao), restante: Boolean(regras.restanteEmConfirmacao) },
     devolucao: resumoDaDevolucao(e),
     alerta: alertaDe(e, agora),
     avisadaStatus: e.avisadaStatus,
@@ -290,7 +317,16 @@ async function paraDetalheDTO(e: EncomendaAdminCompleta, agora: Date): Promise<E
     restanteForma: e.restanteForaDoSite ? e.restanteForma : null,
     restanteObservacao: e.restanteObservacao,
     restanteRegistradoPor: e.restanteRegistradoPor?.nome ?? null,
-    politica: { versao: e.politicaVersao, aceitaEm: e.politicaAceitaEm.toISOString(), percentualRetido: e.percentualRetido, textos: textosDaPoliticaDe(e) },
+    entradaForma: e.entradaForaDoSite ? e.entradaForma : null,
+    entradaObservacao: e.entradaObservacao,
+    entradaRegistradaPor: e.entradaRegistradaPor?.nome ?? null,
+    politica: {
+      versao: e.politicaVersao,
+      aceitaEm: e.politicaAceitaEm.toISOString(),
+      percentualAceito: e.percentualAceito,
+      percentualRetido: e.percentualRetido,
+      textos: textosDaPoliticaDe(e),
+    },
     linhaDoTempo: linhaDoTempoDe(e),
     pagamentos: e.pagamentos.map((p) => {
       const aprovada = p.status === "APROVADO" || p.status === "ESTORNADO";
@@ -310,6 +346,7 @@ async function paraDetalheDTO(e: EncomendaAdminCompleta, agora: Date): Promise<E
         expiraEm: p.expiraEm.toISOString(),
         aprovadoEm: p.aprovadoEm?.toISOString() ?? null,
         emConferencia: cobrancaEmConferencia(p, t),
+        conferenciaAte: conferenciaAte(p, t)?.toISOString() ?? null,
         divergente: cobrancaDivergente(p),
       };
     }),
@@ -459,10 +496,10 @@ export async function detalheEncomendaAdmin(id: string, agora: Date): Promise<En
 
 // --- ações da dona --------------------------------------------------------------------------------
 
-export type MotivoConflito = "status-mudou" | MotivoTransicaoRecusada | "pagamento-em-conferencia" | "sem-devolucao";
+export type MotivoConflito = "status-mudou" | MotivoTransicaoRecusada | "pagamento-em-conferencia" | "devolucao-mudou";
 
-function conflito(mensagem: string, statusAtual: StatusEncomenda, motivo: MotivoConflito): ErroNegocio {
-  return new ErroNegocio(409, mensagem, { statusAtual, motivo });
+function conflito(mensagem: string, statusAtual: StatusEncomenda, motivo: MotivoConflito, extra: Record<string, unknown> = {}): ErroNegocio {
+  return new ErroNegocio(409, mensagem, { statusAtual, motivo, ...extra });
 }
 
 const MENSAGEM_MUDOU = "A encomenda mudou enquanto você agia. Atualize a ficha e confira.";
@@ -512,10 +549,10 @@ export async function executarAcaoAdmin(
   switch (acao.acao) {
     case "aprovar": {
       exigirTransicao("AGUARDANDO_ENTRADA");
-      // O percentual retido nunca sobe depois do aceite da cliente: se o painel o baixou depois da
-      // solicitação, vale o menor (congelado aqui, na aprovação).
+      // O percentual que vale de fato nunca passa do que a cliente aceitou (`percentualAceito`, que NÃO muda):
+      // se o painel o baixou depois da solicitação, vale o menor (congelado aqui, na aprovação).
       const config = await lerConfigLembrancinhas();
-      const percentualRetido = Math.min(e.percentualRetido, config?.percentualRetido ?? e.percentualRetido);
+      const percentualRetido = Math.min(e.percentualAceito, config?.percentualRetido ?? e.percentualAceito);
       await atualizar(
         { status: "AGUARDANDO_ENTRADA", aprovadaEm: agora, entradaAte: prazoDaEntrada(agora, e.corteEm), percentualRetido },
         { responderAte: { gt: agora } },
@@ -538,6 +575,41 @@ export async function executarAcaoAdmin(
       exigirTransicao("ENTREGUE");
       await atualizar({ status: "ENTREGUE", entregueEm: agora }, { restantePagoEm: { not: null } });
       break;
+    case "registrar-entrada": {
+      // Saída da dona quando a conferência do pagamento não fecha, ou quando a cliente pagou por fora:
+      // dá a entrada como recebida (CONFIRMADA), com a forma e quem registrou. Com pagamento da entrada em
+      // conferência recente, espera (ou cancela): senão o mesmo dinheiro poderia entrar duas vezes.
+      exigirTransicao("CONFIRMADA");
+      if (e.entradaPagaEm) throw conflito("A entrada já foi paga.", e.status, "transicao-invalida");
+      if (emConferencia("ENTRADA")) {
+        const ate = e.pagamentos
+          .filter((p) => p.parcela === "ENTRADA")
+          .map((p) => conferenciaAte(p, agora.getTime()))
+          .reduce<Date | null>((max, d) => (d && (!max || d > max) ? d : max), null);
+        throw conflito(
+          "Há um pagamento da entrada sendo conferido. Confira no app InfinitePay: se o dinheiro entrou, aguarde a confirmação; " +
+            "se não, cancele a encomenda ou tente de novo quando a conferência terminar.",
+          e.status,
+          "pagamento-em-conferencia",
+          { conferenciaAte: ate?.toISOString() ?? null },
+        );
+      }
+      const { linkAberto } = await encerrarCobrancasDaEncomenda(id, "ENTRADA");
+      await atualizar({
+        status: "CONFIRMADA",
+        entradaPagaEm: agora,
+        entradaForma: acao.formaPagamento,
+        entradaForaDoSite: true,
+        entradaObservacao: acao.observacao,
+        entradaRegistradaPorId: adminId,
+      });
+      if (linkAberto) {
+        aviso =
+          "O link da entrada que estava aberto foi encerrado no site, mas ainda aceita pagamento na InfinitePay por até 1 hora. " +
+          "Se a cliente pagar, aparecerá uma devolução pendente por pagamento em duplicidade: devolva pelo app InfinitePay.";
+      }
+      break;
+    }
     case "registrar-restante": {
       if (!STATUS_CONFIRMADOS.some((s) => s === e.status)) {
         throw conflito("O restante só pode ser registrado com a encomenda confirmada.", e.status, "transicao-invalida");
@@ -564,9 +636,9 @@ export async function executarAcaoAdmin(
     case "cancelar": {
       // A pedido da cliente (pelo WhatsApp) vale a regra dela; a loja cancelando, a da loja.
       exigirTransicao("CANCELADA", acao.aPedidoDaCliente ? "CLIENTE" : "LOJA");
-      if (emConferencia()) {
-        throw conflito("Há um pagamento sendo conferido. Confira no app InfinitePay antes de cancelar.", e.status, "pagamento-em-conferencia");
-      }
+      // Com pagamento em conferência, cancelar vale (é a saída da dona), com o aviso de conferir no app: se o
+      // dinheiro entrar depois, a confirmação vê a encomenda cancelada e registra a devolução pendente.
+      const emConferenciaAgora = emConferencia();
       const faixa = faixaDaDevolucaoNoCancelamento(regras, agora, acao.aPedidoDaCliente);
       if (acao.devolverCentavos < faixa.minimo || acao.devolverCentavos > faixa.maximo) {
         throw new ErroNegocio(400, "Valor da devolução fora da faixa.", {
@@ -602,12 +674,16 @@ export async function executarAcaoAdmin(
       if (linkAberto) {
         partes.push("Um link de pagamento ainda aceita pagamento por até 1 hora; se a cliente pagar, aparecerá outra devolução pendente.");
       }
+      if (emConferenciaAgora) partes.push(AVISO_CANCELAR_EM_CONFERENCIA);
       aviso = partes.length > 0 ? partes.join(" ") : undefined;
       break;
     }
     case "devolucao-feita": {
-      const feitas = await marcarDevolucoesFeitas(id, adminId, acao.observacao, agora);
-      if (feitas === 0) throw conflito("Não há devolução pendente nesta encomenda.", e.status, "sem-devolucao");
+      // Só as devoluções que a tela mostrava (ids), todas ou nenhuma: uma nova, que apareceu depois, segue pendente.
+      const fechou = await marcarDevolucoesFeitas(id, acao.devolucaoIds, adminId, acao.observacao, agora);
+      if (!fechou) {
+        throw conflito("As devoluções pendentes mudaram desde que você abriu a ficha. Atualize e confira antes de marcar.", e.status, "devolucao-mudou");
+      }
       break;
     }
     case "avisada":

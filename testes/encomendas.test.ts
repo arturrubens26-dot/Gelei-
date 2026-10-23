@@ -9,6 +9,7 @@ import {
   versaoDaPoliticaConhecida,
 } from "@/lib/encomendas-politica";
 import {
+  FOLGA_DA_ENTRADA_MS,
   MAX_POTINHOS,
   MIN_POTINHOS,
   ROTULO_STATUS_ENCOMENDA,
@@ -20,6 +21,8 @@ import {
   agendaPorDia,
   alertaDaEncomenda,
   calcularValores,
+  fimDaFolgaDaEntrada,
+  primeiroNomeSeguro,
   configLembrancinhasSchema,
   conferirPotinhos,
   corteDaEntrega,
@@ -49,6 +52,7 @@ import {
   type EncomendaParaRegras,
   type StatusEncomenda,
 } from "@/lib/encomendas-regras";
+import { situacaoDaEncomenda } from "@/components/lembrancinhas/situacao";
 import { alvoDaCobranca, classificarConferencia, lerConferencia, referenciaDaEncomenda } from "@/lib/infinitepay-regras";
 import { telefoneSchema } from "@/lib/validacao";
 
@@ -336,7 +340,16 @@ describe("transições", () => {
   it("expirar só pelo SISTEMA e só depois do prazo", () => {
     assert.deepEqual(transicaoPermitida("SOLICITADA", "EXPIRADA", "SISTEMA", fatos), { ok: false, motivo: "transicao-invalida" });
     assert.deepEqual(transicaoPermitida("SOLICITADA", "EXPIRADA", "SISTEMA", { ...fatos, agora: fatos.responderAte }), { ok: true });
-    assert.deepEqual(transicaoPermitida("AGUARDANDO_ENTRADA", "EXPIRADA", "SISTEMA", { ...fatos, agora: fatos.entradaAte }), { ok: true });
+    // A entrada só expira depois da folga de 30 min: até lá, quem pagou no último minuto ainda confirma.
+    assert.deepEqual(transicaoPermitida("AGUARDANDO_ENTRADA", "EXPIRADA", "SISTEMA", { ...fatos, agora: fatos.entradaAte }), { ok: false, motivo: "transicao-invalida" });
+    assert.deepEqual(
+      transicaoPermitida("AGUARDANDO_ENTRADA", "EXPIRADA", "SISTEMA", { ...fatos, agora: new Date(fatos.entradaAte.getTime() + FOLGA_DA_ENTRADA_MS - 1) }),
+      { ok: false, motivo: "transicao-invalida" },
+    );
+    assert.deepEqual(
+      transicaoPermitida("AGUARDANDO_ENTRADA", "EXPIRADA", "SISTEMA", { ...fatos, agora: new Date(fatos.entradaAte.getTime() + FOLGA_DA_ENTRADA_MS) }),
+      { ok: true },
+    );
     assert.deepEqual(transicaoPermitida("SOLICITADA", "EXPIRADA", "LOJA", { ...fatos, agora: fatos.responderAte }), { ok: false, motivo: "transicao-invalida" });
   });
   it("ENTREGUE sem quitação é recusado; quitada, passa", () => {
@@ -385,13 +398,25 @@ describe("status efetivo e ações", () => {
     assert.equal(statusEfetivo(e, new Date(e.responderAte.getTime() - 1)), "SOLICITADA");
     assert.equal(statusEfetivo(e, e.responderAte), "EXPIRADA");
   });
-  it("AGUARDANDO_ENTRADA vencida mas com link ainda valendo continua aguardando", () => {
+  it("AGUARDANDO_ENTRADA vencida mas com link ainda valendo continua aguardando (depois da folga)", () => {
     const entradaAte = new Date("2026-11-12T03:00:00Z");
-    const agora = new Date(entradaAte.getTime() + 5 * MIN);
-    const comLink = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte, linkEntradaValidoAte: new Date(entradaAte.getTime() + 20 * MIN) });
+    const agora = new Date(entradaAte.getTime() + 31 * MIN);
+    const comLink = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte, linkEntradaValidoAte: new Date(entradaAte.getTime() + 40 * MIN) });
     assert.equal(statusEfetivo(comLink, agora), "AGUARDANDO_ENTRADA");
     assert.equal(statusEfetivo({ ...comLink, linkEntradaValidoAte: null }, agora), "EXPIRADA");
-    assert.equal(statusEfetivo(comLink, new Date(entradaAte.getTime() + 20 * MIN)), "EXPIRADA");
+    assert.equal(statusEfetivo(comLink, new Date(entradaAte.getTime() + 40 * MIN)), "EXPIRADA");
+  });
+  it("folga de 30 min: depois de entradaAte continua aguardando; EXPIRADA só em entradaAte + 30 min", () => {
+    const entradaAte = new Date("2026-11-12T03:00:00Z");
+    const e = encomenda({ status: "AGUARDANDO_ENTRADA", entradaAte });
+    assert.equal(statusEfetivo(e, new Date(entradaAte.getTime() - 1)), "AGUARDANDO_ENTRADA");
+    assert.equal(statusEfetivo(e, entradaAte), "AGUARDANDO_ENTRADA");
+    assert.equal(statusEfetivo(e, new Date(entradaAte.getTime() + FOLGA_DA_ENTRADA_MS - 1)), "AGUARDANDO_ENTRADA");
+    assert.equal(statusEfetivo(e, new Date(entradaAte.getTime() + FOLGA_DA_ENTRADA_MS)), "EXPIRADA");
+    assert.equal(fimDaFolgaDaEntrada(entradaAte).toISOString(), "2026-11-12T03:30:00.000Z");
+    // Na folga já não se paga: o link novo precisa de 5 min até o prazo.
+    assert.equal(acoesDaCliente(e, entradaAte).pagarEntrada, false);
+    assert.equal(acoesDaCliente(e, new Date(entradaAte.getTime() + 10 * MIN)).pagarEntrada, false);
   });
   it("AGUARDANDO_ENTRADA vencida com pagamento da entrada em conferência NÃO expira", () => {
     const entradaAte = new Date("2026-11-12T03:00:00Z");
@@ -411,6 +436,7 @@ describe("status efetivo e ações", () => {
       pagarEntrada: false,
       pagarRestante: true,
       desistir: { devolucao: 6900, retido: 0 },
+      desistirBloqueado: false,
     });
     // Depois do corte, a mesma desistência retém a entrada.
     assert.deepEqual(acoesDaCliente(confirmada, entradaAte).desistir, { devolucao: 0, retido: 6900 });
@@ -607,6 +633,7 @@ describe("idempotência, agenda, linha do tempo e WhatsApp", () => {
     dataEntrega: "2026-11-14",
     modoEntrega: "RETIRADA" as const,
     telefone: "86999991234",
+    observacao: null,
   };
   it("mesmaEncomenda ignora a ordem e as linhas repetidas; muda com data, modo, quantidade ou telefone", () => {
     assert.equal(mesmaEncomenda(conteudo, { ...conteudo, itens: [{ productId: "b", quantidade: 5 }, { productId: "a", quantidade: 4 }, { productId: "a", quantidade: 6 }] }), true);
@@ -644,6 +671,7 @@ describe("idempotência, agenda, linha do tempo e WhatsApp", () => {
       aprovadaEm: new Date("2026-11-11T12:00:00Z"),
       entradaAte: new Date("2026-11-12T03:00:00Z"),
       entradaPagaEm: new Date("2026-11-11T13:00:00Z"),
+      entradaForaDoSite: false,
       producaoIniciadaEm: null,
       prontaEm: null,
       restantePagoEm: null,
@@ -725,5 +753,207 @@ describe("política de desistência", () => {
     assert.equal(versaoDaPoliticaConhecida("2020-01-v0"), false);
     assert.throws(() => textosDaPolitica("2020-01-v0", dados), RangeError);
     assert.match(AVISO_JURIDICO, /Procon-PI/);
+  });
+});
+
+describe("idempotência: observação e endereço também contam (F)", () => {
+  const campos = { cep: "64035-420", rua: "Rua A", numero: "10", complemento: null, bairro: "Centro", cidade: "Teresina", estado: "PI" };
+  const entrega = {
+    itens: [{ productId: "a", quantidade: 15 }],
+    dataFesta: "2026-11-15",
+    dataEntrega: "2026-11-14",
+    modoEntrega: "ENTREGA" as const,
+    telefone: "86999991234",
+    observacao: null as string | null,
+    addressId: null as string | null,
+    endereco: campos as typeof campos | null,
+  };
+  it("a observação diferente (ou acrescentada) é outra solicitação", () => {
+    assert.equal(mesmaEncomenda(entrega, { ...entrega }), true);
+    assert.equal(mesmaEncomenda(entrega, { ...entrega, observacao: "Sem pimenta, por favor." }), false);
+    assert.equal(mesmaEncomenda({ ...entrega, observacao: "Tag azul" }, { ...entrega, observacao: "Tag azul" }), true);
+    assert.equal(mesmaEncomenda({ ...entrega, observacao: "Tag azul" }, { ...entrega, observacao: null }), false);
+  });
+  it("campos do endereço: qualquer diferença (rua, número, complemento, CEP) é outra solicitação", () => {
+    assert.equal(mesmaEncomenda(entrega, { ...entrega, endereco: { ...campos, rua: "Rua B" } }), false);
+    assert.equal(mesmaEncomenda(entrega, { ...entrega, endereco: { ...campos, numero: "11" } }), false);
+    assert.equal(mesmaEncomenda(entrega, { ...entrega, endereco: { ...campos, complemento: "Ap 2" } }), false);
+    assert.equal(mesmaEncomenda(entrega, { ...entrega, endereco: { ...campos, cep: "64035-421" } }), false);
+    assert.equal(mesmaEncomenda(entrega, { ...entrega, endereco: { ...campos } }), true);
+  });
+  it("endereço salvo (addressId): o mesmo id repete; outro id não", () => {
+    const salvo = { ...entrega, addressId: "end1", endereco: null };
+    assert.equal(mesmaEncomenda(salvo, { ...salvo }), true);
+    assert.equal(mesmaEncomenda(salvo, { ...salvo, addressId: "end2" }), false);
+  });
+  it("a gravada (id + campos) contra o reenvio com os campos, ou só com o id", () => {
+    const gravada = { ...entrega, addressId: "end1" };
+    assert.equal(mesmaEncomenda(gravada, { ...entrega, addressId: null }), true, "reenvio com os campos iguais");
+    assert.equal(mesmaEncomenda(gravada, { ...entrega, addressId: null, endereco: { ...campos, rua: "Outra" } }), false);
+    assert.equal(mesmaEncomenda(gravada, { ...entrega, addressId: "end1", endereco: null }), true, "reenvio só com o id");
+    assert.equal(mesmaEncomenda(gravada, { ...entrega, addressId: "end9", endereco: null }), false);
+  });
+  it("entrega sem nenhuma forma de comparar o endereço não repete; retirada ignora o endereço", () => {
+    assert.equal(mesmaEncomenda({ ...entrega, endereco: null }, { ...entrega, endereco: null }), false);
+    const retirada = { ...entrega, modoEntrega: "RETIRADA" as const, endereco: null };
+    assert.equal(mesmaEncomenda(retirada, { ...retirada }), true);
+  });
+});
+
+describe("nome na mensagem do WhatsApp: só letras, até 30 (G)", () => {
+  it("primeiro nome comum, com acento, e hífen/apóstrofo viram só letras", () => {
+    assert.equal(primeiroNomeSeguro("Ana Maria Souza"), "Ana");
+    assert.equal(primeiroNomeSeguro("  João  Pedro "), "João");
+    assert.equal(primeiroNomeSeguro("Zoë"), "Zoë");
+    assert.equal(primeiroNomeSeguro("Jean-Luc Picard"), "JeanLuc");
+    assert.equal(primeiroNomeSeguro("D'Ávila"), "DÁvila");
+  });
+  it("link, número, símbolo e caractere de controle não passam; pula o pedaço sem letras", () => {
+    assert.equal(primeiroNomeSeguro("https://golpe.example/pague Ana"), "httpsgolpeexamplepague");
+    assert.doesNotMatch(primeiroNomeSeguro("https://golpe.example/pague"), /[:/.]/);
+    assert.equal(primeiroNomeSeguro("1234 Ana"), "Ana");
+    assert.equal(primeiroNomeSeguro("‮Ana"), "Ana");
+    assert.equal(primeiroNomeSeguro("A\nB"), "A");
+    assert.equal(primeiroNomeSeguro("😀 🎉 ***"), "tudo bem");
+    assert.equal(primeiroNomeSeguro(""), "tudo bem");
+  });
+  it("no máximo 30 caracteres", () => {
+    assert.equal(primeiroNomeSeguro("A".repeat(100)).length, 30);
+  });
+  it("a mensagem pronta usa só o nome filtrado", () => {
+    const texto = mensagemWhatsApp("CONFIRMADA", {
+      nome: "http://golpe.example/x  Ana",
+      codigo: "#ABC12345",
+      potinhos: 20,
+      dataFesta: "2026-11-15",
+      dataEntrega: "2026-11-14",
+      modo: "RETIRADA",
+      entradaCentavos: 6900,
+      restanteCentavos: 9900,
+      entradaAte: null,
+      motivo: null,
+      link: null,
+      devolucaoCentavos: 0,
+    });
+    assert.match(texto, /^Oi, httpgolpeexamplex! Aqui é da Geleiô\./);
+    assert.doesNotMatch(texto, /:\/\//);
+  });
+});
+
+describe("devolução feita: só as que a tela mostrou (E)", () => {
+  const base = { acao: "devolucao-feita", statusEsperado: "CANCELADA" };
+  it("exige os ids das devoluções (pelo menos um)", () => {
+    assert.equal(acaoAdminSchema.safeParse(base).success, false);
+    assert.equal(acaoAdminSchema.safeParse({ ...base, devolucaoIds: [] }).success, false);
+    assert.equal(acaoAdminSchema.safeParse({ ...base, devolucaoIds: [""] }).success, false);
+    assert.equal(acaoAdminSchema.safeParse({ ...base, devolucaoIds: "d1" }).success, false);
+  });
+  it("aceita os ids, tira os repetidos e mantém a observação", () => {
+    const r = acaoAdminSchema.safeParse({ ...base, devolucaoIds: ["d1", "d2", "d1"], observacao: "  Devolvi pelo app.  " });
+    assert.equal(r.success, true);
+    if (r.success && r.data.acao === "devolucao-feita") {
+      assert.deepEqual(r.data.devolucaoIds, ["d1", "d2"]);
+      assert.equal(r.data.observacao, "Devolvi pelo app.");
+    }
+  });
+  it("limite de 50 ids por vez", () => {
+    const muitos = Array.from({ length: 51 }, (_, i) => `d${i}`);
+    assert.equal(acaoAdminSchema.safeParse({ ...base, devolucaoIds: muitos }).success, false);
+  });
+});
+
+describe("linha do tempo com a entrada recebida fora do site", () => {
+  it("troca o texto da entrada", () => {
+    const linha = linhaDoTempo({
+      status: "CONFIRMADA",
+      modo: "RETIRADA",
+      criadaEm: new Date("2026-11-10T15:00:00Z"),
+      aprovadaEm: new Date("2026-11-11T12:00:00Z"),
+      entradaAte: new Date("2026-11-12T03:00:00Z"),
+      entradaPagaEm: new Date("2026-11-11T13:00:00Z"),
+      entradaForaDoSite: true,
+      producaoIniciadaEm: null,
+      prontaEm: null,
+      restantePagoEm: null,
+      restanteForaDoSite: false,
+      entregueEm: null,
+      encerradaEm: null,
+      motivoRecusa: null,
+      canceladaPor: null,
+      devolucoes: [],
+    });
+    assert.ok(linha.some((l) => l.texto === "Entrada recebida pela Geleiô (fora do site): encomenda confirmada."));
+    assert.ok(!linha.some((l) => l.texto.startsWith("Entrada paga")));
+  });
+});
+
+describe("tela da cliente: expirada com pagamento tardio e pagamento em conferência (C e D)", () => {
+  const base = {
+    statusEfetivo: "EXPIRADA" as StatusEncomenda,
+    modoEntrega: "RETIRADA" as const,
+    dataEntrega: "2026-11-14",
+    prazos: { responderAte: "2026-11-11T15:00:00.000Z", entradaAte: "2026-11-12T03:00:00.000Z", corteEm: "2026-11-12T03:00:00.000Z", horasParaPagarEntrada: 15 },
+    entrada: 69,
+    restante: 99,
+    entradaPagaEm: null,
+    restantePagoEm: null,
+    motivoRecusa: null,
+    motivoCancelamento: null,
+    canceladaPor: null,
+    entradaEmFolga: false,
+    pagamentoEmConferencia: { entrada: false, restante: false },
+    devolucao: { status: "NAO_SE_APLICA" as const, valor: 0, pendente: 0, devolvido: 0, devolvidaEm: null },
+  };
+  const nbsp = (s: string) => s.replace(/ /g, " ");
+
+  it("EXPIRADA sem pagamento: 'nada foi cobrado'", () => {
+    const s = situacaoDaEncomenda(base);
+    assert.match(s.texto, /nada foi cobrado/);
+  });
+  it("EXPIRADA com a devolução pendente: reconhece o pagamento tardio, diz quanto volta, e não diz 'nada foi cobrado'", () => {
+    const s = situacaoDaEncomenda({ ...base, devolucao: { status: "PENDENTE", valor: 69, pendente: 69, devolvido: 0, devolvidaEm: null } });
+    assert.equal(s.titulo, "Encomenda expirada");
+    assert.match(nbsp(s.texto), /Recebemos o seu pagamento depois do prazo/);
+    assert.match(nbsp(s.texto), /Vamos devolver R\$ 69,00, pelo mesmo meio do pagamento, em até 2 dias úteis\./);
+    assert.doesNotMatch(s.texto, /nada foi cobrado/);
+    assert.equal(s.acao, false);
+  });
+  it("EXPIRADA com a devolução feita: diz que devolvemos", () => {
+    const s = situacaoDaEncomenda({ ...base, devolucao: { status: "FEITA", valor: 69, pendente: 0, devolvido: 69, devolvidaEm: "2026-11-13T10:00:00.000Z" } });
+    assert.match(nbsp(s.texto), /Recebemos o seu pagamento depois do prazo/);
+    assert.match(nbsp(s.texto), /Devolvemos R\$ 69,00\./);
+    assert.doesNotMatch(s.texto, /nada foi cobrado/);
+  });
+  it("AGUARDANDO_ENTRADA com a entrada em conferência: nunca 'Aprovada! Pague até…'", () => {
+    const s = situacaoDaEncomenda({ ...base, statusEfetivo: "AGUARDANDO_ENTRADA", pagamentoEmConferencia: { entrada: true, restante: false } });
+    assert.equal(s.titulo, "Estamos confirmando o seu pagamento");
+    assert.match(s.texto, /Não pague de novo/);
+    assert.equal(s.acao, false);
+    assert.doesNotMatch(s.titulo + s.texto, /Aprovada|Pague a entrada/);
+  });
+  it("AGUARDANDO_ENTRADA na folga: o prazo terminou, mas a confirmação ainda vale", () => {
+    const s = situacaoDaEncomenda({ ...base, statusEfetivo: "AGUARDANDO_ENTRADA", entradaEmFolga: true });
+    assert.equal(s.titulo, "O prazo da entrada terminou");
+    assert.match(s.texto, /acabou de pagar, aguarde/);
+    assert.equal(s.acao, false);
+  });
+  it("AGUARDANDO_ENTRADA normal pede a entrada (acao true)", () => {
+    const s = situacaoDaEncomenda({ ...base, statusEfetivo: "AGUARDANDO_ENTRADA" });
+    assert.equal(s.titulo, "Aprovada! Falta a entrada");
+    assert.equal(s.acao, true);
+  });
+  it("CONFIRMADA com o restante em conferência não pede para pagar", () => {
+    const s = situacaoDaEncomenda({ ...base, statusEfetivo: "CONFIRMADA", entradaPagaEm: "2026-11-11T13:00:00.000Z", pagamentoEmConferencia: { entrada: false, restante: true } });
+    assert.match(s.texto, /Estamos conferindo o pagamento do restante/);
+    assert.equal(s.acao, false);
+  });
+  it("pagamento em duplicidade (devolução em encomenda confirmada) é explicado", () => {
+    const s = situacaoDaEncomenda({
+      ...base,
+      statusEfetivo: "CONFIRMADA",
+      entradaPagaEm: "2026-11-11T13:00:00.000Z",
+      devolucao: { status: "PENDENTE", valor: 69, pendente: 69, devolvido: 0, devolvidaEm: null },
+    });
+    assert.match(nbsp(s.texto), /Recebemos um pagamento a mais desta encomenda\. Vamos devolver R\$ 69,00/);
   });
 });
