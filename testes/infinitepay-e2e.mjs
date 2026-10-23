@@ -149,8 +149,10 @@ async function main() {
     const link1 = falsa.links.get(codigoDe(p1.pagamento.checkoutUrl));
     confere(link1.amount === Math.round(p1.pedido.total * 100) && link1.single_payment && /-03:00$/.test(link1.valid_until), "link: valor, single_payment e validade com fuso", link1);
     confere(link1.webhook_url.startsWith(`${BASE}/api/webhooks/infinitepay/ped-${p1.pedido.id}-1/`), "webhook com referência e token no caminho");
+    const consultas1 = falsa.chamadas.payment_check;
     const pg1 = await pagar({ codigo: link1.codigo, metodo: "pix" });
     confere(pg1.aviso?.status === 200 && pg1.aviso.corpo?.resultado === "aprovado", "aviso → 200 aprovado", pg1.aviso);
+    confere(falsa.chamadas.payment_check === consultas1 + 1, "o aviso faz UMA consulta (não chama o canário)", falsa.chamadas.payment_check - consultas1);
     const s1 = await a.req("GET", `/api/orders/${p1.pedido.id}/pagamento`);
     confere(s1.json?.etapa === "PAGO" && s1.json.pedidoStatus === "PAGO", "etapa PAGO", s1.json);
     confere(s1.json?.cobranca?.metodo === "pix" && s1.json.cobranca.parcelas === 1 && s1.json.cobranca.valorPago === p1.pedido.total, "método, parcelas e valor pago");
@@ -560,9 +562,27 @@ async function main() {
       modo({});
       const [c] = await cobrancas(p.pedido.id);
       confere((await statusPedido(p.pedido.id)) === "PENDENTE" && semMarca(c) && c.retorno_em !== null, `canário com falha (${falha}): não confirma, só retorno_em`, c);
-      await sql("update pagamentos set consultado_em = null where order_id = $1", [p.pedido.id]);
       await conta24.req("GET", `/pagamento/retorno${new URL(pg.retorno).search}`);
       confere((await statusPedido(p.pedido.id)) === "PAGO", `canário de volta (${falha}): o retorno confirma`);
+    }
+
+    // b2) A vez reservada pelo retorno é devolvida quando o canário falha: o aviso que chega colado
+    //     (sem esperar os 3 s entre consultas) confirma, com uma consulta só.
+    for (const [rotulo, falha] of [["canário com 500", 500], ["canário com tempo esgotado", "tempo"]]) {
+      const pc = await novoPedido(conta24);
+      const pgc = await pagar({ codigo: codigoDe(pc.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+      modo({ falharCanario: falha });
+      await conta24.req("GET", `/pagamento/retorno${new URL(pgc.retorno).search}`);
+      modo({});
+      const [cc] = await cobrancas(pc.pedido.id);
+      confere((await statusPedido(pc.pedido.id)) === "PENDENTE" && cc.consultado_em === null, `${rotulo}: a vez reservada foi devolvida (consultado_em volta ao que era)`, cc.consultado_em);
+      const consultasAntes = falsa.chamadas.payment_check;
+      const avisoColado = await avisar(falsa.links.get(codigoDe(pc.pagamento.checkoutUrl)).webhook_url, pgc.corpoAviso);
+      confere(
+        avisoColado.status === 200 && (await statusPedido(pc.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultasAntes + 1,
+        `${rotulo}: o aviso colado confirma (sem ADIADO) com uma consulta`,
+        { status: avisoColado.status, consultas: falsa.chamadas.payment_check - consultasAntes },
+      );
     }
 
     // c) Consulta principal com tempo esgotado no retorno: nada gravado além do retorno_em.
