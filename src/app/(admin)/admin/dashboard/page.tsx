@@ -5,7 +5,9 @@ import { CarregandoAdmin, GuardaAdmin } from "@/components/admin/GuardaAdmin";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import { resumoDashboard } from "@/lib/admin";
 import { formatarBRL } from "@/lib/dinheiro";
+import { formatarPrazo } from "@/lib/encomendas-regras";
 import { codigoPedido, formatarDataHora } from "@/lib/formatacao";
+import { obterLembrancinhas } from "@/lib/lembrancinhas";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -20,7 +22,26 @@ export default function PaginaDashboard() {
 }
 
 async function Resumo() {
-  const r = await resumoDashboard();
+  const [r, lembrancinhas] = await Promise.all([resumoDashboard(), obterLembrancinhas()]);
+  const enc = r.encomendas;
+  const mostrarEncomendas = lembrancinhas.ativo || enc.aguardandoResposta + enc.entregasHoje + enc.devolucoesPendentes > 0;
+  const cartoesEncomendas = [
+    {
+      rotulo: "Encomendas a responder",
+      valor: String(enc.aguardandoResposta),
+      dica: enc.proximoPrazo ? `a primeira até ${formatarPrazo(new Date(enc.proximoPrazo))}` : "nenhuma esperando",
+      href: "/admin/encomendas?visao=responder",
+      urgente: enc.aguardandoResposta > 0,
+    },
+    { rotulo: "Lembrancinhas para hoje", valor: String(enc.entregasHoje), dica: "entregas ou retiradas", href: "/admin/encomendas?visao=agenda", urgente: false },
+    {
+      rotulo: "Devoluções pendentes",
+      valor: String(enc.devolucoesPendentes),
+      dica: "devolver pelo app InfinitePay",
+      href: "/admin/encomendas?visao=devolucoes",
+      urgente: enc.devolucoesPendentes > 0,
+    },
+  ];
 
   const cartoes = [
     { rotulo: "Pedidos pendentes", valor: String(r.pendentes), dica: "aguardando pagamento", href: "/admin/orders" },
@@ -53,6 +74,25 @@ async function Resumo() {
           </li>
         ))}
       </ul>
+
+      {mostrarEncomendas && (
+        <section aria-labelledby="titulo-lembrancinhas" className="flex flex-col gap-3">
+          <h2 id="titulo-lembrancinhas" className="text-2xl font-bold">
+            Lembrancinhas
+          </h2>
+          <ul className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-4">
+            {cartoesEncomendas.map((c) => (
+              <li key={c.rotulo}>
+                <Link href={c.href} className={`cartao block h-full p-5 transition-colors hover:bg-accent1/20 ${c.urgente ? "border-secundaria" : ""}`}>
+                  <p className="text-sm font-medium text-primaria/85">{c.rotulo}</p>
+                  <p className={`mt-2 text-2xl font-bold sm:text-3xl ${c.urgente ? "text-secundaria" : ""}`}>{c.valor}</p>
+                  <p className="mt-1 text-xs text-primaria/80">{c.dica}</p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section aria-labelledby="titulo-recentes" className="cartao p-5">
         <div className="mb-3 flex items-center justify-between gap-4">
