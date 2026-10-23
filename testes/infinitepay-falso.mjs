@@ -20,7 +20,9 @@
 // Controle dos testes (não existe na API real):
 //   POST /__teste/pagar  { codigo, metodo?, parcelas?, valorErrado?, aviso? } → { transaction_nsu, slug, order_nsu, retorno, aviso }
 //   POST /__teste/modo   { falharConferencia?: 0|500|"tempo", falharLinks?: 0|500, comSlug?, naoAmarraPedido?,
-//                          conferencia404? }   (naoAmarraPedido: uma API hipotética que NÃO amarra a transação)
+//                          conferencia404?, falharCanario?: 0|404|500|"tempo" }
+//                        (naoAmarraPedido: uma API hipotética que NÃO amarra a transação; falharCanario: falha
+//                        só a consulta com um order_nsu que nenhum link tem, como o canário do retorno)
 //   GET  /__teste/estado → links e transações
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -28,7 +30,14 @@ import { pathToFileURL } from "node:url";
 
 const JUROS_POR_PARCELA = 0.03; // só para o "cartão com juros" ficar maior que o valor do link
 
-export const MODO_PADRAO = Object.freeze({ falharConferencia: 0, falharLinks: 0, comSlug: false, naoAmarraPedido: false, conferencia404: false });
+export const MODO_PADRAO = Object.freeze({
+  falharConferencia: 0,
+  falharLinks: 0,
+  comSlug: false,
+  naoAmarraPedido: false,
+  conferencia404: false,
+  falharCanario: 0,
+});
 
 export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", silencioso = false } = {}) {
   // código do link → { codigo, slug, order_nsu, amount, redirect_url, webhook_url, valid_until, single_payment, pagoPor }
@@ -173,6 +182,12 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
         }
         if (modo.falharConferencia) return json(res, modo.falharConferencia, { message: "falha simulada" });
         const b = await lerCorpo(req);
+        const desconhecido = ![...links.values()].some((l) => l.order_nsu === b?.order_nsu);
+        if (desconhecido && modo.falharCanario === "tempo") {
+          await new Promise((r) => setTimeout(r, 12_000));
+          return json(res, 504, { message: "tempo" });
+        }
+        if (desconhecido && modo.falharCanario) return json(res, modo.falharCanario, { message: "falha simulada (canário)" });
         if (modo.conferencia404) return json(res, 404, { message: "transaction not found" });
         const t = b && transacoes.get(b.transaction_nsu);
         const pago = (t) => ({

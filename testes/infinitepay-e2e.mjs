@@ -181,7 +181,11 @@ async function main() {
     const consultas2b = falsa.chamadas.payment_check;
     const r2b = await a.req("GET", `/pagamento/retorno?${q2b}`);
     confere(r2b.status === 303 && r2b.local === `${BASE}/order-confirmation/${p2b.pedido.id}?retorno=1`, "retorno → 303 sem a transação na URL", r2b);
-    confere((await statusPedido(p2b.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultas2b + 1, "o retorno sozinho marca PAGO (uma consulta)");
+    confere((await statusPedido(p2b.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultas2b + 2, "o retorno sozinho marca PAGO (a consulta e o canário)");
+    confere(
+      (await cobrancas(p2b.pedido.id))[0].comprovante_url === `${falsa.origem}/recibo/${pg2b.transaction_nsu}`,
+      "comprovante gravado: o recibo da própria transação",
+    );
     const [c2b] = await cobrancas(p2b.pedido.id);
     confere(
       c2b.status === "APROVADO" && c2b.transacao_nsu === pg2b.transaction_nsu && c2b.fatura_slug === link2b.slug && c2b.metodo === "pix" && c2b.retorno_em !== null && c2b.aviso_transacao_nsu === null,
@@ -516,6 +520,84 @@ async function main() {
     const ensaio = await avisar(`${BASE}/api/webhooks/infinitepay/ensaio-202610221200/ensaio`, "{}");
     const ensaioRuim = await avisar(`${BASE}/api/webhooks/infinitepay/ensaio-x/ensaio`, "{}");
     confere(ensaio.status === 400 && ensaioRuim.status === 401, "rota de ensaio: 400 só no formato ensaio-AAAAMMDDhhmm", [ensaio.status, ensaioRuim.status]);
+
+    console.log("24. Canário de amarração no retorno, recibo de outro host e retorno sem marca");
+    // Conta própria: o limite de pedidos por hora da conta "a" já foi usado pelos casos anteriores.
+    const conta24 = await novaConta("c");
+    const semMarca = (c) => c.status === "PENDENTE" && c.status_gateway === "aberto" && c.transacao_nsu === null && c.aviso_transacao_nsu === null;
+    const semAlerta = async (pedidoId) => ((await admin.req("GET", `/api/admin/orders/${pedidoId}`)).json?.pedido?.pagamento?.alerta ?? null) === null;
+    // a) API hipotética que NÃO amarra: a transação de OUTRA compra de mesmo valor, apresentada no
+    //    retorno, passa na consulta principal, mas o canário também diz "pago": barrada.
+    modo({ naoAmarraPedido: true });
+    const alvo24 = await novoPedido(conta24);
+    const outro24 = await novoPedido(b);
+    const pgOutro24 = await pagar({ codigo: codigoDe(outro24.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    const link24 = falsa.links.get(codigoDe(alvo24.pagamento.checkoutUrl));
+    const antes24 = falsa.chamadas.payment_check;
+    const q24 = new URLSearchParams({ order_nsu: link24.order_nsu, transaction_nsu: pgOutro24.transaction_nsu, slug: pgOutro24.slug });
+    const r24 = await conta24.req("GET", `/pagamento/retorno?${q24}`);
+    const [c24] = await cobrancas(alvo24.pedido.id);
+    confere(
+      r24.status === 303 && (await statusPedido(alvo24.pedido.id)) === "PENDENTE" && falsa.chamadas.payment_check === antes24 + 2 && semMarca(c24),
+      "API que não amarra: o canário barra o retorno (duas consultas, nada gravado)",
+      { c24, consultas: falsa.chamadas.payment_check - antes24 },
+    );
+    confere(await semAlerta(alvo24.pedido.id), "painel: nenhum alerta");
+    // Com a API que não amarra, nem a compra de verdade confirma pelo retorno: quem confirma é o aviso.
+    await b.req("GET", `/pagamento/retorno${new URL(pgOutro24.retorno).search}`);
+    confere((await statusPedido(outro24.pedido.id)) === "PENDENTE", "API que não amarra: o próprio retorno também não confirma (fail-closed)");
+    await esperar(3_100); // o retorno reservou a vez desta cobrança
+    const avisoOutro24 = await avisar(falsa.links.get(codigoDe(outro24.pagamento.checkoutUrl)).webhook_url, pgOutro24.corpoAviso);
+    confere(avisoOutro24.status === 200 && (await statusPedido(outro24.pedido.id)) === "PAGO", "o aviso confirma a compra de verdade", avisoOutro24.status);
+    modo({});
+
+    // b) Canário com falha (500, 404, tempo): não confirma pelo retorno e não grava nada; depois confirma.
+    for (const falha of [500, 404, "tempo"]) {
+      const p = await novoPedido(conta24);
+      const pg = await pagar({ codigo: codigoDe(p.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+      modo({ falharCanario: falha });
+      await conta24.req("GET", `/pagamento/retorno${new URL(pg.retorno).search}`);
+      modo({});
+      const [c] = await cobrancas(p.pedido.id);
+      confere((await statusPedido(p.pedido.id)) === "PENDENTE" && semMarca(c) && c.retorno_em !== null, `canário com falha (${falha}): não confirma, só retorno_em`, c);
+      await sql("update pagamentos set consultado_em = null where order_id = $1", [p.pedido.id]);
+      await conta24.req("GET", `/pagamento/retorno${new URL(pg.retorno).search}`);
+      confere((await statusPedido(p.pedido.id)) === "PAGO", `canário de volta (${falha}): o retorno confirma`);
+    }
+
+    // c) Consulta principal com tempo esgotado no retorno: nada gravado além do retorno_em.
+    const p24c = await novoPedido(conta24);
+    const pg24c = await pagar({ codigo: codigoDe(p24c.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    modo({ falharConferencia: "tempo" });
+    await conta24.req("GET", `/pagamento/retorno${new URL(pg24c.retorno).search}`);
+    modo({});
+    const [c24c] = await cobrancas(p24c.pedido.id);
+    confere((await statusPedido(p24c.pedido.id)) === "PENDENTE" && semMarca(c24c), "tempo esgotado no retorno: sem marca", c24c);
+
+    // d) Retorno reapresentando uma transação já usada (de um pedido já pago) em outro pedido de mesmo valor.
+    const pago24 = await novoPedido(conta24);
+    const pgPago24 = await pagar({ codigo: codigoDe(pago24.pagamento.checkoutUrl), metodo: "pix" });
+    confere((await statusPedido(pago24.pedido.id)) === "PAGO", "pedido pago pelo aviso", pgPago24.aviso);
+    const reuso24 = await novoPedido(conta24);
+    const linkReuso24 = falsa.links.get(codigoDe(reuso24.pagamento.checkoutUrl));
+    const qReuso = new URLSearchParams({ order_nsu: linkReuso24.order_nsu, transaction_nsu: pgPago24.transaction_nsu, slug: pgPago24.slug });
+    await conta24.req("GET", `/pagamento/retorno?${qReuso}`);
+    const [cReuso] = await cobrancas(reuso24.pedido.id);
+    confere((await statusPedido(reuso24.pedido.id)) === "PENDENTE" && semMarca(cReuso) && (await semAlerta(reuso24.pedido.id)), "transação já usada no retorno: PENDENTE, sem marca e sem alerta", cReuso);
+
+    // e) receipt_url de outro host (ou de outra transação): confirma, mas o comprovante não é gravado.
+    for (const [rotulo, recibo] of [
+      ["outro host", (tx) => `https://evil.example/recibo/${tx}`],
+      ["outra transação", () => `${falsa.origem}/recibo/00000000-0000-4000-8000-000000000000`],
+    ]) {
+      const p = await novoPedido(conta24);
+      const pg = await pagar({ codigo: codigoDe(p.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+      const q = new URL(pg.retorno).searchParams;
+      q.set("receipt_url", recibo(pg.transaction_nsu));
+      await conta24.req("GET", `/pagamento/retorno?${q}`);
+      const [c] = await cobrancas(p.pedido.id);
+      confere((await statusPedido(p.pedido.id)) === "PAGO" && c.comprovante_url === null, `recibo de ${rotulo}: confirma sem gravar o comprovante`, c.comprovante_url);
+    }
 
     console.log("21. Token do aviso com segredo próprio");
     if (process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() && process.env.INFINITEPAY_WEBHOOK_SECRET.trim() !== process.env.SESSION_SECRET) {
