@@ -504,10 +504,13 @@ export function DespesasAdmin() {
           className={`grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-4 transition-opacity ${carregando ? "opacity-60" : ""}`}
           aria-busy={carregando}
         >
+          {/* "Entradas" inclui o líquido das lembrancinhas (pode ser negativo num mês só de devoluções). */}
           <Kpi
-            rotulo="Vendas do mês"
+            rotulo={exibidos.lembrancinhas !== 0 ? "Entradas do mês" : "Vendas do mês"}
             valor={formatarBRL(exibidos.entradas)}
-            dica={`${plural(exibidos.pedidosPagos, "pedido pago", "pedidos pagos")}, com frete`}
+            dica={`${plural(exibidos.pedidosPagos, "pedido pago", "pedidos pagos")}, com frete${
+              exibidos.lembrancinhas !== 0 ? `; lembrancinhas ${formatarBRL(exibidos.lembrancinhas)}` : ""
+            }`}
           />
           <Kpi
             rotulo="Despesas do mês"
@@ -517,7 +520,7 @@ export function DespesasAdmin() {
           <Kpi
             rotulo="Saldo do mês"
             valor={formatarBRL(exibidos.saldo)}
-            dica={exibidos.saldo < 0 ? "as despesas passaram das vendas" : "vendas menos despesas"}
+            dica={exibidos.saldo < 0 ? "as despesas passaram das entradas" : "entradas menos despesas"}
           />
         </ul>
       )}

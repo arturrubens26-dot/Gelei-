@@ -193,6 +193,9 @@ function Resumo({ dados }: { dados: FinanceiroDoMes }) {
           <p className="mt-2 text-3xl font-bold tabular-nums">{formatarBRL(entradas)}</p>
           <p className="mt-1 text-xs text-primaria/80">
             {vendas} {vendas === 1 ? "venda paga" : "vendas pagas"} (site, feira e balcão)
+            {dados.entradas.lembrancinhas.liquido !== 0
+              ? `, mais ${formatarBRL(dados.entradas.lembrancinhas.liquido)} de lembrancinhas`
+              : ""}
           </p>
         </li>
         <li className="cartao p-5">
@@ -213,7 +216,7 @@ function Resumo({ dados }: { dados: FinanceiroDoMes }) {
 }
 
 function Entradas({ dados }: { dados: FinanceiroDoMes }) {
-  const { site, presencial, ticketMedio, porSabor, kits } = dados.entradas;
+  const { site, presencial, ticketMedio, porSabor, kits, lembrancinhas } = dados.entradas;
   return (
     <section aria-labelledby="titulo-entradas" className="cartao flex flex-col gap-4 p-5">
       <div>
@@ -225,6 +228,13 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
       <dl className="flex flex-col divide-y divide-accent1/70 text-sm">
         <Linha rotulo="Vendas pelo site" valor={site.total} detalhe={`${site.pedidos} ${site.pedidos === 1 ? "pedido" : "pedidos"}`} />
         <Linha rotulo="Vendas na feira e no balcão" valor={presencial.total} detalhe={`${presencial.vendas} ${presencial.vendas === 1 ? "venda" : "vendas"}`} />
+        {(lembrancinhas.liquido !== 0 || lembrancinhas.encomendas > 0) && (
+          <Linha
+            rotulo="Lembrancinhas (encomendas)"
+            valor={lembrancinhas.liquido}
+            detalhe={`${lembrancinhas.encomendas} ${lembrancinhas.encomendas === 1 ? "encomenda" : "encomendas"} · entradas, restantes e devoluções do mês`}
+          />
+        )}
         <Linha rotulo="Frete cobrado no site" valor={site.frete} detalhe="já incluído nas vendas pelo site" discreto />
         <Linha rotulo="Valor médio por venda" valor={ticketMedio} detalhe="entradas ÷ vendas" discreto />
         {/* Já está dentro das vendas acima: a linha só mostra quanto veio em caixas e o desconto dado. */}
@@ -237,6 +247,9 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
           />
         )}
       </dl>
+      {(lembrancinhas.liquido !== 0 || lembrancinhas.encomendas > 0 || lembrancinhas.potinhosEntregues.length > 0) && (
+        <Lembrancinhas dados={lembrancinhas} />
+      )}
       <div>
         <h3 className="mb-2 font-semibold">Por sabor</h3>
         {porSabor.length === 0 ? (
@@ -273,6 +286,47 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Lembrancinhas no mês, por caixa: entradas e restantes na data do pagamento, devoluções na data em que
+ * foram feitas. O líquido já está nas entradas do mês; vendas e valor médio continuam só com os pedidos.
+ */
+function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembrancinhas"] }) {
+  return (
+    <div>
+      <h3 className="mb-1 font-semibold">Lembrancinhas</h3>
+      <p className="mb-2 text-xs text-primaria/75">Pelo dia em que o dinheiro entrou ou saiu. Não contam nas vendas nem no valor médio.</p>
+      <dl className="flex flex-col divide-y divide-accent1/70 text-sm">
+        <Linha rotulo="Entradas (50%) pelo site" valor={l.sinais} detalhe="parcela que confirma a encomenda" discreto />
+        <Linha rotulo="Restantes pelo site" valor={l.restantes} detalhe="com o frete, quando há entrega" discreto />
+        {l.restantesForaDoSite > 0 && <Linha rotulo="Restantes recebidos na loja" valor={l.restantesForaDoSite} detalhe="dinheiro ou PIX direto" discreto />}
+        {l.devolucoes > 0 && <Linha rotulo="Devoluções feitas" valor={-l.devolucoes} detalhe="desistências e cancelamentos" discreto />}
+        <Linha rotulo="Líquido das lembrancinhas" valor={l.liquido} detalhe="já somado às entradas do mês" />
+      </dl>
+      {l.potinhosEntregues.length > 0 && (
+        <table className="mt-3 w-full text-left text-sm">
+          <caption className="mb-1 text-left text-xs font-semibold text-primaria/85">Potinhos entregues no mês, por sabor (sem o frete)</caption>
+          <thead className="border-b-2 border-accent2/60">
+            <tr>
+              <th scope="col" className="py-2 pr-3 font-semibold">Sabor</th>
+              <th scope="col" className="px-3 py-2 text-right font-semibold">Potinhos</th>
+              <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-accent1/70">
+            {l.potinhosEntregues.map((s) => (
+              <tr key={s.productId}>
+                <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
+                <td className="px-3 py-2 text-right tabular-nums">{s.potinhos}</td>
+                <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -370,13 +424,13 @@ function Movimentacoes({ dados }: { dados: FinanceiroDoMes }) {
                         m.tipo === "entrada" ? "bg-accent1/70" : "border border-secundaria/60 text-secundaria"
                       }`}
                     >
-                      {m.tipo === "entrada" ? "Entrada" : "Saída"}
+                      {m.tipo === "entrada" ? "Entrada" : m.tipo === "devolucao" ? "Devolução" : "Saída"}
                     </span>
                   </td>
                   <td className="px-3 py-2">{m.descricao}</td>
                   <td className="px-3 py-2 text-primaria/85">{m.detalhe}</td>
-                  <td className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums ${m.tipo === "saida" ? "text-secundaria" : ""}`}>
-                    {m.tipo === "saida" ? "− " : "+ "}
+                  <td className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums ${m.tipo !== "entrada" ? "text-secundaria" : ""}`}>
+                    {m.tipo !== "entrada" ? "− " : "+ "}
                     {formatarBRL(m.valor)}
                   </td>
                 </tr>
