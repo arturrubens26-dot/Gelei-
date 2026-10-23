@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   JANELA_CONFIRMANDO_MS,
   MARCA_APOS_BAIXA_MANUAL,
+  MARCA_NAO_PAGO,
   MARCA_DIVERGENTE,
   PRAZO_PARA_PAGAR_MS,
   alertaDoPagamento,
@@ -173,6 +174,10 @@ describe("painel: alertas, pagamento e expirado", () => {
     assert.equal(alertaDoPagamento(e({ pedidoStatus: "PENDENTE", cobrancas: [aviso(20)] })), "AVISO_NAO_CONFERIDO");
     assert.equal(alertaDoPagamento(e({ pedidoStatus: "PAGO", cobrancas: [aviso(20)] })), null);
     assert.equal(alertaDoPagamento(e({ pedidoStatus: "PENDENTE", cobrancas: [aviso(20), divergente] })), "PAGO_COM_DIVERGENCIA");
+    // "Não pago" é uma resposta da InfinitePay, não uma conferência parada: sem alerta.
+    const naoPago = (min: number) => cobranca({ status: "PENDENTE", statusGateway: MARCA_NAO_PAGO, metodo: null, valorPago: null, aprovadoEm: null, avisadoEm: t(min) });
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "PENDENTE", cobrancas: [naoPago(20)] })), null);
+    assert.equal(alertaDoPagamento(e({ pedidoStatus: "PENDENTE", cobrancas: [naoPago(20), aviso(20)] })), "AVISO_NAO_CONFERIDO", "outra cobrança parada continua alertando");
   });
 
   it("pagamentoAdminDe: a primeira cobrança aprovada; só com alerta, campos nulos; sem nada, null", () => {

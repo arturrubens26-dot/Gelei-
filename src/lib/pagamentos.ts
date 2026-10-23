@@ -28,6 +28,7 @@ import {
 import {
   JANELA_CONFIRMANDO_MS,
   MARCA_DIVERGENTE,
+  MARCA_NAO_PAGO,
   VALIDADE_DO_LINK_MS,
   MARCA_APOS_BAIXA_MANUAL,
   cobrancaDivergente,
@@ -209,32 +210,52 @@ type OrigemCandidato = "aviso" | "gravado" | "retorno";
 const SEM_DIVERGENCIA = { NOT: { statusGateway: { startsWith: MARCA_DIVERGENTE } } } satisfies Prisma.PagamentoWhereInput;
 
 /**
- * Grava o candidato do AVISO (ainda não conferido). Não mexe em cobrança aprovada. O mesmo candidato
- * repetido (a InfinitePay reenvia o aviso) não renova `avisadoEm`: a janela de 30 min conta do primeiro.
+ * Guarda o candidato do AVISO para a tela e o "Pagar" reconferirem, DEPOIS de conferi-lo e só quando
+ * a conferência não decidiu (InfinitePay fora, 4xx logo depois do pagamento, "não pago"). Um aviso
+ * que dá "pago" aprova sem precisar gravar nada, e um que dá "inválido" nem chega aqui.
+ *
+ * Nunca troca um candidato DIFERENTE ainda dentro da janela de 30 min (o token do aviso é conhecido
+ * da cliente: um forjado não pode tomar o lugar do verdadeiro); só entra no lugar vazio ou de um que
+ * já passou da janela. O mesmo candidato repetido (a InfinitePay reenvia o aviso) só atualiza o
+ * recibo: a janela conta do primeiro. Devolve se o candidato gravado agora é este.
  */
-async function registrarCandidato(p: Pagamento, c: Candidato): Promise<Pagamento> {
-  if (p.status !== "PENDENTE" && p.status !== "CANCELADO") return p;
-  const mesmo = p.avisoTransacaoNsu === c.transacaoNsu && p.avisoSlug === c.slug && p.avisadoEm !== null;
-  // updateMany com o status no filtro: se outra conferência aprovou no meio do caminho, nada muda.
+async function guardarCandidato(p: Pagamento, c: Candidato): Promise<boolean> {
+  const aberta = { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } } satisfies Prisma.PagamentoWhereInput;
+  if (c.comprovanteUrl) {
+    await db.pagamento.updateMany({
+      where: { ...aberta, avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug },
+      data: { comprovanteUrl: c.comprovanteUrl },
+    });
+  }
+  const limite = new Date(Date.now() - JANELA_CONFIRMANDO_MS);
   await db.pagamento.updateMany({
-    where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } },
-    data: mesmo
-      ? { comprovanteUrl: c.comprovanteUrl }
-      : { avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug, avisadoEm: new Date(), comprovanteUrl: c.comprovanteUrl },
+    where: {
+      ...aberta,
+      OR: [
+        { avisoTransacaoNsu: null },
+        { avisoSlug: null },
+        { avisadoEm: null },
+        { avisadoEm: { lt: limite }, OR: [{ avisoTransacaoNsu: { not: c.transacaoNsu } }, { avisoSlug: { not: c.slug } }] },
+      ],
+    },
+    data: { avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug, avisadoEm: new Date(), comprovanteUrl: c.comprovanteUrl },
   });
-  return (await db.pagamento.findUnique({ where: { id: p.id } })) ?? p;
+  const atual = await db.pagamento.findUnique({ where: { id: p.id }, select: { avisoTransacaoNsu: true, avisoSlug: true } });
+  return atual?.avisoTransacaoNsu === c.transacaoNsu && atual.avisoSlug === c.slug;
 }
 
 /**
- * Apaga o candidato recusado, mas só se ele ainda for o gravado: um candidato novo que chegou durante
- * a conferência (o aviso de verdade, por exemplo) não é perdido por causa de outro.
+ * Apaga o candidato recusado, mas só se ele ainda for o gravado: um candidato novo (o aviso de
+ * verdade, por exemplo) não é perdido por causa de outro. A marca só é gravada quando o candidato
+ * foi apagado, ou quando não havia nenhum: um aviso forjado e recusado não escreve por cima da
+ * marca do verdadeiro.
  */
 async function descartarCandidato(p: Pagamento, c: Candidato, motivo: string): Promise<void> {
-  await db.pagamento.updateMany({
+  const { count } = await db.pagamento.updateMany({
     where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] }, avisoTransacaoNsu: c.transacaoNsu, avisoSlug: c.slug },
     data: { avisoTransacaoNsu: null, avisoSlug: null, avisadoEm: null, comprovanteUrl: null },
   });
-  await marcar(p, motivo);
+  if (count === 1 || !p.avisoTransacaoNsu) await marcar(p, motivo);
 }
 
 /** Grava o que a última conferência disse, sem apagar uma divergência pendente. */
@@ -292,6 +313,8 @@ export async function confirmarCobranca(
     return "INVALIDO";
   }
 
+  // Do aviso, o candidato só é guardado (para a tela reconferir) quando a conferência não decide.
+  const guardar = () => (origem === "aviso" ? guardarCandidato(p, c) : Promise.resolve(false));
   const prazo = prazoFinal ?? Date.now() + ORCAMENTO_CONFERENCIA_MS;
   const tempoAte = (max: number) => Math.min(max, prazo - Date.now());
   // Sem tempo no orçamento: nem reserva a vez (a tela confere de novo daqui a pouco).
@@ -320,6 +343,7 @@ export async function confirmarCobranca(
     // 401/403: a NOSSA chave foi recusada; 429: limite. Nada disso é culpa do candidato.
     if (status === 0 || status >= 500 || status === 401 || status === 403 || status === 429) {
       console.error(`[pagamentos] payment_check da cobrança ${p.id} falhou (${(e as Error).message})`);
+      await guardar();
       return "TRANSITORIO";
     }
     // Outro 4xx ("transação não encontrada"): logo depois do pagamento a InfinitePay pode ainda não
@@ -328,6 +352,7 @@ export async function confirmarCobranca(
     if (daCliente) return "PENDENTE";
     if (dentroDaJanela(p, c)) {
       console.warn(`[pagamentos] cobrança ${p.id}: payment_check ainda não acha a transação (HTTP ${status}); tenta de novo`);
+      await guardar();
       return "TRANSITORIO";
     }
     await descartarCandidato(p, c, `invalido:http-${status}`);
@@ -362,7 +387,16 @@ export async function confirmarCobranca(
   }
   if (resultado.tipo === "NAO_PAGO") {
     // Do retorno, paid=false pode ser uma transação de outro pedido: não marca nada (dado da cliente).
-    if (!daCliente) await marcar(p, "nao-pago");
+    if (daCliente) return "PENDENTE";
+    // Passou da janela de 30 min e ainda "não pago": o candidato é descartado (como no 4xx), não fica
+    // "confirmando" para sempre. Dentro da janela, guarda-o (se o lugar estiver livre) e marca.
+    if (!dentroDaJanela(p, c)) {
+      await descartarCandidato(p, c, MARCA_NAO_PAGO);
+      console.warn(`[pagamentos] cobrança ${p.id}: candidato ainda "não pago" depois da janela, descartado`);
+      return "PENDENTE";
+    }
+    const eEste = origem === "gravado" ? true : await guardar();
+    if (eEste) await marcar(p, MARCA_NAO_PAGO);
     return "PENDENTE";
   }
   if (resultado.tipo === "DIVERGENTE") {
@@ -424,6 +458,7 @@ export async function confirmarCobranca(
     );
     // Nada foi decidido: devolve a vez reservada, para o aviso que chega logo em seguida não receber ADIADO.
     await devolverReserva(p, agora);
+    if (!daCliente) await guardar();
     return daCliente ? "PENDENTE" : "TRANSITORIO";
   }
 
@@ -639,14 +674,15 @@ export function avisoAutentico(referencia: string, token: string): boolean {
 
 /**
  * Aviso da InfinitePay em /api/webhooks/infinitepay/<referencia>/<token>. Sem o token certo: 401 e
- * nada muda. Cobrança desconhecida ou corpo sem transação: 200 sem efeito. Com candidato: grava e
- * confere na hora. 200 quando confirmado, divergente (a dona confere no app) ou recusado de vez; 400
- * quando a InfinitePay falhou, ainda não marca como pago ou a cobrança acabou de ser conferida (ela
- * repete o aviso).
+ * nada muda. Cobrança desconhecida ou corpo sem transação: 200 sem efeito. Com candidato: confere na
+ * hora e SÓ DEPOIS guarda o candidato, se a conferência não decidiu (e sem trocar um candidato
+ * diferente dentro da janela). 200 quando confirmado, divergente (a dona confere no app) ou recusado
+ * de vez; 400 quando a InfinitePay falhou, ainda não marca como pago ou a cobrança acabou de ser
+ * conferida (ela repete o aviso: no ensaio real, 5 chamadas em ~3 min).
  */
 export async function processarAvisoDaInfinitePay(referencia: string, token: string, corpo: unknown): Promise<RespostaDoAviso> {
   if (!avisoAutentico(referencia, token)) return { status: 401, resultado: "token-invalido" };
-  let p = await db.pagamento.findUnique({ where: { gateway_referenciaExterna: { gateway: "infinitepay", referenciaExterna: referencia } } });
+  const p = await db.pagamento.findUnique({ where: { gateway_referenciaExterna: { gateway: "infinitepay", referenciaExterna: referencia } } });
   if (!p) return { status: 200, resultado: "desconhecida" };
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return { status: 200, resultado: "ja-aprovada" };
 
@@ -659,7 +695,7 @@ export async function processarAvisoDaInfinitePay(referencia: string, token: str
     return { status: 200, resultado: "slug-diferente" };
   }
 
-  p = await registrarCandidato(p, aviso);
+  // Confere ANTES de gravar: o candidato só é guardado se a conferência não decidir (guardarCandidato).
   const r = await confirmarCobranca(p, aviso, "aviso");
   const status = r === "APROVADO" || r === "INVALIDO" || r === "DIVERGENTE" ? 200 : 400;
   return { status, resultado: r.toLowerCase() };

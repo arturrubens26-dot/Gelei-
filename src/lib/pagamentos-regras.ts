@@ -52,7 +52,9 @@ export type SituacaoPagamentoDTO = {
  *   conferem; o pedido NÃO virou PAGO. Conferir no app e marcar como pago ou cancelar (some ao resolver);
  * - AVISO_NAO_CONFERIDO: chegou o aviso de pagamento, mas há mais de 30 min a conferência não
  *   fecha (InfinitePay fora, chave recusada, resposta estranha). Conferir no app e marcar como pago
- *   ou cancelar (some ao resolver).
+ *   ou cancelar (some ao resolver). Não vale quando a última conferência disse "não pago"
+ *   (`MARCA_NAO_PAGO`): isso é uma resposta, não uma conferência parada, e o candidato é descartado
+ *   na próxima consulta depois da janela.
  */
 export type AlertaPagamento =
   | "PAGO_APOS_CANCELAMENTO"
@@ -63,6 +65,8 @@ export type AlertaPagamento =
 
 /** Prefixo de `pagamentos.status_gateway` quando a conferência achou divergência. */
 export const MARCA_DIVERGENTE = "divergente:";
+/** `status_gateway` quando a última conferência disse "ainda não pago" (a transação do aviso não pagou esta cobrança). */
+export const MARCA_NAO_PAGO = "nao-pago";
 /** `status_gateway` da cobrança confirmada quando o pedido já tinha sido marcado PAGO à mão. */
 export const MARCA_APOS_BAIXA_MANUAL = "pago-apos-baixa-manual";
 
@@ -170,9 +174,10 @@ export function cobrancaParaEtapa<T extends { status: StatusCobranca; avisadoEm:
  * 1. pedido PAGO, ENVIADO ou ENTREGUE → PAGO; CANCELADO → CANCELADO;
  * 2. pago com divergência → CONFIRMANDO ("fale com a loja"), sem prazo;
  * 3. pedido PENDENTE com o gateway desligado → INDISPONIVEL;
- * 4. candidato do aviso ainda não resolvido, de QUALQUER idade (só sai quando a conferência o recusa
- *    de vez, ou quando a dona marca pago ou cancela), ou retorno do navegador há menos de 30 min →
- *    CONFIRMANDO. Vem antes do prazo: quem pagou no fim das 48 h não vê "expirou";
+ * 4. candidato do aviso ainda não resolvido (só sai quando a conferência o recusa de vez, quando um
+ *    "não pago" passa de 30 min, ou quando a dona marca pago ou cancela; a tela reconfere a cada 8 s),
+ *    ou retorno do navegador há menos de 30 min → CONFIRMANDO. Vem antes do prazo: quem pagou no fim
+ *    das 48 h não vê "expirou";
  * 5. mais de 48 h desde o pedido → EXPIRADO;
  * 6. o resto → PAGAR.
  * Com dinheiro possivelmente entrando, a tela NUNCA volta a "Pagar": isso evitaria um segundo pagamento.
@@ -235,7 +240,11 @@ export function alertaDoPagamento(e: EntradaPagamentoAdmin): AlertaPagamento | n
   if (e.pedidoStatus !== "PENDENTE") return null;
   if (e.cobrancas.some(cobrancaDivergente)) return "PAGO_COM_DIVERGENCIA";
   const avisoParado = e.cobrancas.some(
-    (c) => emAberto(c.status) && c.avisadoEm !== null && agora - ms(c.avisadoEm) >= JANELA_CONFIRMANDO_MS,
+    (c) =>
+      emAberto(c.status) &&
+      c.avisadoEm !== null &&
+      agora - ms(c.avisadoEm) >= JANELA_CONFIRMANDO_MS &&
+      c.statusGateway !== MARCA_NAO_PAGO,
   );
   return avisoParado ? "AVISO_NAO_CONFERIDO" : null;
 }

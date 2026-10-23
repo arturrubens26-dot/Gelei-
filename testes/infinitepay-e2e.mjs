@@ -660,6 +660,91 @@ async function main() {
     const repete25b = await avisar(falsa.links.get(codigoDe(p25b.pagamento.checkoutUrl)).webhook_url, pg25b.corpoAviso);
     confere(repete25b.status === 200 && (await statusPedido(p25b.pedido.id)) === "PAGO", "a repetição colada confirma (a vez foi devolvida)", repete25b.status);
 
+    console.log("26. Aviso forjado (a cliente conhece o token): confere antes de gravar, não troca o candidato verdadeiro, NAO_PAGO que expira");
+    const conta26 = await novaConta("e");
+    const webhookDe = (pedido) => falsa.links.get(codigoDe(pedido.pagamento.checkoutUrl)).webhook_url;
+    const pagoPorFora = async (c) => {
+      const pedido = await novoPedido(c);
+      return { pedido, pg: await pagar({ codigo: codigoDe(pedido.pagamento.checkoutUrl), metodo: "pix", aviso: false }) };
+    };
+    const alerta = async (pedidoId) => (await admin.req("GET", `/api/admin/orders/${pedidoId}`)).json?.pedido?.pagamento?.alerta ?? null;
+
+    // a) Transação de OUTRO link de mesmo valor no aviso: não confirma, fica guardada (lugar livre) e
+    //    marcada "não pago"; o aviso de verdade confirma depois, mesmo com o forjado guardado.
+    const alvo26 = await novoPedido(conta26);
+    const { pg: pgOutro26 } = await pagoPorFora(conta26);
+    const linkAlvo26 = falsa.links.get(codigoDe(alvo26.pagamento.checkoutUrl));
+    const consultas26 = falsa.chamadas.payment_check;
+    const forjado26 = await avisar(linkAlvo26.webhook_url, { transaction_nsu: pgOutro26.transaction_nsu, invoice_slug: pgOutro26.slug, order_nsu: linkAlvo26.order_nsu });
+    confere(
+      forjado26.status === 400 && (await forjado26.json()).resultado === "pendente" && (await statusPedido(alvo26.pedido.id)) === "PENDENTE",
+      "aviso forjado com a transação de outro link de mesmo valor: não confirma (400 pendente)",
+      forjado26.status,
+    );
+    confere(falsa.chamadas.payment_check === consultas26 + 1, "o forjado que dá \"não pago\" faz uma consulta só (sem canário)");
+    const [cf26] = await cobrancas(alvo26.pedido.id);
+    confere(cf26.aviso_transacao_nsu === pgOutro26.transaction_nsu && cf26.status_gateway === "nao-pago", "o forjado fica guardado e marcado nao-pago (o lugar estava livre)", cf26);
+    confere((await alerta(alvo26.pedido.id)) === null, "painel: nenhum alerta");
+    await esperar(3_100); // o aviso forjado reservou a vez desta cobrança por 3 s
+    const pgAlvo26 = await pagar({ codigo: linkAlvo26.codigo, metodo: "pix" });
+    const [cv26] = await cobrancas(alvo26.pedido.id);
+    confere(
+      pgAlvo26.aviso?.status === 200 && pgAlvo26.aviso.corpo?.resultado === "aprovado" && (await statusPedido(alvo26.pedido.id)) === "PAGO" && cv26.transacao_nsu === pgAlvo26.transaction_nsu && cv26.aviso_transacao_nsu === null,
+      "o aviso de verdade aprova sem precisar gravar, e limpa o forjado",
+      cv26,
+    );
+
+    // b) Candidato verdadeiro guardado (InfinitePay fora no aviso): nem um forjado "não pago" nem um
+    //    "inválido" o sobrescrevem ou apagam, e a marca do verdadeiro não é pisada.
+    const verd = await novoPedido(conta26);
+    const { pg: pgOutro26b } = await pagoPorFora(conta26);
+    modo({ falharConferencia: 500 });
+    const pgVerd = await pagar({ codigo: codigoDe(verd.pagamento.checkoutUrl), metodo: "pix" });
+    modo({});
+    confere(pgVerd.aviso?.status === 400, "aviso verdadeiro com a InfinitePay fora → 400", pgVerd.aviso);
+    const [cb0] = await cobrancas(verd.pedido.id);
+    confere(cb0.aviso_transacao_nsu === pgVerd.transaction_nsu, "o candidato verdadeiro foi guardado (conferência indecisa)");
+    await esperar(3_100);
+    const linkVerd = falsa.links.get(codigoDe(verd.pagamento.checkoutUrl));
+    const forjadoB = await avisar(linkVerd.webhook_url, { transaction_nsu: pgOutro26b.transaction_nsu, invoice_slug: pgOutro26b.slug, order_nsu: linkVerd.order_nsu });
+    const [cb1] = await cobrancas(verd.pedido.id);
+    confere(
+      forjadoB.status === 400 && cb1.aviso_transacao_nsu === pgVerd.transaction_nsu && cb1.status_gateway !== "nao-pago",
+      "forjado \"não pago\" NÃO sobrescreve o candidato verdadeiro nem grava marca",
+      { aviso: cb1.aviso_transacao_nsu === pgVerd.transaction_nsu, marca: cb1.status_gateway },
+    );
+    await esperar(3_100);
+    const inexistente = await avisar(linkVerd.webhook_url, { transaction_nsu: "00000000-0000-4000-8000-000000000001", invoice_slug: "fat_forjada_x", order_nsu: linkVerd.order_nsu });
+    const [cb2] = await cobrancas(verd.pedido.id);
+    confere(
+      inexistente.status === 200 && (await inexistente.json()).resultado === "invalido" && cb2.aviso_transacao_nsu === pgVerd.transaction_nsu && cb2.status_gateway !== "invalido",
+      "forjado com transação inexistente (inválido) NÃO apaga o candidato verdadeiro nem grava marca",
+      { aviso: cb2.aviso_transacao_nsu === pgVerd.transaction_nsu, marca: cb2.status_gateway },
+    );
+    await esperar(3_100);
+    const verdadeiro = await avisar(linkVerd.webhook_url, pgVerd.corpoAviso);
+    confere(verdadeiro.status === 200 && (await statusPedido(verd.pedido.id)) === "PAGO", "o aviso verdadeiro repetido confirma", verdadeiro.status);
+
+    // c) "Não pago" que expira: o forjado guardado passa de 30 min e a tela o descarta (sem alerta enquanto
+    //    a última marca é "nao-pago"), e o pedido volta a PAGAR.
+    const exp26 = await novoPedido(conta26);
+    const { pg: pgOutro26c } = await pagoPorFora(conta26);
+    const linkExp26 = falsa.links.get(codigoDe(exp26.pagamento.checkoutUrl));
+    await avisar(linkExp26.webhook_url, { transaction_nsu: pgOutro26c.transaction_nsu, invoice_slug: pgOutro26c.slug, order_nsu: linkExp26.order_nsu });
+    const [ce0] = await cobrancas(exp26.pedido.id);
+    confere(ce0.aviso_transacao_nsu === pgOutro26c.transaction_nsu && ce0.status_gateway === "nao-pago", "forjado guardado e marcado nao-pago", ce0);
+    const sExp26a = await conta26.req("GET", `/api/orders/${exp26.pedido.id}/pagamento`);
+    confere(sExp26a.json?.etapa === "CONFIRMANDO", "dentro da janela, a tela mostra CONFIRMANDO", sExp26a.json?.etapa);
+    await sql("update pagamentos set avisado_em = now() - interval '40 minutes', consultado_em = null where order_id = $1", [exp26.pedido.id]);
+    confere((await alerta(exp26.pedido.id)) === null, "painel: sem AVISO_NAO_CONFERIDO enquanto a última marca é nao-pago");
+    const sExp26b = await conta26.req("GET", `/api/orders/${exp26.pedido.id}/pagamento`);
+    const [ce1] = await cobrancas(exp26.pedido.id);
+    confere(
+      ce1.aviso_transacao_nsu === null && ce1.status_gateway === "nao-pago" && sExp26b.json?.etapa === "PAGAR" && (await statusPedido(exp26.pedido.id)) === "PENDENTE",
+      "passou da janela: o \"não pago\" é descartado e a cliente volta a PAGAR",
+      { ce1, etapa: sExp26b.json?.etapa },
+    );
+
     console.log("21. Token do aviso com segredo próprio");
     if (process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() && process.env.INFINITEPAY_WEBHOOK_SECRET.trim() !== process.env.SESSION_SECRET) {
       const comSessao = await avisar(
