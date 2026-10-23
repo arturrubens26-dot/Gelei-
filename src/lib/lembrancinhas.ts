@@ -2,6 +2,7 @@ import "server-only";
 import { cacheLife, cacheTag } from "next/cache";
 import type { ConfigLembrancinhas } from "@/generated/prisma/client";
 import { pendenciasLegais } from "@/lib/dados-loja";
+import { origemDaApiDeTeste } from "@/lib/infinitepay";
 import { db } from "@/lib/db";
 import { POLITICA_VERSAO } from "@/lib/encomendas-politica";
 import { MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
@@ -34,6 +35,18 @@ export type LembrancinhasDTO = {
   /** Sabores à venda E marcados "disponível em mini", em ordem alfabética. */
   sabores: { productId: string; sabor: string; imagemUrl: string }[];
 };
+
+/**
+ * O que falta em src/lib/dados-loja.ts para as lembrancinhas poderem abrir (D13). Lista vazia = pode.
+ *
+ * Só para o teste ponta a ponta local: com E2E_DADOS_LEGAIS=1 E a InfinitePay FALSA configurada
+ * (INFINITEPAY_API_URL em 127.0.0.1/localhost, que nunca vale na produção: o código recusa outro host),
+ * a pendência é ignorada, para o e2e criar encomendas pelo site. Fora disso, nada muda.
+ */
+export function pendenciasParaAbrir(): string[] {
+  if (process.env.E2E_DADOS_LEGAIS === "1" && origemDaApiDeTeste() !== null) return [];
+  return pendenciasLegais();
+}
 
 /** A configuração como está no banco (sem cache): quem grava ou cobra lê daqui. `null` sem a linha. */
 export async function lerConfigLembrancinhas(): Promise<ConfigLembrancinhas | null> {
@@ -76,7 +89,7 @@ export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
   const sabores = produtos.map((p) => ({ productId: p.id, sabor: separarNome(p.nome).sabor, imagemUrl: p.imagemUrl }));
   const motivoFechado = motivoLembrancinhasFechadas({
     ativo,
-    dadosLegaisPendentes: pendenciasLegais().length > 0,
+    dadosLegaisPendentes: pendenciasParaAbrir().length > 0,
     pagamentoDisponivel: pagamentoOnlineDisponivel(), sabores: sabores.length });
   // Centavos inteiros a partir do Decimal (sem passar por float).
   const precoPotinhoCentavos = config ? config.precoPotinho.mul(100).toNumber() : 0;

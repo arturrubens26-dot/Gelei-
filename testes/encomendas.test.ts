@@ -488,20 +488,25 @@ describe("referência da parcela e conferência do pagamento (InfinitePay)", () 
 
 describe("etapa do pagamento da parcela", () => {
   const base = { parcela: "ENTRADA" as const, status: "AGUARDANDO_ENTRADA" as StatusEncomenda, paga: false, gatewayAtivo: true, divergente: false, emConfirmacao: false };
-  it("na ordem: paga, encerrada, divergente, desligado, em conferência, não pagável, pagar", () => {
-    assert.equal(etapaDaParcela({ ...base, paga: true, status: "CANCELADA" }), "PAGO");
-    assert.equal(etapaDaParcela({ ...base, status: "EXPIRADA" }), "EXPIRADO");
-    assert.equal(etapaDaParcela({ ...base, status: "RECUSADA" }), "CANCELADO");
-    assert.equal(etapaDaParcela({ ...base, divergente: true, gatewayAtivo: false }), "CONFIRMANDO");
-    assert.equal(etapaDaParcela({ ...base, gatewayAtivo: false, emConfirmacao: true }), "INDISPONIVEL");
-    assert.equal(etapaDaParcela({ ...base, emConfirmacao: true }), "CONFIRMANDO");
-    assert.equal(etapaDaParcela({ ...base, status: "SOLICITADA" }), "INDISPONIVEL");
-    assert.equal(etapaDaParcela(base), "PAGAR");
+  const etapa = (e: typeof base | (Omit<typeof base, "parcela" | "status"> & { parcela: "ENTRADA" | "RESTANTE"; status: StatusEncomenda })) => {
+    const r = etapaDaParcela(e);
+    return r.motivoIndisponivel ? `${r.etapa}:${r.motivoIndisponivel}` : r.etapa;
+  };
+  it("na ordem: paga, encerrada, divergente, não liberada, desligado, em conferência, pagar", () => {
+    assert.equal(etapa({ ...base, paga: true, status: "CANCELADA" }), "PAGO");
+    assert.equal(etapa({ ...base, status: "EXPIRADA" }), "EXPIRADO");
+    assert.equal(etapa({ ...base, status: "RECUSADA" }), "CANCELADO");
+    assert.equal(etapa({ ...base, divergente: true, gatewayAtivo: false }), "CONFIRMANDO");
+    assert.equal(etapa({ ...base, gatewayAtivo: false, emConfirmacao: true }), "INDISPONIVEL:PAGAMENTO_FORA_DO_AR");
+    assert.equal(etapa({ ...base, emConfirmacao: true }), "CONFIRMANDO");
+    assert.equal(etapa({ ...base, status: "SOLICITADA" }), "INDISPONIVEL:NAO_LIBERADA");
+    assert.equal(etapa({ ...base, status: "SOLICITADA", gatewayAtivo: false }), "INDISPONIVEL:NAO_LIBERADA");
+    assert.equal(etapa(base), "PAGAR");
   });
-  it("o restante só é pagável com a encomenda confirmada", () => {
+  it("o restante só é liberado com a encomenda confirmada", () => {
     const restante = { ...base, parcela: "RESTANTE" as const };
-    assert.equal(etapaDaParcela(restante), "INDISPONIVEL");
-    for (const status of ["CONFIRMADA", "EM_PRODUCAO", "PRONTA"] as const) assert.equal(etapaDaParcela({ ...restante, status }), "PAGAR");
+    assert.equal(etapa(restante), "INDISPONIVEL:NAO_LIBERADA");
+    for (const status of ["CONFIRMADA", "EM_PRODUCAO", "PRONTA"] as const) assert.equal(etapa({ ...restante, status }), "PAGAR");
   });
 });
 

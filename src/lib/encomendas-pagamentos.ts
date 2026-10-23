@@ -3,6 +3,7 @@ import { Prisma, type Pagamento } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import {
   etapaDaParcela,
+  type MotivoIndisponivel,
   statusConfirmado,
   statusEfetivo,
   validadeDoLink,
@@ -264,6 +265,11 @@ export type SituacaoDaParcelaDTO = {
   restantePaga: boolean;
   /** Etapa do pagamento DESTA parcela (`etapaDaParcela`): PAGAR, CONFIRMANDO, PAGO, EXPIRADO, CANCELADO ou INDISPONIVEL. */
   etapa: EtapaPagamento;
+  /**
+   * Só com `etapa` INDISPONIVEL (senão null): "NAO_LIBERADA" (a entrada antes da aprovação, o restante
+   * antes da entrada paga) ou "PAGAMENTO_FORA_DO_AR" (pagamento pelo site desligado).
+   */
+  motivoIndisponivel: MotivoIndisponivel | null;
   /** Último link desta parcela, ou `null` se ainda não houve (`checkoutUrl` só enquanto vale). */
   cobranca: CobrancaDTO | null;
 };
@@ -307,7 +313,7 @@ function montarSituacao(enc: NonNullable<Awaited<ReturnType<typeof lerParaSituac
     status,
     entradaPaga: enc.entradaPagaEm !== null,
     restantePaga: enc.restantePagoEm !== null,
-    etapa: etapaDaParcela({
+    ...etapaDaParcela({
       parcela,
       status,
       paga: parcela === "ENTRADA" ? enc.entradaPagaEm !== null : enc.restantePagoEm !== null,

@@ -474,12 +474,16 @@ export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCl
  * 1. parcela paga → PAGO;
  * 2. encomenda EXPIRADA → EXPIRADO; RECUSADA, CANCELADA ou ENTREGUE → CANCELADO;
  * 3. pago com divergência → CONFIRMANDO ("fale com a loja"), sem prazo;
- * 4. pagamento pelo site desligado → INDISPONIVEL;
- * 5. aviso da InfinitePay ainda não conferido, ou retorno do navegador há menos de 30 min → CONFIRMANDO
+ * 4. a parcela ainda não foi liberada (a ENTRADA antes da aprovação; o RESTANTE antes da entrada paga)
+ *    → INDISPONIVEL com `motivoIndisponivel: "NAO_LIBERADA"`;
+ * 5. pagamento pelo site desligado → INDISPONIVEL com `motivoIndisponivel: "PAGAMENTO_FORA_DO_AR"`;
+ * 6. aviso da InfinitePay ainda não conferido, ou retorno do navegador há menos de 30 min → CONFIRMANDO
  *    (com dinheiro possivelmente entrando, a tela nunca volta a "Pagar");
- * 6. a parcela ainda não pode ser paga (a ENTRADA antes da aprovação; o RESTANTE antes da entrada) → INDISPONIVEL;
  * 7. o resto → PAGAR (o botão segue `acoes.pagarEntrada` / `acoes.pagarRestante`).
+ * `motivoIndisponivel` é `null` em toda etapa que não seja INDISPONIVEL.
  */
+export type MotivoIndisponivel = "NAO_LIBERADA" | "PAGAMENTO_FORA_DO_AR";
+
 export function etapaDaParcela(e: {
   parcela: Parcela;
   /** `statusEfetivo` da encomenda. */
@@ -488,15 +492,17 @@ export function etapaDaParcela(e: {
   gatewayAtivo: boolean;
   divergente: boolean;
   emConfirmacao: boolean;
-}): EtapaPagamento {
-  if (e.paga) return "PAGO";
-  if (e.status === "EXPIRADA") return "EXPIRADO";
-  if (statusFinal(e.status)) return "CANCELADO";
-  if (e.divergente) return "CONFIRMANDO";
-  if (!e.gatewayAtivo) return "INDISPONIVEL";
-  if (e.emConfirmacao) return "CONFIRMANDO";
-  const pagavel = e.parcela === "ENTRADA" ? e.status === "AGUARDANDO_ENTRADA" : statusConfirmado(e.status);
-  return pagavel ? "PAGAR" : "INDISPONIVEL";
+}): { etapa: EtapaPagamento; motivoIndisponivel: MotivoIndisponivel | null } {
+  const so = (etapa: EtapaPagamento) => ({ etapa, motivoIndisponivel: null });
+  if (e.paga) return so("PAGO");
+  if (e.status === "EXPIRADA") return so("EXPIRADO");
+  if (statusFinal(e.status)) return so("CANCELADO");
+  if (e.divergente) return so("CONFIRMANDO");
+  const liberada = e.parcela === "ENTRADA" ? e.status === "AGUARDANDO_ENTRADA" : statusConfirmado(e.status);
+  if (!liberada) return { etapa: "INDISPONIVEL", motivoIndisponivel: "NAO_LIBERADA" };
+  if (!e.gatewayAtivo) return { etapa: "INDISPONIVEL", motivoIndisponivel: "PAGAMENTO_FORA_DO_AR" };
+  if (e.emConfirmacao) return so("CONFIRMANDO");
+  return so("PAGAR");
 }
 
 /**

@@ -9,6 +9,10 @@
 //    Outras portas: E2E_BASE=http://localhost:3200 e E2E_PORTA_FALSA=4020 (com INFINITEPAY_API_URL e
 //    APP_URL do site iguais a elas).
 //
+// Com E2E_DADOS_LEGAIS=1 no site E neste script, o caso 23 abre as lembrancinhas por instantes e cria
+// uma encomenda pelo POST /api/encomendas (a trava D13 só cede com a InfinitePay falsa configurada);
+// sem isso, o caso confere o 409 do D13 e pula a criação. Rode as duas vezes antes de publicar.
+//
 // O admin vem de E2E_ADMIN_EMAIL / E2E_ADMIN_SENHA ou do ACESSO-LOCAL.txt. Tudo o que o teste cria
 // (contas e-mail e2e-infinitepay-*, pedidos, encomendas e cobranças delas) é apagado no fim, mesmo se falhar.
 import { createHmac } from "node:crypto";
@@ -803,6 +807,72 @@ async function main() {
       "Despesas: entradas com o mesmo líquido",
       [despAntes.entradas, despDepois.entradas, despDepois.lembrancinhas],
     );
+
+    console.log("23. Encomenda criada pelo site (POST /api/encomendas) com o recurso aberto por instantes");
+    const meA = await a.req("GET", "/api/auth/me");
+    const meB = await b.req("GET", "/api/auth/me");
+    confere(meA.json?.temEncomendas === true && meB.json?.temEncomendas === false, "GET /api/auth/me: temEncomendas", [meA.json?.temEncomendas, meB.json?.temEncomendas]);
+    if (process.env.E2E_DADOS_LEGAIS !== "1") {
+      console.log("  (pulado: rode o site e este script com E2E_DADOS_LEGAIS=1; sem isso o D13 fecha a solicitação)");
+    } else {
+      const cfgAntes = (await admin.req("GET", "/api/admin/lembrancinhas")).json.config;
+      const [{ disponivel_em_mini: miniAntes }] = await sql("select disponivel_em_mini from products where id = $1", [produto]);
+      try {
+        const abre = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: true } });
+        confere(abre.status === 200 && abre.json?.config?.ativo === true, "painel abre as lembrancinhas", abre.json);
+        await sql("update products set disponivel_em_mini = true where id = $1", [produto]);
+        const [{ festa, entrega }] = await sql(
+          `select to_char((now() at time zone 'America/Fortaleza')::date + 12, 'YYYY-MM-DD') festa,
+                  to_char((now() at time zone 'America/Fortaleza')::date + 10, 'YYYY-MM-DD') entrega`,
+        );
+        const corpo = {
+          itens: [{ productId: produto, quantidade: 15 }],
+          dataFesta: festa,
+          dataEntrega: entrega,
+          modoEntrega: "RETIRADA",
+          telefone: "(86) 99999-1234",
+          aceitePolitica: true,
+          politicaVersao: "2026-11-v1",
+          percentualRetido: cfgAntes.percentualRetido,
+          totalEsperadoCentavos: 15 * cfgAntes.precoPotinhoCentavos,
+        };
+        const chave = `e2e-${marca}-criar`;
+        const cria = (c, extra = {}, k = chave) => a.req("POST", "/api/encomendas", { corpo: { ...corpo, ...c }, cabecalhos: { "Idempotency-Key": k, ...extra } });
+        const semChave = await a.req("POST", "/api/encomendas", { corpo });
+        confere(semChave.status === 400, "sem Idempotency-Key → 400", semChave.json);
+        const totalErrado = await cria({ totalEsperadoCentavos: 1 }, {}, `${chave}-t`);
+        confere(totalErrado.status === 409 && totalErrado.json?.detalhes?.total === (15 * cfgAntes.precoPotinhoCentavos) / 100, "total diferente → 409 com o total atual", totalErrado.json);
+        const fora = await cria(
+          { modoEntrega: "ENTREGA", endereco: { cep: "01310-100", rua: "Av. Paulista", numero: "1000", bairro: "Bela Vista", cidade: "São Paulo", estado: "SP" } },
+          {},
+          `${chave}-f`,
+        );
+        confere(fora.status === 422 && fora.json?.detalhes?.foraDaArea === true, "entrega fora de Teresina → 422 foraDaArea", fora.json);
+        const poucos = await cria({ itens: [{ productId: produto, quantidade: 14 }] }, {}, `${chave}-p`);
+        confere(poucos.status === 400 && poucos.json?.detalhes?.itens, "14 potinhos → 400 em itens", poucos.json);
+        const criada = await cria({});
+        const encCriada = criada.json?.encomenda;
+        if (encCriada?.id) encomendas.push(encCriada.id);
+        confere(
+          criada.status === 201 && encCriada?.status === "SOLICITADA" && encCriada.potinhos === 15 && encCriada.total === (15 * cfgAntes.precoPotinhoCentavos) / 100 && encCriada.telefone === "86999991234",
+          "POST /api/encomendas → 201 SOLICITADA, valores do servidor",
+          criada.json,
+        );
+        const repete = await cria({});
+        confere(repete.status === 200 && repete.json?.encomenda?.id === encCriada?.id, "mesma chave e mesmo conteúdo → 200, a mesma encomenda", repete.json);
+        const outra = await cria({ itens: [{ productId: produto, quantidade: 16 }], totalEsperadoCentavos: 16 * cfgAntes.precoPotinhoCentavos });
+        confere(outra.status === 422, "mesma chave com outro conteúdo → 422", outra.json);
+        const sEnt = await a.req("GET", `/api/encomendas/${encCriada?.id}/pagamento?parcela=ENTRADA`);
+        confere(sEnt.json?.etapa === "INDISPONIVEL" && sEnt.json.motivoIndisponivel === "NAO_LIBERADA", "entrada antes da aprovação: INDISPONIVEL / NAO_LIBERADA", sEnt.json);
+        const lista = await a.req("GET", "/api/encomendas");
+        confere(lista.json?.encomendas?.some((e) => e.id === encCriada?.id), "GET /api/encomendas lista a nova");
+        const idor = await b.req("GET", `/api/encomendas/${encCriada?.id}`);
+        confere(idor.status === 404, "outra conta → 404", idor.status);
+      } finally {
+        await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: cfgAntes.ativo } });
+        await sql("update products set disponivel_em_mini = $2 where id = $1", [produto, miniAntes]);
+      }
+    }
 
     console.log("13. Meus pedidos e o teto de pendentes");
     const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);

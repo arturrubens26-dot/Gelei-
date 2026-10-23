@@ -1,7 +1,7 @@
 import "server-only";
 import { revalidateTag } from "next/cache";
 import { Prisma } from "@/generated/prisma/client";
-import { dadosLoja, pendenciasLegais } from "@/lib/dados-loja";
+import { dadosLoja } from "@/lib/dados-loja";
 import { db } from "@/lib/db";
 import { hojeNaLoja } from "@/lib/despesas";
 import { AVISO_JURIDICO } from "@/lib/encomendas-politica";
@@ -50,7 +50,7 @@ import {
 import { ErroNegocio } from "@/lib/erros";
 import { codigoPedido } from "@/lib/formatacao";
 import { origemPublica } from "@/lib/infinitepay";
-import { ID_CONFIG_LEMBRANCINHAS, lerConfigLembrancinhas } from "@/lib/lembrancinhas";
+import { ID_CONFIG_LEMBRANCINHAS, lerConfigLembrancinhas, pendenciasParaAbrir } from "@/lib/lembrancinhas";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { JANELA_CONFIRMANDO_MS, cobrancaDivergente, rotuloDoMetodo, type MetodoPagamento } from "@/lib/pagamentos-regras";
 import { separarNome } from "@/lib/produtos-regras";
@@ -656,7 +656,7 @@ export async function obterConfigLembrancinhasAdmin(): Promise<ConfigLembrancinh
     percentualRetido: config?.percentualRetido ?? 100,
     atualizadoEm: config?.atualizadoEm.toISOString() ?? null,
     sabores,
-    pendenciasLegais: pendenciasLegais(),
+    pendenciasLegais: pendenciasParaAbrir(),
     avisos,
     avisoJuridico: AVISO_JURIDICO,
   };
@@ -670,7 +670,7 @@ export async function obterConfigLembrancinhasAdmin(): Promise<ConfigLembrancinh
 export async function salvarConfigLembrancinhas(
   entrada: ConfigLembrancinhasEntrada | { ativo: boolean },
 ): Promise<ConfigLembrancinhasAdminDTO> {
-  const pendencias = pendenciasLegais();
+  const pendencias = pendenciasParaAbrir();
   if (entrada.ativo && pendencias.length > 0) {
     throw new ErroNegocio(409, `Para abrir as lembrancinhas, falta preencher ${pendencias.join(" e ")} da loja.`, { pendenciasLegais: pendencias });
   }

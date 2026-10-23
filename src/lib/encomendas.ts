@@ -2,7 +2,7 @@ import "server-only";
 import { unstable_rethrow } from "next/navigation";
 import { Prisma } from "@/generated/prisma/client";
 import { validarEnderecoComCep } from "@/lib/cep";
-import { dadosLoja, pendenciasLegais } from "@/lib/dados-loja";
+import { dadosLoja } from "@/lib/dados-loja";
 import { db } from "@/lib/db";
 import { hojeNaLoja } from "@/lib/despesas";
 import { POLITICA_VERSAO, textosDaPolitica, versaoDaPoliticaConhecida } from "@/lib/encomendas-politica";
@@ -27,11 +27,11 @@ import {
 } from "@/lib/encomendas-regras";
 import { cobrancaEmConferencia, encerrarCobrancasDaEncomenda } from "@/lib/encomendas-pagamentos";
 import { taxaDeEntregaAtualCentavos } from "@/lib/entrega";
-import { MENSAGEM_FORA_DA_AREA, calcularFrete } from "@/lib/entrega-regras";
+import { MENSAGEM_FORA_DA_AREA, calcularFrete, cepAtendido } from "@/lib/entrega-regras";
 import { CAMPOS_ENDERECO, obterOuCriarEndereco, type EnderecoSalvo } from "@/lib/enderecos";
 import { ErroNegocio } from "@/lib/erros";
 import { codigoPedido } from "@/lib/formatacao";
-import { lerConfigLembrancinhas } from "@/lib/lembrancinhas";
+import { lerConfigLembrancinhas, pendenciasParaAbrir } from "@/lib/lembrancinhas";
 import { MAX_ENCOMENDAS_ABERTAS } from "@/lib/limites";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { separarNome } from "@/lib/produtos-regras";
@@ -310,6 +310,14 @@ export async function listarEncomendasDoUsuario(userId: string, agora: Date): Pr
   return lista.map((e) => paraEncomendaDTO(e, agora));
 }
 
+/**
+ * A cliente já fez alguma encomenda de lembrancinhas (de qualquer status)? Consulta barata (índice
+ * user_id + criada_em), para o menu mostrar "Minhas encomendas" mesmo com o recurso fechado.
+ */
+export async function temEncomendas(userId: string): Promise<boolean> {
+  return (await db.encomenda.findFirst({ where: { userId }, select: { id: true } })) !== null;
+}
+
 /** A encomenda da cliente; `null` se não existir ou for de outra pessoa. Só leitura. */
 export async function buscarEncomendaDoUsuario(id: string, userId: string, agora: Date): Promise<EncomendaDTO | null> {
   if (id.length === 0 || id.length > 100) return null;
@@ -431,7 +439,7 @@ export async function criarEncomenda(
   const config = await lerConfigLembrancinhas();
   if (!config?.ativo) throw new ErroNegocio(503, "As encomendas de lembrancinhas não estão abertas no momento. Volte em breve.");
   // D13: sem CNPJ/CPF e e-mail de contato no site (Decreto 7.962/2013, art. 2º), nada de encomenda nova.
-  if (pendenciasLegais().length > 0) {
+  if (pendenciasParaAbrir().length > 0) {
     throw new ErroNegocio(503, "As encomendas de lembrancinhas não estão abertas no momento. Volte em breve.");
   }
   if (!pagamentoOnlineDisponivel()) {
@@ -470,6 +478,8 @@ export async function criarEncomenda(
       cep = salvo.cep;
       enderecoSalvoId = salvo.id;
     } else {
+      // Fora da área de entrega: recusa antes de consultar o CEP (sem depender do serviço de CEP).
+      if (!cepAtendido(entrada.endereco!.cep)) throw new ErroNegocio(422, MENSAGEM_FORA_DA_AREA, { foraDaArea: true });
       const validacao = await validarEnderecoComCep(entrada.endereco!);
       if (!validacao.ok) {
         throw validacao.status === 422
