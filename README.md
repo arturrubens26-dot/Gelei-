@@ -158,6 +158,11 @@ No plano grátis, cada publicação gasta créditos: junte as mudanças antes de
 | `POST /api/auth/esqueci-senha` · `POST /api/auth/redefinir-senha` | público | senha nova por e-mail (202 sempre igual; 404 sem SMTP) · troca a senha com o token do link (uso único, 60 min) |
 | `POST /api/admin/clientes/[id]/link-senha` | **admin** | gera o link de senha nova de uma cliente, com a conferência de identidade registrada (nunca para admin) |
 | `GET` · `PATCH /api/admin/entrega` | **admin** | taxa de entrega em Teresina, em centavos (0 a 10000) |
+| `GET` · `POST /api/encomendas` | logado | lembrancinhas: as encomendas da cliente · solicita uma (SOLICITADA; `Idempotency-Key` obrigatório; preço, frete, datas e prazos recalculados no servidor; 503 enquanto o recurso estiver fechado, inclusive sem CNPJ/CPF e e-mail da loja) |
+| `GET /api/encomendas/[id]` · `POST …/desistir` | logado | a encomenda (`EncomendaDTO`) · desistência com a prévia da devolução (409 se ela mudou ou se há pagamento em conferência) |
+| `GET` · `POST /api/encomendas/[id]/pagamento` | logado | situação de uma parcela (`?parcela=ENTRADA\|RESTANTE`, com `etapa`) · abre o link da InfinitePay da parcela (`{ parcela }` → `{ cobranca }` com `checkoutUrl`) |
+| `GET /api/admin/encomendas?visao=` · `GET` · `PATCH /api/admin/encomendas/[id]` | **admin** | abas Responder, Agenda (`de`/`ate`, até 62 dias), Aguardando entrada, Devoluções e Histórico · ficha · ações com `statusEsperado` (aprovar, recusar, produção, pronta, entregue, restante fora do site, cancelar com devolução, devolução feita, avisada) |
+| `GET` · `PATCH /api/admin/lembrancinhas` | **admin** | configuração (preço do potinho em centavos, pesos, percentual retido, aberto/fechado); abrir sem CNPJ/CPF e e-mail da loja: 409 |
 | `GET /api/admin/orders?status=&canal=` · `PATCH /api/admin/orders/[id]` | **admin** | lista/filtra pedidos (por status e canal `ONLINE`/`PRESENCIAL`) e muda o status (só transições válidas para o canal) |
 | `GET /api/admin/orders/[id]` | **admin** | ficha do pedido: cliente, endereço, potes avulsos, caixas de kit com a composição e as fotos dos sabores, e o bloco "Separar…" (caixas a montar e potes por sabor) |
 | `GET /api/admin/kits` · `PATCH /api/admin/kits/[id]` | **admin** | kits com caixas vendidas, faixa de economia e aviso de preço · edita (JSON `{ nome, descricao, precoCentavos, pesoCaixaGramas, ativo }`) ou mostra/oculta na loja (JSON `{ ativo }`). Sem criar nem excluir na v1 |
@@ -236,10 +241,22 @@ A cliente monta uma caixa de **3 potes** escolhendo os sabores (pode repetir: 3�
 - **Migração `20261021120000_kits`:** só cria tabelas (`kits`, `order_kits`, `order_kit_sabores`) e insere o kit padrão oculto; o código antigo continua funcionando com ela. **Na produção ainda não foi aplicada:** ensaie num branch do Neon e depois rode `npm run db:deploy:producao`, antes de publicar o código. Como desfazer está no topo do `migration.sql` (só enquanto nenhum pedido tiver kit).
 - **Migração `20261021130000_kits_sabores_permitidos`:** acrescenta `products.permitido_em_kit` (default `false`) e marca os potes de 100 g a 130 g que já existem. Também não foi aplicada na produção: vai junto com a anterior (`npm run db:deploy:producao` aplica as duas). Como desfazer está no topo do `migration.sql`.
 
+### Lembrancinhas (encomendas de potinhos mini)
+
+Encomenda de 15 a 50 potinhos de 40 ml para uma festa. Entidade própria (tabelas `encomendas`, `encomenda_itens`, `encomenda_devolucoes` e `config_lembrancinhas`, mais `products.disponivel_em_mini`): **não é um pedido**. Regras puras em `src/lib/encomendas-regras.ts` e `encomendas-politica.ts` (testadas em `testes/encomendas.test.ts`); cliente em `encomendas.ts`; pagamento em `encomendas-pagamentos.ts`; painel em `encomendas-admin.ts`; Financeiro em `encomendas-financeiro.ts`.
+
+- **Fluxo:** a cliente solicita (SOLICITADA) → a dona aprova até o prazo de resposta (AGUARDANDO_ENTRADA, entrada em até 24 h, nunca depois do corte) → a cliente paga a **entrada** (50% dos potinhos, para cima no centavo) → CONFIRMADA → produção → pronta → entregue, só **quitada** (o **restante**, com o frete, pelo site ou registrado pela dona como recebido fora do site). Prazos no fuso da loja (`America/Fortaleza`). A expiração é "preguiçosa": gravada na próxima leitura ou ação.
+- **Pagamento:** as cobranças das duas parcelas ficam na **mesma tabela `pagamentos`** dos pedidos (`encomenda_id` + `parcela`; CHECK `pagamentos_alvo`), com o mesmo checkout da InfinitePay, o mesmo aviso e o mesmo `/pagamento/retorno` (que leva a `/minhas-encomendas/<id>?retorno=1`). `order_nsu` = `enc-<id>-ENTRADA-<n>` / `enc-<id>-RESTANTE-<n>` (CHECK `pagamentos_referencia_da_parcela`): o restante nunca quita a entrada. O link vale `min(agora + 60 min, prazo da entrada)`. A entrada não expira enquanto houver pagamento dela em conferência.
+- **Desistência e devolução:** até o corte (23h59 de 3 dias antes da entrega) devolve tudo; depois, o **percentual retido** da entrada (configurável, padrão 100%; congelado na aprovação, nunca acima do que a cliente aceitou) fica com a loja. Pagamento que chega sem ter o que quitar (encomenda encerrada, parcela já paga) vira **devolução pendente**. Devolução **manual** na v1: a dona devolve pelo app InfinitePay e marca "Marquei como devolvida".
+- **Entrega:** a mesma regra dos pedidos (só Teresina, taxa do painel) ou retirada na loja.
+- **Fechado por padrão:** nasce desativado, sem sabor mini marcado, e o servidor recusa solicitações (e o painel recusa abrir) enquanto `src/lib/dados-loja.ts` não tiver **CNPJ/CPF e e-mail de contato** (Decreto 7.962/2013, art. 2º; decisão D13).
+- **Financeiro (caixa):** cada parcela entra no mês em que foi paga (o valor da parcela; os juros do cartão ficam com a InfinitePay), o restante fora do site no mês do registro, e a devolução feita sai no mês em que foi feita. Vendas e ticket médio continuam só com os pedidos.
+- **Migração `20261023120000_lembrancinhas`:** cria as tabelas e acrescenta `encomenda_id`/`parcela` em `pagamentos` (`order_id` fica opcional). Como desfazer está no topo do `migration.sql`. Ensaiar num branch do Neon antes da produção.
+
 ### Financeiro (`/admin/financial`)
 
 - Um mês por vez (setas para navegar): frase-resumo ("entraram X e saíram Y: sobraram Z"), **De onde veio o dinheiro** (site, feira/balcão, frete, valor médio, por sabor), **Para onde foi** (despesas por categoria), **Últimos 12 meses** até o mês escolhido (gráfico ou tabela; clicar no mês abre ele) e **Movimentações do mês** (vendas e despesas na mesma lista).
-- Mesma conta do painel de Despesas: vendas pagas pela data do pedido (horário de Brasília), despesas pela data da compra.
+- Mesma conta do painel de Despesas: vendas pagas pela data do pedido (horário da loja), despesas pela data da compra, e o líquido das lembrancinhas (parcelas pela data do pagamento, menos as devoluções feitas no mês; `entradas.lembrancinhas`).
 
 ### Produção (`/admin/production`)
 
@@ -255,6 +272,7 @@ O caderno de produção com as contas feitas. Regras em `src/lib/producao.ts` (p
 ## O que ainda é simulado / pendente
 
 - **Pagamento:** InfinitePay (ver "Como o pagamento funciona"); falta a API Key e o ensaio com dinheiro de verdade, que confirma o formato real da API. Devolução de valor só pelo app InfinitePay. Os pedidos pendentes não são cancelados sozinhos: depois de 48 h eles só "expiram" (não abrem link novo). Quando houver estoque de potes, a expiração precisa virar um status de verdade, para devolver a reserva.
+- **Lembrancinhas, o que falta:** as telas (página, Minhas encomendas, painel); CNPJ/CPF e e-mail da loja para poder abrir; validar a política com advogado ou Procon-PI; o ensaio do pagamento por parcela com dinheiro real. Etapa 2 no plano (e-mail, devolução pela API, função agendada, preço por sabor).
 - **Avisos por e-mail** ("Recebemos seu pagamento", "Novo pedido pago"): dependem do SMTP. Até lá, a dona vê as vendas no app InfinitePay e no painel.
 - **Receita pela data de pagamento:** hoje usa a data de criação (como pedido). Para pagamento tardio/cancelamento retroativo, guardar `paidAt` e um histórico de status.
 - **Admin:** a ficha do pedido já tem API (`GET /api/admin/orders/[id]`); falta a tela (`/admin/orders/[id]`).

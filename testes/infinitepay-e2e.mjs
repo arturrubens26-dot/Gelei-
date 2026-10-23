@@ -632,26 +632,30 @@ async function main() {
       console.log("  (pulado: rode com INFINITEPAY_WEBHOOK_SECRET diferente do SESSION_SECRET)");
     }
 
-    console.log("22. Encomenda de lembrancinhas: CHECKs, entrada e restante pelo checkout, pago em dobro vira devolução");
-    // A encomenda nasce direto no banco, já aprovada (a solicitação pelo site fica fechada sem CNPJ/CPF
-    // e e-mail da loja, D13, e a aprovação pelo painel é a etapa B6).
-    const encId = `e2e${marca}enc`;
-    encomendas.push(encId);
-    const [{ id: donaEnc }] = await sql("select id from users where id = $1", [contas[0]]);
-    await sql(
-      `insert into encomendas (id, user_id, status, data_festa, data_entrega, modo_entrega, telefone, potinhos, subtotal, frete, total,
-         valor_entrada, valor_restante, peso_total_gramas, responder_ate, corte_em, entrada_ate, percentual_retido, politica_versao,
-         politica_aceita_em, idempotency_key, aprovada_em)
-       values ($1, $2, 'AGUARDANDO_ENTRADA', current_date + 12, current_date + 10, 'RETIRADA', '86999991234', 15, 90, 0, 90,
-         45, 45, 1950, now() - interval '1 hour', now() + interval '7 days', now() + interval '1 day', 100, '2026-11-v1',
-         now(), $3, now())`,
-      [encId, donaEnc, `e2e-${marca}-enc`],
-    );
-    await sql("insert into encomenda_itens (id, encomenda_id, product_id, quantidade, preco_unitario) values ($1, $2, $3, 15, 6)", [
-      `${encId}i`,
-      encId,
-      produto,
-    ]);
+    console.log("22. Encomenda de lembrancinhas: CHECKs, aprovação no painel, entrada e restante pelo checkout, devolução");
+    // A encomenda nasce direto no banco como SOLICITADA (a solicitação pelo site fica fechada sem
+    // CNPJ/CPF e e-mail da loja, D13); o resto passa pelo painel e pelo checkout falso.
+    const mesAgora = (await sql("select to_char(now() at time zone 'America/Fortaleza', 'YYYY-MM') m"))[0].m;
+    const finAntes = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
+    const despAntes = (await admin.req("GET", `/api/admin/expenses?mes=${mesAgora}`)).json;
+    const novaEncomenda = async (sufixo, status) => {
+      const id = `e2e${marca}${sufixo}`;
+      encomendas.push(id);
+      const aprovada = status !== "SOLICITADA";
+      await sql(
+        `insert into encomendas (id, user_id, status, data_festa, data_entrega, modo_entrega, telefone, potinhos, subtotal, frete, total,
+           valor_entrada, valor_restante, peso_total_gramas, responder_ate, corte_em, entrada_ate, percentual_retido, politica_versao,
+           politica_aceita_em, idempotency_key, aprovada_em)
+         values ($1, $2, $3, current_date + 12, current_date + 10, 'RETIRADA', '86999991234', 15, 90, 0, 90,
+           45, 45, 1950, now() + interval '1 day', now() + interval '7 days', $4, 100, '2026-11-v1', now(), $5, $6)`,
+        [id, contas[0], status, aprovada ? new Date(Date.now() + 86_400_000) : null, `e2e-${marca}-${sufixo}`, aprovada ? new Date() : null],
+      );
+      await sql("insert into encomenda_itens (id, encomenda_id, product_id, quantidade, preco_unitario) values ($1, $2, $3, 15, 6)", [`${id}i`, id, produto]);
+      return id;
+    };
+    const encId = await novaEncomenda("enc", "SOLICITADA");
+    const acaoEnc = (id, corpo) => admin.req("PATCH", `/api/admin/encomendas/${id}`, { corpo });
+
     const violaCheck = async (rotulo, valores) => {
       try {
         await sql(
@@ -669,6 +673,20 @@ async function main() {
     await violaCheck("cobrança sem alvo", [`${encId}x2`, null, null, null, `x-${marca}-2`]);
     await violaCheck("encomenda sem parcela", [`${encId}x3`, null, encId, null, `enc-${encId}-ENTRADA-8`]);
     await violaCheck("referência de outra parcela", [`${encId}x4`, null, encId, "ENTRADA", `enc-${encId}-RESTANTE-7`]);
+
+    const aResponder = await admin.req("GET", "/api/admin/encomendas?visao=responder");
+    confere(aResponder.json?.encomendas?.some((e) => e.id === encId) && aResponder.json.contagens.responder >= 1, "painel: aba Responder lista a solicitação", aResponder.json?.contagens);
+    const cliente403 = await a.req("GET", "/api/admin/encomendas");
+    confere(cliente403.status === 403 || cliente403.status === 401, "cliente não acessa a API do painel", cliente403.status);
+    const aprovaErrado = await acaoEnc(encId, { acao: "aprovar", statusEsperado: "AGUARDANDO_ENTRADA" });
+    confere(aprovaErrado.status === 409 && aprovaErrado.json?.detalhes?.motivo === "status-mudou", "aprovar com statusEsperado errado → 409 status-mudou", aprovaErrado.json);
+    const aprova = await acaoEnc(encId, { acao: "aprovar", statusEsperado: "SOLICITADA" });
+    confere(
+      aprova.status === 200 && aprova.json?.encomenda?.statusEfetivo === "AGUARDANDO_ENTRADA" && aprova.json.encomenda.prazos.entradaAte !== null,
+      "aprovar → AGUARDANDO_ENTRADA com prazo da entrada",
+      aprova.json?.encomenda?.statusEfetivo,
+    );
+    confere(aprova.json?.encomenda?.whatsapp?.link?.startsWith("https://wa.me/5586999991234?text="), "ficha: link do WhatsApp com o texto da aprovação");
 
     const cedo = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "RESTANTE" } });
     confere(cedo.status === 409, "restante antes da entrada → 409", cedo.json);
@@ -702,6 +720,9 @@ async function main() {
       "entrada paga em dobro: devolução PAGAMENTO_DUPLICADO pendente",
       devs,
     );
+    const abaDevolucoes = await admin.req("GET", "/api/admin/encomendas?visao=devolucoes");
+    const naAba = abaDevolucoes.json?.encomendas?.find((e) => e.id === encId);
+    confere(naAba?.alerta === "DEVOLUCAO_PENDENTE" && naAba.devolucao.pendente === 45, "painel: aba Devoluções com o alerta", naAba);
     // A mesma transação da entrada apresentada ao link do restante não quita o restante.
     const r1 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "RESTANTE" } });
     const linkR1 = falsa.links.get(slugDe(r1.json.cobranca.checkoutUrl));
@@ -718,6 +739,70 @@ async function main() {
     confere(retEnc.status === 303 && retEnc.local === `${BASE}/minhas-encomendas/${encId}?retorno=1`, "retorno da encomenda → /minhas-encomendas/<id>?retorno=1", retEnc);
     const retOutra = await b.req("GET", `/pagamento/retorno${new URL(pgR.retorno).search}`);
     confere(retOutra.status === 303 && retOutra.local === `${BASE}/minhas-encomendas`, "retorno da encomenda por outra conta → /minhas-encomendas", retOutra);
+
+    // Produção, pronta e entregue pelo painel; a devolução marcada como feita.
+    const prod = await acaoEnc(encId, { acao: "iniciar-producao", statusEsperado: "CONFIRMADA" });
+    const pronta = await acaoEnc(encId, { acao: "marcar-pronta", statusEsperado: "EM_PRODUCAO" });
+    const entregue = await acaoEnc(encId, { acao: "marcar-entregue", statusEsperado: "PRONTA" });
+    confere(
+      prod.status === 200 && pronta.status === 200 && entregue.status === 200 && entregue.json?.encomenda?.statusEfetivo === "ENTREGUE",
+      "painel: produção → pronta → entregue",
+      [prod.status, pronta.status, entregue.json?.encomenda?.statusEfetivo ?? entregue.json],
+    );
+    const devolvida = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE", observacao: "Devolvido pelo app (e2e)." });
+    confere(devolvida.status === 200 && devolvida.json?.encomenda?.devolucao?.status === "FEITA" && devolvida.json.encomenda.alerta === null, "devolução marcada como feita", devolvida.json?.encomenda?.devolucao);
+    const deNovo = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE" });
+    confere(deNovo.status === 409 && deNovo.json?.detalhes?.motivo === "sem-devolucao", "sem devolução pendente → 409", deNovo.json);
+
+    // Segunda encomenda: entrada paga, restante fora do site, cancelada pela loja com devolução.
+    const enc2Id = await novaEncomenda("enc2", "AGUARDANDO_ENTRADA");
+    const e21 = await a.req("POST", `/api/encomendas/${enc2Id}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    const pg21 = await pagar({ slug: slugDe(e21.json.cobranca.checkoutUrl), metodo: "pix" });
+    confere(pg21.aviso?.corpo?.resultado === "aprovado", "encomenda 2: entrada paga", pg21.aviso);
+    const fora = await acaoEnc(enc2Id, { acao: "registrar-restante", statusEsperado: "CONFIRMADA", formaPagamento: "DINHEIRO", observacao: "Na retirada (e2e)." });
+    confere(
+      fora.status === 200 && fora.json?.encomenda?.restanteForaDoSite === true && fora.json.encomenda.restanteForma === "DINHEIRO",
+      "restante registrado fora do site",
+      fora.json?.encomenda?.restanteForma ?? fora.json,
+    );
+    const pouco = await acaoEnc(enc2Id, { acao: "cancelar", statusEsperado: "CONFIRMADA", motivo: "Teste e2e de cancelamento", devolverCentavos: 100 });
+    confere(pouco.status === 400 && pouco.json?.detalhes?.minimoCentavos === 9000, "cancelar devolvendo menos que o pago → 400", pouco.json);
+    const cancela2 = await acaoEnc(enc2Id, { acao: "cancelar", statusEsperado: "CONFIRMADA", motivo: "Teste e2e de cancelamento", devolverCentavos: 9000 });
+    confere(
+      cancela2.status === 200 && cancela2.json?.encomenda?.statusEfetivo === "CANCELADA" && cancela2.json.encomenda.devolucao.pendente === 90 && /InfinitePay/.test(cancela2.json.aviso ?? ""),
+      "cancelada pela loja: devolução de 90 pendente e aviso",
+      cancela2.json,
+    );
+
+    // Configuração: abrir sem CNPJ/CPF e e-mail da loja é recusado (D13).
+    const cfg = await admin.req("GET", "/api/admin/lembrancinhas");
+    const abrir = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: true } });
+    confere(cfg.status === 200 && Array.isArray(cfg.json?.config?.pendenciasLegais), "GET da configuração", cfg.json?.config);
+    confere(
+      cfg.json.config.pendenciasLegais.length === 0 ? abrir.status === 200 : abrir.status === 409 && abrir.json?.detalhes?.pendenciasLegais?.length > 0,
+      "ativar sem os dados legais → 409 (D13)",
+      abrir.json,
+    );
+    if (abrir.status === 200) await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: cfg.json.config.ativo } });
+
+    // Financeiro e Despesas: o que estas duas encomendas acrescentaram ao mês.
+    const finDepois = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
+    const despDepois = (await admin.req("GET", `/api/admin/expenses?mes=${mesAgora}`)).json;
+    const delta = (k) => Math.round((finDepois.entradas.lembrancinhas[k] - finAntes.entradas.lembrancinhas[k]) * 100) / 100;
+    confere(
+      delta("sinais") === 135 && delta("restantes") === 45 && delta("restantesForaDoSite") === 45 && delta("devolucoes") === 45 && delta("liquido") === 180,
+      "Financeiro: sinais 135, restantes 45 + 45 fora do site, devolução feita 45, líquido 180",
+      finDepois.entradas.lembrancinhas,
+    );
+    confere(Math.round((finDepois.resumo.entradas - finAntes.resumo.entradas) * 100) / 100 === 180 && finDepois.resumo.vendas === finAntes.resumo.vendas, "resumo soma o líquido; vendas só com os pedidos");
+    const potes = (f) => f.entradas.lembrancinhas.potinhosEntregues.find((l) => l.productId === produto)?.potinhos ?? 0;
+    confere(potes(finDepois) - potes(finAntes) === 15, "potinhos entregues por sabor");
+    confere(finDepois.movimentacoes.some((m) => m.tipo === "devolucao"), "movimentações com a devolução");
+    confere(
+      Math.round((despDepois.entradas - despAntes.entradas) * 100) / 100 === 180 && Math.round((despDepois.lembrancinhas - despAntes.lembrancinhas) * 100) / 100 === 180,
+      "Despesas: entradas com o mesmo líquido",
+      [despAntes.entradas, despDepois.entradas, despDepois.lembrancinhas],
+    );
 
     console.log("13. Meus pedidos e o teto de pendentes");
     const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);
