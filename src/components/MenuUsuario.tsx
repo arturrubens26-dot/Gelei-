@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BotaoSair } from "@/components/BotaoSair";
 import { getUsuarioAtual } from "@/lib/auth/dal";
+import { temEncomendas } from "@/lib/encomendas";
 
 /**
  * Lê a sessão (dados da requisição), então precisa ficar dentro de <Suspense>:
@@ -27,6 +28,12 @@ export async function MenuUsuario() {
         <span className="sm:hidden">Pedidos</span>
         <span className="hidden sm:inline">Meus pedidos</span>
       </Link>
+      {/* Só no computador (no celular o cabeçalho não comporta: lá a aba fica em Meus pedidos). */}
+      {(await temEncomendas(usuario.id)) && (
+        <Link href="/minhas-encomendas" className="hidden min-h-11 items-center font-semibold text-secundaria underline-offset-2 hover:underline lg:inline-flex">
+          Minhas encomendas
+        </Link>
+      )}
       {usuario.isAdmin && (
         <Link href="/admin/dashboard" className="inline-flex min-h-11 items-center font-semibold text-secundaria underline-offset-2 hover:underline">
           Painel

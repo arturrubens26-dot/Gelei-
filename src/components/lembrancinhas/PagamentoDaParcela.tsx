@@ -7,7 +7,7 @@ import { LinkInstagram, PagamentoConfirmado, PagamentoPorEtapa, temEtapaECobranc
 import { SeloDaEtapa } from "@/components/checkout/SeloDoPagamento";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { SituacaoDaParcelaDTO } from "@/lib/encomendas-pagamentos";
-import { statusConfirmado, statusFinal, type Parcela, type StatusEncomenda } from "@/lib/encomendas-regras";
+import { statusConfirmado, statusFinal, type Parcela } from "@/lib/encomendas-regras";
 import type { EtapaPagamento } from "@/lib/pagamentos-regras";
 
 const ROTULO: Record<Parcela, string> = { ENTRADA: "Entrada", RESTANTE: "Restante" };
@@ -59,11 +59,6 @@ function ehSituacao(json: unknown): json is SituacaoDaParcelaDTO {
 
 const aberto = (s: SituacaoDaParcelaDTO) =>
   !statusFinal(s.status) && (s.etapa === "PAGAR" || s.etapa === "CONFIRMANDO" || s.etapa === "INDISPONIVEL");
-
-/** A parcela ainda não pode ser paga por causa do andamento (e não porque o pagamento está fora do ar). */
-function aindaNaoLiberada(parcela: Parcela, status: StatusEncomenda): boolean {
-  return parcela === "ENTRADA" ? status === "SOLICITADA" : status === "SOLICITADA" || status === "AGUARDANDO_ENTRADA";
-}
 
 type Props = {
   encomendaId: string;
@@ -139,7 +134,8 @@ export function PagamentoDaParcela({ encomendaId, parcela, valor, situacaoInicia
       case "CANCELADO":
         return <p>Encomenda encerrada: não há o que pagar.</p>;
       case "INDISPONIVEL":
-        return aindaNaoLiberada(parcela, s.status) ? (
+        // INDISPONIVEL tem dois motivos: a parcela ainda não foi liberada, ou o pagamento pelo site está fora do ar.
+        return s.motivoIndisponivel !== "PAGAMENTO_FORA_DO_AR" ? (
           <p className="text-primaria/85">
             {parcela === "ENTRADA"
               ? "Liberada quando a Geleiô aprovar a encomenda. Você terá 24 horas para pagar."
