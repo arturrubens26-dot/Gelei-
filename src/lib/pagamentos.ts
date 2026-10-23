@@ -800,9 +800,19 @@ export async function processarRetorno(parametros: URLSearchParams, usuarioId: s
   if (p.status === "PENDENTE" || p.status === "CANCELADO") {
     try {
       // A cliente diz que pagou: segura a tela em "confirmando" e o link novo por 30 min, mesmo que a
-      // conferência abaixo ainda não confirme (a InfinitePay pode demorar a achar a transação).
+      // conferência abaixo ainda não confirme (a InfinitePay pode demorar a achar a transação). A hora só
+      // se grava até 30 min depois do vencimento do link (o pagamento só pode ter entrado até ele
+      // vencer): sem isso, quem repete esta chamada (a referência é previsível) renovaria a janela para
+      // sempre e seguraria a encomenda ou o pedido. A conferência abaixo roda de qualquer jeito.
       if (candidato) {
-        await db.pagamento.updateMany({ where: { id: p.id, status: { in: ["PENDENTE", "CANCELADO"] } }, data: { retornoEm: new Date() } });
+        await db.pagamento.updateMany({
+          where: {
+            id: p.id,
+            status: { in: ["PENDENTE", "CANCELADO"] },
+            expiraEm: { gt: new Date(Date.now() - JANELA_CONFIRMANDO_MS) },
+          },
+          data: { retornoEm: new Date() },
+        });
       }
       // As consultas do retorno (a do aviso gravado, a principal e o canário) dividem um orçamento só.
       const prazo = Date.now() + ORCAMENTO_RETORNO_MS;
