@@ -485,7 +485,7 @@ export function FichaEncomenda({ id }: { id: string }) {
       </section>
 
       <details className="cartao p-5">
-        <summary className="min-h-11 cursor-pointer content-center text-xl font-bold">Política aceita pela cliente</summary>
+        <summary className="min-h-11 cursor-pointer content-center font-titulos text-xl font-bold">Política aceita pela cliente</summary>
         <p className="mt-2 text-xs text-primaria/80">
           Versão {e.politica.versao}, aceita em {formatarDataHora(e.politica.aceitaEm)}; {e.politica.percentualRetido}% da entrada retido depois do corte.
         </p>

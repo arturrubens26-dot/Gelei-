@@ -225,8 +225,14 @@ function Agenda({ dados, agora }: { dados: ListaEncomendasAdminDTO; agora: numbe
             {diaComSemana(d.dia)}
           </h3>
           <p className="text-sm text-primaria/85">
-            {d.encomendas} {d.encomendas === 1 ? "encomenda confirmada" : "encomendas confirmadas"} · <strong>{d.potinhos} potinhos</strong>
-            {d.aguardandoEntrada > 0 && ` · mais ${d.potinhosAguardando} potinhos de ${d.aguardandoEntrada} aguardando a entrada`}
+            {d.encomendas > 0 ? (
+              <>
+                {d.encomendas} {d.encomendas === 1 ? "encomenda confirmada" : "encomendas confirmadas"} · <strong>{d.potinhos} potinhos</strong>
+                {d.aguardandoEntrada > 0 && ` · mais ${d.potinhosAguardando} potinhos aguardando a entrada`}
+              </>
+            ) : (
+              `Nada confirmado ainda: ${d.potinhosAguardando} potinhos de ${d.aguardandoEntrada} ${d.aguardandoEntrada === 1 ? "encomenda" : "encomendas"} aguardando a entrada.`
+            )}
           </p>
           {d.porSabor.length > 0 && (
             <table className="mt-3 w-full max-w-md text-left text-sm">

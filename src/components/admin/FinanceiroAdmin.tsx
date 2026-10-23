@@ -130,25 +130,25 @@ export function FinanceiroAdmin() {
                   <caption className="sr-only">Entradas, saídas e o que sobrou em cada mês</caption>
                   <thead className="border-b-2 border-accent2/60">
                     <tr>
-                      <th scope="col" className="px-3 py-2 font-semibold">Mês</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Vendas</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Entradas</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Saídas</th>
-                      <th scope="col" className="px-3 py-2 text-right font-semibold">Sobrou</th>
+                      <th scope="col" className="px-2 py-2 sm:px-3 font-semibold">Mês</th>
+                      <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Vendas</th>
+                      <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Entradas</th>
+                      <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Saídas</th>
+                      <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Sobrou</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-accent1/70">
                     {dados.evolucao.map((m) => (
                       <tr key={m.mes} className={m.mes === dados.mes ? "bg-accent1/30" : undefined}>
-                        <th scope="row" className="px-3 py-2 font-medium">
+                        <th scope="row" className="px-2 py-2 sm:px-3 font-medium">
                           {/* Clicar no mês abre o Financeiro dele. */}
                           <button type="button" className="underline underline-offset-2" onClick={() => setMes(m.mes)}>
                             {rotuloMes(m.mes)}
                           </button>
                         </th>
-                        <td className="px-3 py-2 text-right tabular-nums">{m.pedidos}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatarBRL(m.receita)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatarBRL(m.despesas)}</td>
+                        <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{m.pedidos}</td>
+                        <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{formatarBRL(m.receita)}</td>
+                        <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{formatarBRL(m.despesas)}</td>
                         <td className={`px-3 py-2 text-right font-semibold tabular-nums ${m.receita - m.despesas < 0 ? "text-secundaria" : ""}`}>
                           {formatarBRL(m.receita - m.despesas)}
                         </td>
@@ -261,8 +261,8 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
               <thead className="border-b-2 border-accent2/60">
                 <tr>
                   <th scope="col" className="py-2 pr-3 font-semibold">Sabor</th>
-                  <th scope="col" className="px-3 py-2 text-right font-semibold">Potes</th>
-                  <th scope="col" className="px-3 py-2 text-right font-semibold">em kits</th>
+                  <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Potes</th>
+                  <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">em kits</th>
                   <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
                 </tr>
               </thead>
@@ -270,8 +270,8 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
                 {porSabor.map((s) => (
                   <tr key={s.productId}>
                     <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
-                    <td className="px-3 py-2 text-right tabular-nums">{s.potes}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-primaria/85">{s.potesEmKits > 0 ? s.potesEmKits : "—"}</td>
+                    <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{s.potes}</td>
+                    <td className="px-2 py-2 sm:px-3 text-right tabular-nums text-primaria/85">{s.potesEmKits > 0 ? s.potesEmKits : "—"}</td>
                     <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
                   </tr>
                 ))}
@@ -311,7 +311,7 @@ function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembr
           <thead className="border-b-2 border-accent2/60">
             <tr>
               <th scope="col" className="py-2 pr-3 font-semibold">Sabor</th>
-              <th scope="col" className="px-3 py-2 text-right font-semibold">Potinhos</th>
+              <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Potinhos</th>
               <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
             </tr>
           </thead>
@@ -319,7 +319,7 @@ function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembr
             {l.potinhosEntregues.map((s) => (
               <tr key={s.productId}>
                 <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
-                <td className="px-3 py-2 text-right tabular-nums">{s.potinhos}</td>
+                <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{s.potinhos}</td>
                 <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
               </tr>
             ))}
@@ -407,18 +407,18 @@ function Movimentacoes({ dados }: { dados: FinanceiroDoMes }) {
             <caption className="sr-only">Entradas e saídas do mês</caption>
             <thead className="border-b-2 border-accent2/60">
               <tr>
-                <th scope="col" className="px-3 py-2 font-semibold">Dia</th>
-                <th scope="col" className="px-3 py-2 font-semibold">Tipo</th>
-                <th scope="col" className="px-3 py-2 font-semibold">Descrição</th>
-                <th scope="col" className="px-3 py-2 font-semibold">Onde / categoria</th>
-                <th scope="col" className="px-3 py-2 text-right font-semibold">Valor</th>
+                <th scope="col" className="px-2 py-2 sm:px-3 font-semibold">Dia</th>
+                <th scope="col" className="px-2 py-2 sm:px-3 font-semibold">Tipo</th>
+                <th scope="col" className="px-2 py-2 sm:px-3 font-semibold">Descrição</th>
+                <th scope="col" className="px-2 py-2 sm:px-3 font-semibold">Onde / categoria</th>
+                <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Valor</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-accent1/70">
               {dados.movimentacoes.map((m) => (
                 <tr key={`${m.tipo}-${m.id}`}>
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums">{formatarDia(m.dia)}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-2 py-2 sm:px-3">
                     <span
                       className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
                         m.tipo === "entrada" ? "bg-accent1/70" : "border border-secundaria/60 text-secundaria"
@@ -427,8 +427,8 @@ function Movimentacoes({ dados }: { dados: FinanceiroDoMes }) {
                       {m.tipo === "entrada" ? "Entrada" : m.tipo === "devolucao" ? "Devolução" : "Saída"}
                     </span>
                   </td>
-                  <td className="px-3 py-2">{m.descricao}</td>
-                  <td className="px-3 py-2 text-primaria/85">{m.detalhe}</td>
+                  <td className="px-2 py-2 sm:px-3">{m.descricao}</td>
+                  <td className="px-2 py-2 sm:px-3 text-primaria/85">{m.detalhe}</td>
                   <td className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums ${m.tipo !== "entrada" ? "text-secundaria" : ""}`}>
                     {m.tipo !== "entrada" ? "− " : "+ "}
                     {formatarBRL(m.valor)}
