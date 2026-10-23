@@ -1,6 +1,7 @@
 import "server-only";
 import { cacheLife, cacheTag } from "next/cache";
 import type { ConfigLembrancinhas } from "@/generated/prisma/client";
+import { e2eDadosLegaisAtivo } from "@/lib/ambiente";
 import { pendenciasLegais } from "@/lib/dados-loja";
 import { origemDaApiDeTeste } from "@/lib/infinitepay";
 import { db } from "@/lib/db";
@@ -39,12 +40,14 @@ export type LembrancinhasDTO = {
 /**
  * O que falta em src/lib/dados-loja.ts para as lembrancinhas poderem abrir (D13). Lista vazia = pode.
  *
- * Só para o teste ponta a ponta local: com E2E_DADOS_LEGAIS=1 E a InfinitePay FALSA configurada
- * (INFINITEPAY_API_URL em 127.0.0.1/localhost, que nunca vale na produção: o código recusa outro host),
- * a pendência é ignorada, para o e2e criar encomendas pelo site. Fora disso, nada muda.
+ * Só para o teste ponta a ponta local: com E2E_DADOS_LEGAIS=1, a InfinitePay FALSA configurada
+ * (INFINITEPAY_API_URL em 127.0.0.1/localhost, que o código recusa em outro host) E a APP_URL em
+ * http://localhost ou 127.0.0.1 (sem NETLIFY nem APP_ENV publicado: `e2eDadosLegaisAtivo`), a pendência é
+ * ignorada, para o e2e criar encomendas pelo site. Fora disso, nada muda. Em outro ambiente, a variável
+ * nem deixa o servidor subir (`validarAmbiente`).
  */
 export function pendenciasParaAbrir(): string[] {
-  if (process.env.E2E_DADOS_LEGAIS === "1" && origemDaApiDeTeste() !== null) return [];
+  if (e2eDadosLegaisAtivo() && origemDaApiDeTeste() !== null) return [];
   return pendenciasLegais();
 }
 

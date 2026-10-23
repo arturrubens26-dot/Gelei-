@@ -15,6 +15,43 @@ export function pagamentosSimuladosPermitidos(): boolean {
   return process.env.NODE_ENV !== "production" || process.env.APP_ENV === "demo";
 }
 
+/** Hosts deste computador: só neles a APP_URL pode ser http. */
+const HOSTS_LOCAIS = new Set(["127.0.0.1", "localhost"]);
+
+/** A APP_URL aponta para este computador (http://localhost ou http://127.0.0.1, qualquer porta)? */
+export function appUrlEmLoopback(bruto: string | undefined): boolean {
+  const valor = bruto?.trim();
+  if (!valor) return false;
+  try {
+    const url = new URL(valor);
+    return url.protocol === "http:" && HOSTS_LOCAIS.has(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+/** APP_ENV de quem desenvolve ou testa neste computador; qualquer outro valor (demo, production…) é ambiente publicado. */
+const APP_ENV_LOCAIS = new Set(["development", "dev", "test", "local"]);
+
+/**
+ * E2E_DADOS_LEGAIS=1 faz o teste ponta a ponta local ignorar a trava dos dados legais (D13). Por que o
+ * processo NÃO é o site publicado: sem NETLIFY, sem APP_ENV de produção ou de demonstração e com a APP_URL
+ * em http://localhost (o teste sobe `next start`, que roda com NODE_ENV=production, então só o NODE_ENV não
+ * distingue). `null`: pode; texto: por que não pode (para o aviso de quem esqueceu a variável no site).
+ */
+export function motivoDeRecusarE2eDadosLegais(env: Record<string, string | undefined> = process.env): string | null {
+  if (env.NETLIFY && env.NETLIFY !== "false") return "o site está na Netlify (NETLIFY)";
+  const appEnv = env.APP_ENV?.trim().toLowerCase();
+  if (appEnv && !APP_ENV_LOCAIS.has(appEnv)) return `APP_ENV=${appEnv} não é um ambiente local`;
+  if (!appUrlEmLoopback(env.APP_URL)) return "a APP_URL não é http://localhost nem http://127.0.0.1";
+  return null;
+}
+
+/** O bypass dos dados legais vale agora? (Só E2E_DADOS_LEGAIS=1 e um ambiente local; ver o motivo acima.) */
+export function e2eDadosLegaisAtivo(env: Record<string, string | undefined> = process.env): boolean {
+  return env.E2E_DADOS_LEGAIS === "1" && motivoDeRecusarE2eDadosLegais(env) === null;
+}
+
 export function validarAmbiente(): void {
   const problemas: string[] = [];
 
@@ -59,6 +96,15 @@ export function validarAmbiente(): void {
   const segredoAviso = process.env.INFINITEPAY_WEBHOOK_SECRET?.trim();
   if (segredoAviso !== undefined && segredoAviso !== "" && segredoAviso.length < 32) {
     problemas.push("INFINITEPAY_WEBHOOK_SECRET curta demais (mínimo 32 caracteres aleatórios; sem ela, vale o SESSION_SECRET).");
+  }
+  // O bypass do teste ponta a ponta nunca vale no site publicado: ele abriria as encomendas sem o CNPJ/CPF e o
+  // e-mail de contato (Decreto 7.962/2013, art. 2º). Definida fora de um ambiente local, o servidor não sobe.
+  const e2e = process.env.E2E_DADOS_LEGAIS?.trim();
+  if (e2e && e2e !== "0") {
+    const motivo = motivoDeRecusarE2eDadosLegais();
+    if (motivo) {
+      problemas.push(`E2E_DADOS_LEGAIS é só para o teste ponta a ponta neste computador (${motivo}): remova-a do site publicado.`);
+    }
   }
   // O servidor falso dos testes nunca vale no site publicado (APP_URL https).
   if (process.env.INFINITEPAY_API_URL?.trim() && process.env.NODE_ENV === "production" && process.env.APP_URL?.trim().startsWith("https://")) {
