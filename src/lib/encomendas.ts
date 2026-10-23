@@ -339,7 +339,12 @@ export async function expirarVencidas(agora: Date, filtro: { userId?: string; en
     WHERE "status" = 'SOLICITADA' AND "responder_ate" <= ${agora} ${doFiltro}`;
 
   const vencidas = await db.encomenda.findMany({
-    where: { ...filtro, status: "AGUARDANDO_ENTRADA", entradaAte: { lte: agora } },
+    where: {
+      ...(filtro.userId ? { userId: filtro.userId } : {}),
+      ...(filtro.encomendaId ? { id: filtro.encomendaId } : {}),
+      status: "AGUARDANDO_ENTRADA",
+      entradaAte: { lte: agora },
+    },
     select: {
       id: true,
       entradaAte: true,

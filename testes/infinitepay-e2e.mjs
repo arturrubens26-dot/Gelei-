@@ -10,7 +10,7 @@
 //    APP_URL do site iguais a elas).
 //
 // O admin vem de E2E_ADMIN_EMAIL / E2E_ADMIN_SENHA ou do ACESSO-LOCAL.txt. Tudo o que o teste cria
-// (contas e-mail e2e-infinitepay-*, pedidos e cobranças delas) é apagado no fim, mesmo se falhar.
+// (contas e-mail e2e-infinitepay-*, pedidos, encomendas e cobranças delas) é apagado no fim, mesmo se falhar.
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -81,6 +81,7 @@ function cliente() {
 const marca = Date.now().toString(36);
 const contas = [];
 const pedidos = [];
+const encomendas = [];
 
 async function novaConta(rotulo) {
   const c = cliente();
@@ -631,6 +632,93 @@ async function main() {
       console.log("  (pulado: rode com INFINITEPAY_WEBHOOK_SECRET diferente do SESSION_SECRET)");
     }
 
+    console.log("22. Encomenda de lembrancinhas: CHECKs, entrada e restante pelo checkout, pago em dobro vira devolução");
+    // A encomenda nasce direto no banco, já aprovada (a solicitação pelo site fica fechada sem CNPJ/CPF
+    // e e-mail da loja, D13, e a aprovação pelo painel é a etapa B6).
+    const encId = `e2e${marca}enc`;
+    encomendas.push(encId);
+    const [{ id: donaEnc }] = await sql("select id from users where id = $1", [contas[0]]);
+    await sql(
+      `insert into encomendas (id, user_id, status, data_festa, data_entrega, modo_entrega, telefone, potinhos, subtotal, frete, total,
+         valor_entrada, valor_restante, peso_total_gramas, responder_ate, corte_em, entrada_ate, percentual_retido, politica_versao,
+         politica_aceita_em, idempotency_key, aprovada_em)
+       values ($1, $2, 'AGUARDANDO_ENTRADA', current_date + 12, current_date + 10, 'RETIRADA', '86999991234', 15, 90, 0, 90,
+         45, 45, 1950, now() - interval '1 hour', now() + interval '7 days', now() + interval '1 day', 100, '2026-11-v1',
+         now(), $3, now())`,
+      [encId, donaEnc, `e2e-${marca}-enc`],
+    );
+    await sql("insert into encomenda_itens (id, encomenda_id, product_id, quantidade, preco_unitario) values ($1, $2, $3, 15, 6)", [
+      `${encId}i`,
+      encId,
+      produto,
+    ]);
+    const violaCheck = async (rotulo, valores) => {
+      try {
+        await sql(
+          `insert into pagamentos (id, order_id, encomenda_id, parcela, gateway, referencia_externa, valor, expira_em)
+           values ($1, $2, $3, $4, 'simulado', $5, 10, now())`,
+          valores,
+        );
+        await sql("delete from pagamentos where id = $1", [valores[0]]);
+        confere(false, `CHECK recusa ${rotulo}`);
+      } catch (e) {
+        confere(e.code === "23514", `CHECK recusa ${rotulo}`, e.message);
+      }
+    };
+    await violaCheck("cobrança com pedido E encomenda", [`${encId}x1`, pedidos[0], encId, "ENTRADA", `enc-${encId}-ENTRADA-9`]);
+    await violaCheck("cobrança sem alvo", [`${encId}x2`, null, null, null, `x-${marca}-2`]);
+    await violaCheck("encomenda sem parcela", [`${encId}x3`, null, encId, null, `enc-${encId}-ENTRADA-8`]);
+    await violaCheck("referência de outra parcela", [`${encId}x4`, null, encId, "ENTRADA", `enc-${encId}-RESTANTE-7`]);
+
+    const cedo = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "RESTANTE" } });
+    confere(cedo.status === 409, "restante antes da entrada → 409", cedo.json);
+    const idorEnc = await b.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    confere(idorEnc.status === 404, "encomenda de outra conta → 404", idorEnc.status);
+    const e1 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    confere(e1.status === 200 && e1.json?.cobranca?.checkoutUrl?.startsWith(falsa.origem) && e1.json.cobranca.valor === 45, "entrada abre o link", e1.json);
+    const linkE1 = falsa.links.get(slugDe(e1.json.cobranca.checkoutUrl));
+    confere(
+      linkE1.order_nsu === `enc-${encId}-ENTRADA-1` && linkE1.amount === 4500 && linkE1.webhook_url.startsWith(`${BASE}/api/webhooks/infinitepay/enc-${encId}-ENTRADA-1/`),
+      "link da entrada: order_nsu, valor e aviso da parcela",
+      linkE1,
+    );
+    // Link vencendo: abre outro (o primeiro vira CANCELADO no banco, mas ainda vale na InfinitePay).
+    await sql("update pagamentos set expira_em = now() + interval '2 minutes' where encomenda_id = $1", [encId]);
+    const e2 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    confere(e2.status === 200 && e2.json?.cobranca?.checkoutUrl !== e1.json.cobranca.checkoutUrl, "link vencendo dá lugar a enc-<id>-ENTRADA-2", e2.json);
+    const pgE1 = await pagar({ slug: linkE1.slug, metodo: "pix" });
+    confere(pgE1.aviso?.status === 200 && pgE1.aviso.corpo?.resultado === "aprovado", "aviso da entrada → 200 aprovado", pgE1.aviso);
+    const [enc1] = await sql("select status, entrada_paga_em, restante_pago_em from encomendas where id = $1", [encId]);
+    confere(enc1.status === "CONFIRMADA" && enc1.entrada_paga_em !== null && enc1.restante_pago_em === null, "entrada paga: CONFIRMADA (o restante não)", enc1);
+    const sE = await a.req("GET", `/api/encomendas/${encId}/pagamento?parcela=ENTRADA`);
+    confere(sE.json?.etapa === "PAGO" && sE.json.entradaPaga === true && sE.json.restantePaga === false, "situação da entrada: PAGO", sE.json);
+    const sR = await a.req("GET", `/api/encomendas/${encId}/pagamento?parcela=RESTANTE`);
+    confere(sR.json?.etapa === "PAGAR" && sR.json.cobranca === null, "situação do restante: PAGAR", sR.json);
+    // O segundo link da entrada também é pago: não há o que quitar → devolução pendente.
+    const pgE2 = await pagar({ slug: slugDe(e2.json.cobranca.checkoutUrl), metodo: "pix" });
+    const devs = await sql("select motivo, valor::text, status, pagamento_id from encomenda_devolucoes where encomenda_id = $1", [encId]);
+    confere(
+      pgE2.aviso?.corpo?.resultado === "aprovado" && devs.length === 1 && devs[0].motivo === "PAGAMENTO_DUPLICADO" && devs[0].valor === "45.00" && devs[0].status === "PENDENTE",
+      "entrada paga em dobro: devolução PAGAMENTO_DUPLICADO pendente",
+      devs,
+    );
+    // A mesma transação da entrada apresentada ao link do restante não quita o restante.
+    const r1 = await a.req("POST", `/api/encomendas/${encId}/pagamento`, { corpo: { parcela: "RESTANTE" } });
+    const linkR1 = falsa.links.get(slugDe(r1.json.cobranca.checkoutUrl));
+    confere(r1.status === 200 && linkR1.order_nsu === `enc-${encId}-RESTANTE-1` && linkR1.amount === 4500, "restante abre o link da parcela", linkR1);
+    const reusoEnc = await avisar(linkR1.webhook_url, { ...pgE1.corpoAviso, order_nsu: linkR1.order_nsu, invoice_slug: linkR1.slug });
+    const reusoEncJson = await reusoEnc.json();
+    const [enc2] = await sql("select restante_pago_em from encomendas where id = $1", [encId]);
+    confere(reusoEnc.status === 200 && reusoEncJson.resultado === "invalido" && enc2.restante_pago_em === null, "transação da entrada no aviso do restante → invalido", reusoEncJson);
+    await esperar(3_100);
+    const pgR = await pagar({ slug: linkR1.slug, metodo: "credit_card", parcelas: 2 });
+    const [enc3] = await sql("select restante_pago_em, restante_forma from encomendas where id = $1", [encId]);
+    confere(pgR.aviso?.corpo?.resultado === "aprovado" && enc3.restante_pago_em !== null && enc3.restante_forma === "CARTAO_CREDITO", "restante pago no cartão: quitada", enc3);
+    const retEnc = await a.req("GET", `/pagamento/retorno${new URL(pgR.retorno).search}`);
+    confere(retEnc.status === 303 && retEnc.local === `${BASE}/minhas-encomendas/${encId}?retorno=1`, "retorno da encomenda → /minhas-encomendas/<id>?retorno=1", retEnc);
+    const retOutra = await b.req("GET", `/pagamento/retorno${new URL(pgR.retorno).search}`);
+    confere(retOutra.status === 303 && retOutra.local === `${BASE}/minhas-encomendas`, "retorno da encomenda por outra conta → /minhas-encomendas", retOutra);
+
     console.log("13. Meus pedidos e o teto de pendentes");
     const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);
     confere(meus[0].n < 20, "pendentes recentes abaixo do teto (o expirado não conta)", meus[0]);
@@ -640,6 +728,11 @@ async function main() {
 }
 
 async function limpar() {
+  if (encomendas.length > 0) {
+    await sql("delete from encomenda_devolucoes where encomenda_id = any($1)", [encomendas]);
+    await sql("delete from pagamentos where encomenda_id = any($1)", [encomendas]);
+    await sql("delete from encomendas where id = any($1) and user_id = any($2)", [encomendas, contas]);
+  }
   if (pedidos.length > 0) {
     await sql("delete from pagamentos where order_id = any($1)", [pedidos]);
     await sql("delete from orders where id = any($1) and user_id = any($2)", [pedidos, contas]);
@@ -658,7 +751,7 @@ try {
 } finally {
   try {
     await limpar();
-    console.log(`limpeza: ${pedidos.length} pedidos e ${contas.length} contas de teste apagados`);
+    console.log(`limpeza: ${pedidos.length} pedidos, ${encomendas.length} encomendas e ${contas.length} contas de teste apagados`);
   } catch (e) {
     console.log(`limpeza falhou: ${e.message}`);
   }
