@@ -161,6 +161,7 @@ export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
                       </span>
                     </p>
                     <p className="mt-1 text-xs text-primaria/80">{p.permitidoEmKit ? "Entra no Kit Presente" : "Fora do Kit Presente"}</p>
+                    <p className="text-xs text-primaria/80">{p.disponivelEmMini ? "Disponível em mini (lembrancinhas)" : "Fora das lembrancinhas"}</p>
                     <p className="text-xs text-primaria/80">
                       {p.harmonizacoes.length + p.destaques.length > 0 ? "Foto com verso" : "Foto sem verso"}
                     </p>
@@ -208,6 +209,7 @@ type Form = {
   descricao: string;
   ativo: boolean;
   permitidoEmKit: boolean;
+  disponivelEmMini: boolean;
   /** Um item por linha, como o textarea (o servidor apara e descarta as linhas vazias). */
   harmonizacoes: string;
   destaques: string;
@@ -250,11 +252,12 @@ function FormularioProduto({
           descricao: produto.descricao,
           ativo: produto.ativo,
           permitidoEmKit: produto.permitidoEmKit,
+          disponivelEmMini: produto.disponivelEmMini,
           harmonizacoes: produto.harmonizacoes.join("\n"),
           destaques: produto.destaques.join("\n"),
         }
       : // Produto novo nasce fora do kit: a dona marca só os potes do tamanho padrão.
-        { sabor: "", peso: "", preco: "", descricao: "", ativo: true, permitidoEmKit: false, harmonizacoes: "", destaques: "" },
+        { sabor: "", peso: "", preco: "", descricao: "", ativo: true, permitidoEmKit: false, disponivelEmMini: false, harmonizacoes: "", destaques: "" },
   );
   const [foto, setFoto] = useState<{ blob: Blob; url: string } | null>(null);
   const [lendoFoto, setLendoFoto] = useState(false);
@@ -267,7 +270,7 @@ function FormularioProduto({
   useEffect(() => () => (foto ? URL.revokeObjectURL(foto.url) : undefined), [foto]);
 
   const mudar = (campo: keyof Form) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const valor = campo === "ativo" || campo === "permitidoEmKit" ? (e.target as HTMLInputElement).checked : e.target.value;
+    const valor = campo === "ativo" || campo === "permitidoEmKit" || campo === "disponivelEmMini" ? (e.target as HTMLInputElement).checked : e.target.value;
     setForm((f) => ({ ...f, [campo]: valor }));
   };
 
@@ -326,6 +329,7 @@ function FormularioProduto({
     dados.set("descricao", form.descricao.trim());
     dados.set("ativo", String(form.ativo));
     dados.set("permitidoEmKit", String(form.permitidoEmKit));
+    dados.set("disponivelEmMini", String(form.disponivelEmMini));
     // Sempre enviados: o campo vazio esvazia a lista (a foto do produto deixa de virar).
     dados.set("harmonizacoes", form.harmonizacoes);
     dados.set("destaques", form.destaques);
@@ -502,6 +506,22 @@ function FormularioProduto({
             </label>
             <p id={`${id}-permitidoEmKit-dica`} className="mt-1 pl-6 text-xs text-primaria/75">
               Potes do tamanho padrão; um pote maior ou mais caro sairia com desconto grande demais.
+            </p>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={form.disponivelEmMini}
+                onChange={mudar("disponivelEmMini")}
+                aria-describedby={`${id}-disponivelEmMini-dica`}
+                className="size-4"
+              />
+              Disponível em mini (lembrancinhas)
+            </label>
+            <p id={`${id}-disponivelEmMini-dica`} className="mt-1 pl-6 text-xs text-primaria/75">
+              Aparece entre os sabores dos potinhos de 40 ml. Só vale com o sabor à venda (ocultar o sabor também tira o mini).
             </p>
           </div>
 
