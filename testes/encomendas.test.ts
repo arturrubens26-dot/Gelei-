@@ -516,7 +516,12 @@ describe("referência da parcela e conferência do pagamento (InfinitePay)", () 
 
 describe("etapa do pagamento da parcela", () => {
   const base = { parcela: "ENTRADA" as const, status: "AGUARDANDO_ENTRADA" as StatusEncomenda, paga: false, gatewayAtivo: true, divergente: false, emConfirmacao: false };
-  const etapa = (e: typeof base | (Omit<typeof base, "parcela" | "status"> & { parcela: "ENTRADA" | "RESTANTE"; status: StatusEncomenda })) => {
+  const etapa = (
+    e: (typeof base | (Omit<typeof base, "parcela" | "status"> & { parcela: "ENTRADA" | "RESTANTE"; status: StatusEncomenda })) & {
+      entradaAte?: Date | null;
+      agora?: Date;
+    },
+  ) => {
     const r = etapaDaParcela(e);
     return r.motivoIndisponivel ? `${r.etapa}:${r.motivoIndisponivel}` : r.etapa;
   };
@@ -530,6 +535,25 @@ describe("etapa do pagamento da parcela", () => {
     assert.equal(etapa({ ...base, status: "SOLICITADA" }), "INDISPONIVEL:NAO_LIBERADA");
     assert.equal(etapa({ ...base, status: "SOLICITADA", gatewayAtivo: false }), "INDISPONIVEL:NAO_LIBERADA");
     assert.equal(etapa(base), "PAGAR");
+  });
+  it("a entrada não oferece 'Pagar' nos últimos 5 min nem na folga depois do prazo (o POST não abre link)", () => {
+    const entradaAte = new Date("2026-11-11T13:00:00Z");
+    const em = (ms: number) => ({ ...base, entradaAte, agora: new Date(entradaAte.getTime() + ms) });
+    assert.equal(etapa(em(-6 * MIN)), "PAGAR");
+    assert.equal(etapa(em(-5 * MIN)), "PAGAR", "com exatos 5 min ainda abre link (validadeDoLink)");
+    assert.equal(etapa(em(-5 * MIN + 1)), "EXPIRADO");
+    assert.equal(etapa(em(-1)), "EXPIRADO");
+    assert.equal(etapa(em(0)), "EXPIRADO");
+    assert.equal(etapa(em(FOLGA_DA_ENTRADA_MS - 1)), "EXPIRADO", "na folga");
+    // Coerente com o botão: onde a etapa é PAGAR, o POST abriria o link.
+    for (const ms of [-60 * MIN, -6 * MIN, -5 * MIN]) assert.notEqual(validadeDoLink(new Date(entradaAte.getTime() + ms), entradaAte), null);
+    // Conferência e divergência vêm antes: nunca escondem dinheiro possivelmente entrando.
+    assert.equal(etapa({ ...em(0), emConfirmacao: true }), "CONFIRMANDO");
+    assert.equal(etapa({ ...em(0), divergente: true }), "CONFIRMANDO");
+    assert.equal(etapa({ ...em(0), paga: true }), "PAGO");
+    // Sem prazo informado (chamadas antigas) e o restante não mudam.
+    assert.equal(etapa({ ...base, agora: entradaAte }), "PAGAR");
+    assert.equal(etapa({ ...em(0), parcela: "RESTANTE", status: "CONFIRMADA" }), "PAGAR");
   });
   it("o restante só é liberado com a encomenda confirmada", () => {
     const restante = { ...base, parcela: "RESTANTE" as const };

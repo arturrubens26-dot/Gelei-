@@ -599,7 +599,8 @@ export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCl
  * 5. pagamento pelo site desligado → INDISPONIVEL com `motivoIndisponivel: "PAGAMENTO_FORA_DO_AR"`;
  * 6. aviso da InfinitePay ainda não conferido, ou retorno do navegador há menos de 30 min → CONFIRMANDO
  *    (com dinheiro possivelmente entrando, a tela nunca volta a "Pagar");
- * 7. o resto → PAGAR (o botão segue `acoes.pagarEntrada` / `acoes.pagarRestante`).
+ * 7. ENTRADA com menos de 5 min até `entradaAte` (ou já depois dele, na folga) → EXPIRADO: não há link a abrir;
+ * 8. o resto → PAGAR (o botão segue `acoes.pagarEntrada` / `acoes.pagarRestante`).
  * `motivoIndisponivel` é `null` em toda etapa que não seja INDISPONIVEL.
  */
 export type MotivoIndisponivel = "NAO_LIBERADA" | "PAGAMENTO_FORA_DO_AR";
@@ -612,6 +613,12 @@ export function etapaDaParcela(e: {
   gatewayAtivo: boolean;
   divergente: boolean;
   emConfirmacao: boolean;
+  /**
+   * Só na ENTRADA: `entradaAte` e o instante atual. Com menos de 5 min até o prazo (ou já passado, nos 30 min
+   * de folga) o POST não abre link (`validadeDoLink`), então a tela não oferece "Pagar": EXPIRADO.
+   */
+  entradaAte?: Date | null;
+  agora?: Date;
 }): { etapa: EtapaPagamento; motivoIndisponivel: MotivoIndisponivel | null } {
   const so = (etapa: EtapaPagamento) => ({ etapa, motivoIndisponivel: null });
   if (e.paga) return so("PAGO");
@@ -622,6 +629,8 @@ export function etapaDaParcela(e: {
   if (!liberada) return { etapa: "INDISPONIVEL", motivoIndisponivel: "NAO_LIBERADA" };
   if (!e.gatewayAtivo) return { etapa: "INDISPONIVEL", motivoIndisponivel: "PAGAMENTO_FORA_DO_AR" };
   if (e.emConfirmacao) return so("CONFIRMANDO");
+  // Depois da conferência (que nunca volta a "Pagar"): sem tempo para pagar a entrada, não oferece o botão.
+  if (e.parcela === "ENTRADA" && e.entradaAte && e.agora && validadeDoLink(e.agora, e.entradaAte) === null) return so("EXPIRADO");
   return so("PAGAR");
 }
 

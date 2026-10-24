@@ -374,6 +374,8 @@ function montarSituacao(enc: NonNullable<Awaited<ReturnType<typeof lerParaSituac
       gatewayAtivo: pagamentoOnlineDisponivel(),
       divergente: estados.includes("DIVERGENTE"),
       emConfirmacao: estados.includes("CONFIRMANDO"),
+      entradaAte: enc.entradaAte,
+      agora,
     }),
     pagamentoEmConferencia: estados.some((e) => e !== null),
     cobranca: ultima ? paraCobrancaDTO(ultima, t) : null,
