@@ -93,10 +93,10 @@ export const googleFontsUrl =
  * Quando houver o arquivo vetorial (SVG/PDF) do logo, substitua mantendo os caminhos.
  */
 export const logos = {
-  /** Potinho com coração + "Geleiô" + "GELEIAS ARTESANAIS" + filete com coração (1061×1034, exibido a 430×419). */
-  principal: { src: "/marca/logo-potinho.png", largura: 430, altura: 419 },
-  /** Potinho com coração + "Geleiô" (1048×789, exibido a 430×324): cabeçalho. */
-  cabecalho: { src: "/marca/logo-potinho-topo.png", largura: 430, altura: 324 },
+  /** Potinho com coração + "Geleiô" + "GELEIAS ARTESANAIS" + filete com coração (1061×1066, exibido a 430×432). */
+  principal: { src: "/marca/logo-geleio.png", largura: 430, altura: 432 },
+  /** Potinho com coração + "Geleiô" (1048×821, exibido a 430×337): cabeçalho. */
+  cabecalho: { src: "/marca/logo-geleio-topo.png", largura: 430, altura: 337 },
 } as const;
 
 /**
