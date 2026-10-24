@@ -30,8 +30,8 @@ export type DadosLegais = {
  * deixa abrir as encomendas de lembrancinhas (decisão D13).
  */
 export const dadosLegais: DadosLegais = {
-  documento: null,
-  email: null,
+  documento: "077.739.053-12",
+  email: "arturrubens20@gmail.com",
 };
 
 const soDigitos = (valor: string) => valor.replace(/\D/g, "");
