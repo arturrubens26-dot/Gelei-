@@ -63,9 +63,17 @@ function CabecalhoDaLoja({ temKit, temLembrancinhas }: { temKit: boolean; temLem
           />
         </Link>
 
-        {/* Até 1024 px a navegação ganha uma linha própria (com "Kits" e "Lembrancinhas" ela não cabe ao
-            lado da conta e do carrinho no celular); no computador fica na mesma linha, antes da conta. */}
-        <nav aria-label="Principal" className="order-last w-full border-t border-accent2/30 lg:order-none lg:ml-auto lg:mr-2 lg:w-auto lg:border-0">
+        {/* Com os três links ("Nossas geleias", "Kits" e "Lembrancinhas") a navegação não cabe ao lado da conta
+            e do carrinho no celular: até 1024 px ela ganha uma linha própria. Com menos links, fica na linha
+            do logo, como sempre. No computador fica sempre na mesma linha, antes da conta. */}
+        <nav
+          aria-label="Principal"
+          className={
+            temKit && temLembrancinhas
+              ? "order-last w-full border-t border-accent2/30 lg:order-none lg:ml-auto lg:mr-2 lg:w-auto lg:border-0"
+              : "ml-auto lg:mr-2"
+          }
+        >
           <ul className="flex flex-wrap items-center gap-x-5 gap-y-0 lg:gap-6">
             <li>
               <Link href="/products" className={estiloLink}>

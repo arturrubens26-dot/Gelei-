@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { GerarLinkSenha } from "@/components/admin/GerarLinkSenha";
 import { CarregandoAdmin, GuardaAdmin } from "@/components/admin/GuardaAdmin";
+import { FUSO_LOJA } from "@/lib/despesas";
 import { EtiquetaStatus } from "@/components/EtiquetaStatus";
 import type { ClienteDetalheDTO, SituacaoLinkSenha } from "@/lib/auth/redefinicao-regras";
 import { fichaDoCliente } from "@/lib/clientes-admin";
@@ -11,7 +12,7 @@ import { formatarDataHora } from "@/lib/formatacao";
 
 export const metadata: Metadata = { title: "Ficha da cliente" };
 
-const formatoData = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric" });
+const formatoData = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO_LOJA, day: "2-digit", month: "2-digit", year: "numeric" });
 const data = (iso: string) => formatoData.format(new Date(iso));
 
 const ROTULO_SITUACAO: Record<SituacaoLinkSenha, string> = {

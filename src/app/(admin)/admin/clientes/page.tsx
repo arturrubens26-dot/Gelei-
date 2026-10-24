@@ -3,6 +3,7 @@ import Form from "next/form";
 import Link from "next/link";
 import { Suspense } from "react";
 import { CarregandoAdmin, GuardaAdmin } from "@/components/admin/GuardaAdmin";
+import { FUSO_LOJA } from "@/lib/despesas";
 import { MIN_CARACTERES_BUSCA, buscarClientes } from "@/lib/clientes-admin";
 
 export const metadata: Metadata = { title: "Clientes" };
@@ -10,7 +11,7 @@ export const metadata: Metadata = { title: "Clientes" };
 /** Máximo que `buscarClientes` devolve: com tantos, pedimos para refinar. */
 const MAX_RESULTADOS = 20;
 
-const formatoData = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric" });
+const formatoData = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO_LOJA, day: "2-digit", month: "2-digit", year: "numeric" });
 
 type Props = PageProps<"/admin/clientes">;
 

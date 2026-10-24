@@ -45,7 +45,7 @@ async function Resumo() {
 
   const cartoes = [
     { rotulo: "Pedidos pendentes", valor: String(r.pendentes), dica: "aguardando pagamento", href: "/admin/orders" },
-    { rotulo: "Pagos, a enviar", valor: String(r.aEnviar), dica: "a despachar ou a entregar (encomendas)", href: "/admin/orders" },
+    { rotulo: "Pagos, a enviar", valor: String(r.aEnviar), dica: "a despachar ou a entregar", href: "/admin/orders" },
     { rotulo: "Faturamento bruto", valor: formatarBRL(r.faturamentoBruto), dica: `${r.pedidosPagos} pedidos pagos`, href: "/admin/financial" },
     { rotulo: "Ticket médio", valor: formatarBRL(r.ticketMedio), dica: "por pedido pago", href: "/admin/financial" },
   ];

@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 // quê, com quem é compartilhado (a InfinitePay, no pagamento), por quanto tempo e os direitos do titular.
 export default function PaginaPrivacidade() {
   return (
-    <PaginaDePolitica titulo="Privacidade e seus dados" atualizadaEm="21 de outubro de 2026">
+    <PaginaDePolitica titulo="Privacidade e seus dados" atualizadaEm="24 de outubro de 2026">
       <p>
         Pedimos só o necessário para vender, entregar e cuidar do seu pedido. Não vendemos seus dados e não usamos ferramentas de
         anúncio nem de rastreamento.
@@ -35,7 +35,13 @@ export default function PaginaPrivacidade() {
           embaralhada (criptografada): nem a gente consegue ler.
         </li>
         <li>
-          <strong>WhatsApp:</strong> para combinar a entrega ou a retirada e avisar sobre o pedido.
+          <strong>WhatsApp:</strong> para combinar a entrega ou a retirada e avisar sobre o pedido ou a encomenda (confirmação,
+          pagamento e entrega). Não usamos o número para propaganda.
+        </li>
+        <li>
+          <strong>Encomendas de lembrancinhas:</strong> a data da festa, a data e a forma de receber os potinhos, os sabores e as
+          quantidades, e a observação que você escrever, para preparar a encomenda no prazo. Também guardamos qual versão da política
+          de desistência você aceitou e quando.
         </li>
         <li>
           <strong>Endereço:</strong> só quando você escolhe a entrega, para levar o pedido até você.
@@ -50,7 +56,7 @@ export default function PaginaPrivacidade() {
       <ul>
         <li>
           <strong>InfinitePay</strong>, que processa o pagamento: recebe seu nome, e-mail, WhatsApp, o endereço de entrega e os
-          itens do pedido. Os dados do cartão você digita direto na página da InfinitePay; eles não passam pela Geleiô.
+          itens do pedido ou da encomenda. Os dados do cartão você digita direto na página da InfinitePay; eles não passam pela Geleiô.
         </li>
         <li>
           <strong>Os serviços que mantêm o site no ar</strong> (a hospedagem Netlify e o banco de dados Neon), que guardam os dados
@@ -74,7 +80,7 @@ export default function PaginaPrivacidade() {
 
       <h2>Por quanto tempo guardamos</h2>
       <p>
-        Os dados da conta ficam enquanto ela existir. Os pedidos ficam pelo tempo que a lei exige para os registros de venda e para
+        Os dados da conta ficam enquanto ela existir. Os pedidos e as encomendas ficam pelo tempo que a lei exige para os registros de venda e para
         garantir os seus direitos de consumidor.
       </p>
 

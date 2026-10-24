@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { siteEmLocalhost, urlDaInfinitePay } from "@/components/checkout/urlDaInfinitePay";
 import { dadosLoja } from "@/lib/dados-loja";
+import { FUSO_LOJA } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import { JANELA_CONFIRMANDO_MS, rotuloDoMetodo, type CobrancaDTO, type EtapaPagamento } from "@/lib/pagamentos-regras";
 
@@ -54,10 +55,10 @@ export type PropsPagamentoPorEtapa<S extends SituacaoBase> = {
   className?: string;
 };
 
-const FUSO = "America/Sao_Paulo";
+const FUSO = FUSO_LOJA;
 const formatoDia = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO, day: "2-digit", month: "2-digit" });
 const formatoHora = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO, hour: "2-digit", minute: "2-digit" });
-/** "24/10 às 15:40" (horário de Brasília, o mesmo de Teresina). */
+/** "24/10 às 15:40" (horário da loja, Teresina). */
 export const diaEHora = (iso: string) => `${formatoDia.format(new Date(iso))} às ${formatoHora.format(new Date(iso))}`;
 
 /**

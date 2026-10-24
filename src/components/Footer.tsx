@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { marca } from "@/design-system";
-import { dadosLoja } from "@/lib/dados-loja";
+import { dadosLegais, dadosLoja } from "@/lib/dados-loja";
 
 /** Links da faixa de baixo: creme sobre vinho (≈ 10:1); no foco, o contorno dourado aparece sobre o vinho. */
 const estiloLink =
@@ -36,6 +36,21 @@ export function Footer() {
               <br className="sm:hidden" />
               <span className="hidden sm:inline"> · </span>
               {dadosLoja.endereco.cidade}-{dadosLoja.endereco.uf} · CEP {dadosLoja.endereco.cep}
+              {/* Decreto 7.962/2013, art. 2º: CNPJ/CPF e e-mail de contato, quando a loja os preencher em dados-loja.ts. */}
+              {dadosLegais.documento?.trim() && (
+                <>
+                  <br />
+                  CNPJ/CPF {dadosLegais.documento}
+                </>
+              )}
+              {dadosLegais.email?.trim() && (
+                <>
+                  {dadosLegais.documento?.trim() ? " · " : <br />}
+                  <a href={`mailto:${dadosLegais.email}`} className="font-semibold underline underline-offset-4 hover:text-accent2">
+                    {dadosLegais.email}
+                  </a>
+                </>
+              )}
             </address>
             <nav aria-label="Informações da loja">
               <ul className="flex flex-wrap items-center justify-center gap-x-6">
