@@ -125,10 +125,9 @@ export type NomeSimbolo = keyof typeof simbolos;
 
 export type IconeDeMarca = "folha" | "coracao" | "colher" | "ramo" | "framboesa";
 
-/** "Aplicações de marca": os cinco compromissos do painel de identidade, na mesma ordem. */
+/** "Aplicações de marca": os quatro compromissos do painel de identidade, na mesma ordem. */
 export const aplicacoesDeMarca = [
   { icone: "folha", titulo: "Ingredientes selecionados" },
-  { icone: "coracao", titulo: "Feito com amor" },
   { icone: "colher", titulo: "Receita artesanal" },
   { icone: "ramo", titulo: "Sem conservantes" },
   { icone: "framboesa", titulo: "Sabor que encanta" },

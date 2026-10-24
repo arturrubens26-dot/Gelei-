@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     default: `${marca.nome} — ${marca.slogan}`,
     template: `%s | ${marca.nome}`,
   },
-  description: `${marca.nome}: ${marca.slogan.toLowerCase()}, feitas com amor e ingredientes selecionados.`,
+  description: `${marca.nome}: ${marca.slogan.toLowerCase()}, feitas com ingredientes selecionados.`,
 };
 
 // Layout raiz mínimo. Header/Footer/Carrinho ficam em (loja)/layout.tsx e o

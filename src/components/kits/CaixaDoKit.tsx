@@ -239,7 +239,7 @@ const papel: CSSProperties = {
   backgroundSize: "auto, auto, 160px 160px",
 };
 
-/** O que é impresso na caixa (quadro 300×200): dobra da tampa, ramos, assinatura e a faixa de baixo. */
+/** O que é impresso na caixa (quadro 300×200): dobra da tampa, ramos e a faixa de baixo. */
 function Desenho() {
   return (
     <svg viewBox="0 0 300 200" aria-hidden="true" className="pointer-events-none absolute inset-0 size-full select-none">
@@ -254,37 +254,17 @@ function Desenho() {
         <Ramo segundaFruta />
       </g>
 
-      {/* Assinatura da marca, em duas linhas como na referência, com o filete dourado e o coração. */}
-      <g className="font-assinatura" fill={cores.primaria}>
-        <text x="199" y="37" textAnchor="middle" fontSize="14.5">
-          Feito com amor,
-        </text>
-        <text x="208" y="55" textAnchor="middle" fontSize="14.5">
-          para você.
-        </text>
-      </g>
-      <g stroke={cores.accent2} strokeWidth="0.6" strokeLinecap="round" fill={cores.accent2}>
-        <path d="M180 66.5H199M215 66.5H234" />
-        <circle cx="180" cy="66.5" r="0.9" stroke="none" />
-        <circle cx="234" cy="66.5" r="0.9" stroke="none" />
-        <path d={CORACAO} transform="translate(202.3 62.6) scale(0.39)" fill="none" stroke={cores.secundaria} strokeWidth="2.2" />
-      </g>
-
       {/* Faixa de baixo. A largura de cada selo é fixa (textLength): cabe igual em qualquer fonte. */}
       <g className="font-textos" fill={cores.primaria} fontSize="4.4" fontWeight="600">
-        <text x="40" y="189.5" textLength="82" lengthAdjust="spacing">
+        <text x="71" y="189.5" textLength="82" lengthAdjust="spacing">
           INGREDIENTES SELECIONADOS
         </text>
-        <text x="139" y="189.5" textLength="48" lengthAdjust="spacing">
-          FEITO COM AMOR
-        </text>
-        <text x="204" y="189.5" textLength="56" lengthAdjust="spacing">
+        <text x="171" y="189.5" textLength="56" lengthAdjust="spacing">
           SEM CONSERVANTES
         </text>
       </g>
       <g fill={cores.accent2}>
-        <path d={CORACAO} transform="translate(127.9 184.2) scale(0.22)" />
-        <path d={CORACAO} transform="translate(192.9 184.2) scale(0.22)" />
+        <path d={CORACAO} transform="translate(159 184.2) scale(0.22)" />
       </g>
     </svg>
   );

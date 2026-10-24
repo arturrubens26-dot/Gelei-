@@ -25,10 +25,9 @@ const falta = (n: number) => (n === 1 ? "Falta 1 pote." : `Faltam ${n} potes.`);
 /** Espaço não separável (U+00A0): não aparece, mas torna a frase "outra" para a região viva. */
 const ESPACO_INVISIVEL = String.fromCharCode(0xa0);
 
-/** Os três compromissos impressos na faixa da caixa, também como texto legível (a caixa é ilustração). */
+/** Os dois compromissos impressos na faixa da caixa, também como texto legível (a caixa é ilustração). */
 const SELOS = [
   { icone: "folha", titulo: "Ingredientes selecionados" },
-  { icone: "coracao", titulo: "Feito com amor" },
   { icone: "ramo", titulo: "Sem conservantes" },
 ] as const;
 
@@ -304,7 +303,7 @@ export function MonteSeuKit({ kit, produtos }: { kit: KitDTO; produtos: ProdutoD
       </section>
 
       <div className="flex flex-col gap-3 md:col-start-2 md:row-start-3">
-        <ul aria-label="Na caixa e nos potes" className="grid grid-cols-3 text-center text-xs font-semibold leading-snug text-primaria">
+        <ul aria-label="Na caixa e nos potes" className="grid grid-cols-2 text-center text-xs font-semibold leading-snug text-primaria">
           {SELOS.map((s, i) => (
             <li key={s.titulo} className={`flex flex-col items-center gap-1.5 px-2 ${i > 0 ? "border-l border-dotted border-accent2" : ""}`}>
               <IconeMarca icone={s.icone} className="size-8" />

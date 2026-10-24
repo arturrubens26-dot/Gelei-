@@ -18,7 +18,6 @@ export function Abertura() {
             className="h-auto w-70 sm:w-95"
           />
         </h1>
-        <p className="assinatura mt-2 text-4xl text-primaria sm:text-5xl">{marca.fraseRodape}</p>
         <p className="mt-6 max-w-md text-base leading-relaxed text-primaria/85">
           Geleias feitas em pequenos lotes, com frutas selecionadas e sem conservantes.
         </p>
