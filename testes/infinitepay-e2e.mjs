@@ -9,9 +9,15 @@
 //    Outras portas: E2E_BASE=http://localhost:3200 e E2E_PORTA_FALSA=4020 (com INFINITEPAY_API_URL e
 //    APP_URL do site iguais a elas).
 //
-// Com E2E_DADOS_LEGAIS=1 no site E neste script, o caso 23 abre as lembrancinhas por instantes e cria
-// uma encomenda pelo POST /api/encomendas (a trava D13 só cede com a InfinitePay falsa configurada);
-// sem isso, o caso confere o 409 do D13 e pula a criação. Rode as duas vezes antes de publicar.
+// Com E2E_DADOS_LEGAIS=1 no site E neste script, os casos 23 e 30 abrem as lembrancinhas por instantes e criam
+// encomendas pelo POST /api/encomendas (a trava D13 só cede com a InfinitePay falsa configurada, a APP_URL em
+// http://localhost e sem NETLIFY nem APP_ENV de produção); sem isso, conferem o 409/503 do D13 e pulam a criação.
+// Rode as duas vezes antes de publicar.
+//
+// O banco do `prisma dev` é de UMA sessão só: não rode isto junto com outro servidor ou teste no mesmo banco
+// (dá P2039). O mais seguro é um banco só do teste (outra instância do prisma dev, com as migrações aplicadas e
+// uma cópia dos dados), passando a DATABASE_URL dele ao site e a este script. As colunas de data são TIMESTAMP
+// sem fuso: o que este script grava vai como ISO em UTC (utc()).
 //
 // O admin vem de E2E_ADMIN_EMAIL / E2E_ADMIN_SENHA ou do ACESSO-LOCAL.txt. Tudo o que o teste cria
 // (contas e-mail e2e-infinitepay-*, pedidos, encomendas e cobranças delas) é apagado no fim, mesmo se falhar.
@@ -642,17 +648,38 @@ async function main() {
     const mesAgora = (await sql("select to_char(now() at time zone 'America/Fortaleza', 'YYYY-MM') m"))[0].m;
     const finAntes = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
     const despAntes = (await admin.req("GET", `/api/admin/expenses?mes=${mesAgora}`)).json;
-    const novaEncomenda = async (sufixo, status) => {
+    // Cria a encomenda direto no banco (o POST do site fica fechado sem CNPJ/CPF e e-mail da loja). `o`:
+    // usuario (padrão: a conta "a"), entradaAte, corteEm, percentualAceito, percentualRetido e restantePagoEm.
+    // CONFIRMADA em diante já nasce com a entrada paga (a CHECK exige).
+    // As colunas de data são TIMESTAMP sem fuso: o pg manda um Date na hora LOCAL deste computador (−03:00) e o banco
+    // guardaria 3 h a menos que o instante pedido. Por isso as datas vão como ISO em UTC (utc()).
+    const utc = (d) => (d ? new Date(d).toISOString() : null);
+    const novaEncomenda = async (sufixo, status, o = {}) => {
       const id = `e2e${marca}${sufixo}`;
       encomendas.push(id);
       const aprovada = status !== "SOLICITADA";
+      const confirmada = ["CONFIRMADA", "EM_PRODUCAO", "PRONTA", "ENTREGUE"].includes(status);
+      const aceito = o.percentualAceito ?? 100;
       await sql(
         `insert into encomendas (id, user_id, status, data_festa, data_entrega, modo_entrega, telefone, potinhos, subtotal, frete, total,
-           valor_entrada, valor_restante, peso_total_gramas, responder_ate, corte_em, entrada_ate, percentual_retido, politica_versao,
-           politica_aceita_em, idempotency_key, aprovada_em)
+           valor_entrada, valor_restante, peso_total_gramas, responder_ate, corte_em, entrada_ate, percentual_aceito, percentual_retido,
+           politica_versao, politica_aceita_em, idempotency_key, aprovada_em, entrada_paga_em, restante_pago_em, restante_forma)
          values ($1, $2, $3, current_date + 12, current_date + 10, 'RETIRADA', '86999991234', 15, 90, 0, 90,
-           45, 45, 1950, now() + interval '1 day', now() + interval '7 days', $4, 100, '2026-11-v1', now(), $5, $6)`,
-        [id, contas[0], status, aprovada ? new Date(Date.now() + 86_400_000) : null, `e2e-${marca}-${sufixo}`, aprovada ? new Date() : null],
+           45, 45, 1950, now() + interval '1 day', $7, $4, $8, $9, '2026-11-v1', now(), $5, $6, $10, $11, $12)`,
+        [
+          id,
+          o.usuario ?? contas[0],
+          status,
+          aprovada ? utc(o.entradaAte ?? new Date(Date.now() + 86_400_000)) : null,
+          `e2e-${marca}-${sufixo}`,
+          aprovada ? utc(new Date()) : null,
+          utc(o.corteEm ?? new Date(Date.now() + 7 * 86_400_000)),
+          aceito,
+          o.percentualRetido ?? aceito,
+          confirmada ? utc(new Date()) : null,
+          utc(o.restantePagoEm),
+          o.restantePagoEm ? "PIX" : null,
+        ],
       );
       await sql("insert into encomenda_itens (id, encomenda_id, product_id, quantidade, preco_unitario) values ($1, $2, $3, 15, 6)", [`${id}i`, id, produto]);
       return id;
@@ -753,10 +780,15 @@ async function main() {
       "painel: produção → pronta → entregue",
       [prod.status, pronta.status, entregue.json?.encomenda?.statusEfetivo ?? entregue.json],
     );
-    const devolvida = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE", observacao: "Devolvido pelo app (e2e)." });
+    // O que a tela mostra: as devoluções pendentes da ficha, por id.
+    const fichaDev = (await admin.req("GET", `/api/admin/encomendas/${encId}`)).json?.encomenda;
+    const idsPendentes = (fichaDev?.devolucoes ?? []).filter((d) => d.status === "PENDENTE").map((d) => d.id);
+    const semIds = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE", observacao: "sem ids" });
+    confere(semIds.status === 400 && idsPendentes.length === 1, "devolução feita sem os ids → 400", semIds.json);
+    const devolvida = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE", devolucaoIds: idsPendentes, observacao: "Devolvido pelo app (e2e)." });
     confere(devolvida.status === 200 && devolvida.json?.encomenda?.devolucao?.status === "FEITA" && devolvida.json.encomenda.alerta === null, "devolução marcada como feita", devolvida.json?.encomenda?.devolucao);
-    const deNovo = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE" });
-    confere(deNovo.status === 409 && deNovo.json?.detalhes?.motivo === "sem-devolucao", "sem devolução pendente → 409", deNovo.json);
+    const deNovo = await acaoEnc(encId, { acao: "devolucao-feita", statusEsperado: "ENTREGUE", devolucaoIds: idsPendentes });
+    confere(deNovo.status === 409 && deNovo.json?.detalhes?.motivo === "devolucao-mudou", "devolução que já não está pendente → 409 devolucao-mudou", deNovo.json);
 
     // Segunda encomenda: entrada paga, restante fora do site, cancelada pela loja com devolução.
     const enc2Id = await novaEncomenda("enc2", "AGUARDANDO_ENTRADA");
@@ -873,6 +905,546 @@ async function main() {
         await sql("update products set disponivel_em_mini = $2 where id = $1", [produto, miniAntes]);
       }
     }
+
+    // --- Correções das revisões (casos 25 em diante): canário nas encomendas, conferência que não prende, folga do prazo,
+    // --- devolução por id, idempotência completa, percentual aceito, segurança do PATCH, virada de mês, desistência.
+    const abrirLinkEnc = async (cli, id, parcela) => {
+      const r = await cli.req("POST", `/api/encomendas/${id}/pagamento`, { corpo: { parcela } });
+      if (r.status !== 200) throw new Error(`link ${parcela} de ${id}: ${r.status} ${JSON.stringify(r.json)}`);
+      return falsa.links.get(codigoDe(r.json.cobranca.checkoutUrl));
+    };
+    const cobrancasEnc = (id) => sql("select * from pagamentos where encomenda_id = $1 order by criado_em, id", [id]);
+    const linhaEnc = async (id) => (await sql("select * from encomendas where id = $1", [id]))[0];
+    const devolucoesEnc = (id) => sql("select id, motivo, valor::text, status from encomenda_devolucoes where encomenda_id = $1 order by criada_em, id", [id]);
+    const semMarcaEnc = (c) => c.status === "PENDENTE" && c.status_gateway === "aberto" && c.transacao_nsu === null && c.aviso_transacao_nsu === null;
+    const liberarVez = (id) => sql("update pagamentos set consultado_em = null where encomenda_id = $1", [id]);
+    const dtoEnc = async (cli, id) => (await cli.req("GET", `/api/encomendas/${id}`)).json?.encomenda;
+    const fichaEnc = async (id) => (await admin.req("GET", `/api/admin/encomendas/${id}`)).json?.encomenda;
+    const idDaConta = () => contas[contas.length - 1];
+
+    console.log("25. O canário de amarração vale também para a parcela de encomenda (entrada e restante)");
+    const conta25 = await novaConta("d");
+    const uid25 = idDaConta();
+    // a) API hipotética que NÃO amarra: a transação do link de OUTRA encomenda, de mesmo valor, apresentada no retorno.
+    modo({ naoAmarraPedido: true });
+    const alvo25 = await novaEncomenda("a25", "AGUARDANDO_ENTRADA", { usuario: uid25 });
+    const outro25 = await novaEncomenda("o25", "AGUARDANDO_ENTRADA", { usuario: uid25 });
+    const linkAlvo25 = await abrirLinkEnc(conta25, alvo25, "ENTRADA");
+    const linkOutro25 = await abrirLinkEnc(conta25, outro25, "ENTRADA");
+    const pgOutro25 = await pagar({ codigo: linkOutro25.codigo, metodo: "pix", aviso: false });
+    const antes25 = falsa.chamadas.payment_check;
+    const q25 = new URLSearchParams({ order_nsu: linkAlvo25.order_nsu, transaction_nsu: pgOutro25.transaction_nsu, slug: pgOutro25.slug });
+    const r25 = await conta25.req("GET", `/pagamento/retorno?${q25}`);
+    const [cAlvo25] = await cobrancasEnc(alvo25);
+    confere(
+      r25.status === 303 && r25.local === `${BASE}/minhas-encomendas/${alvo25}?retorno=1` && (await linhaEnc(alvo25)).status === "AGUARDANDO_ENTRADA" &&
+        falsa.chamadas.payment_check === antes25 + 2 && semMarcaEnc(cAlvo25) && (await devolucoesEnc(alvo25)).length === 0,
+      "encomenda, API que não amarra: o canário barra o retorno da ENTRADA (duas consultas, nada gravado)",
+      { cAlvo25, consultas: falsa.chamadas.payment_check - antes25 },
+    );
+    await conta25.req("GET", `/pagamento/retorno${new URL(pgOutro25.retorno).search}`);
+    confere((await linhaEnc(outro25)).status === "AGUARDANDO_ENTRADA", "encomenda, API que não amarra: nem a compra de verdade confirma pelo retorno (fail-closed)");
+    await liberarVez(outro25);
+    const avisoOutro25 = await avisar(linkOutro25.webhook_url, pgOutro25.corpoAviso);
+    confere(avisoOutro25.status === 200 && (await linhaEnc(outro25)).status === "CONFIRMADA", "o aviso confirma a entrada de verdade", avisoOutro25.status);
+    modo({});
+    // b) Canário com falha (500): não confirma pelo retorno, só retorno_em; depois confirma.
+    const enc25b = await novaEncomenda("b25", "AGUARDANDO_ENTRADA", { usuario: uid25 });
+    const linkB25 = await abrirLinkEnc(conta25, enc25b, "ENTRADA");
+    const pgB25 = await pagar({ codigo: linkB25.codigo, metodo: "pix", aviso: false });
+    modo({ falharCanario: 500 });
+    await conta25.req("GET", `/pagamento/retorno${new URL(pgB25.retorno).search}`);
+    modo({});
+    const [cB25] = await cobrancasEnc(enc25b);
+    confere(
+      (await linhaEnc(enc25b)).status === "AGUARDANDO_ENTRADA" && cB25.status_gateway === "aberto" && cB25.transacao_nsu === null && cB25.retorno_em !== null,
+      "encomenda, canário com falha: a entrada não confirma, só retorno_em",
+      cB25,
+    );
+    await liberarVez(enc25b);
+    await conta25.req("GET", `/pagamento/retorno${new URL(pgB25.retorno).search}`);
+    confere((await linhaEnc(enc25b)).status === "CONFIRMADA", "encomenda, canário de volta: o retorno confirma a entrada");
+    // c) O mesmo no RESTANTE: barrado com a API que não amarra, e confirmado quando ela amarra.
+    modo({ naoAmarraPedido: true });
+    const alvoR25 = await novaEncomenda("r25", "CONFIRMADA", { usuario: uid25 });
+    const outroR25 = await novaEncomenda("s25", "CONFIRMADA", { usuario: uid25 });
+    const linkAlvoR25 = await abrirLinkEnc(conta25, alvoR25, "RESTANTE");
+    const linkOutroR25 = await abrirLinkEnc(conta25, outroR25, "RESTANTE");
+    const pgOutroR25 = await pagar({ codigo: linkOutroR25.codigo, metodo: "pix", aviso: false });
+    const qR25 = new URLSearchParams({ order_nsu: linkAlvoR25.order_nsu, transaction_nsu: pgOutroR25.transaction_nsu, slug: pgOutroR25.slug });
+    await conta25.req("GET", `/pagamento/retorno?${qR25}`);
+    const [cAlvoR25] = await cobrancasEnc(alvoR25);
+    confere((await linhaEnc(alvoR25)).restante_pago_em === null && semMarcaEnc(cAlvoR25), "encomenda, API que não amarra: o retorno do RESTANTE também é barrado", cAlvoR25);
+    modo({});
+    const pgR25 = await pagar({ codigo: linkAlvoR25.codigo, metodo: "pix", aviso: false });
+    await liberarVez(alvoR25);
+    await conta25.req("GET", `/pagamento/retorno${new URL(pgR25.retorno).search}`);
+    const linhaR25 = await linhaEnc(alvoR25);
+    confere(linhaR25.restante_pago_em !== null && linhaR25.restante_forma === "PIX", "encomenda, API que amarra: o retorno quita o restante", linhaR25);
+
+    console.log("26. Conferência que não prende: no máximo 24 h, e a dona tem saída (cancelar; registrar a entrada)");
+    const conta26 = await novaConta("e");
+    const uid26 = idDaConta();
+    // Encomenda aguardando a entrada, com o link aberto e um aviso que a InfinitePay "não consegue conferir" (chave recusada).
+    const emConferencia = async (sufixo) => {
+      const id = await novaEncomenda(sufixo, "AGUARDANDO_ENTRADA", { usuario: uid26, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+      const link = await abrirLinkEnc(conta26, id, "ENTRADA");
+      modo({ falharConferencia: 401 });
+      const pg = await pagar({ codigo: link.codigo, metodo: "pix" });
+      return { id, link, pg };
+    };
+    // a) O aviso recente segura; com mais de 24 h depois do vencimento do link, a encomenda expira; o pagamento que
+    //    ainda aparecer depois vira devolução (pagamento tardio) e a cliente a vê na encomenda.
+    const c26a = await emConferencia("a26");
+    confere(c26a.pg.aviso?.status === 400, "aviso sem desfecho (chave recusada) → 400", c26a.pg.aviso);
+    await sql("update encomendas set entrada_ate = now() - interval '2 hours' where id = $1", [c26a.id]);
+    await sql("update pagamentos set expira_em = now() - interval '2 hours' where encomenda_id = $1", [c26a.id]);
+    const seg26 = await dtoEnc(conta26, c26a.id);
+    confere(
+      seg26?.statusEfetivo === "AGUARDANDO_ENTRADA" && seg26.pagamentoEmConferencia?.entrada === true && seg26.acoes.pagarEntrada === false &&
+        seg26.acoes.desistirBloqueado === true && seg26.entradaEmFolga === false,
+      "aviso recente: continua aguardando (não expira), sem 'Pagar' e com a desistência bloqueada",
+      seg26,
+    );
+    const sit26 = await conta26.req("GET", `/api/encomendas/${c26a.id}/pagamento?parcela=ENTRADA`);
+    confere(sit26.json?.etapa === "CONFIRMANDO" && sit26.json.pagamentoEmConferencia === true, "situação da parcela: CONFIRMANDO e pagamentoEmConferencia", sit26.json);
+    const desiste26 = await conta26.req("POST", `/api/encomendas/${c26a.id}/desistir`, { corpo: { devolucaoEsperadaCentavos: 0 } });
+    confere(desiste26.status === 409 && /conferido/.test(desiste26.json?.erro ?? ""), "desistir com pagamento em conferência → 409", desiste26.json);
+    const novoLink26 = await conta26.req("POST", `/api/encomendas/${c26a.id}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    confere(novoLink26.status === 409, "não abre link novo com o aviso em conferência", novoLink26.json);
+    await sql("update pagamentos set expira_em = now() - interval '25 hours' where encomenda_id = $1", [c26a.id]);
+    await sql("update encomendas set entrada_ate = now() - interval '25 hours' where id = $1", [c26a.id]);
+    const solta26 = await dtoEnc(conta26, c26a.id);
+    confere(
+      solta26?.statusEfetivo === "EXPIRADA" && (await linhaEnc(c26a.id)).status === "EXPIRADA" && solta26.pagamentoEmConferencia.entrada === false,
+      "mais de 24 h depois do vencimento do link: não segura mais, a encomenda expira",
+      solta26,
+    );
+    // Avisos NOVOS (forjados) não renovam a contagem: ela parte do vencimento do link.
+    const forjado26 = await avisar(c26a.link.webhook_url, { transaction_nsu: `forjado-${marca}`, invoice_slug: c26a.pg.slug });
+    const aindaSolta26 = await dtoEnc(conta26, c26a.id);
+    confere(aindaSolta26?.statusEfetivo === "EXPIRADA" && aindaSolta26.pagamentoEmConferencia.entrada === false, "aviso forjado depois das 24 h não segura de novo", [forjado26.status, aindaSolta26?.statusEfetivo]);
+    modo({});
+    await liberarVez(c26a.id);
+    const tarde26 = await avisar(c26a.link.webhook_url, c26a.pg.corpoAviso);
+    const dev26 = await devolucoesEnc(c26a.id);
+    confere(
+      tarde26.status === 200 && dev26.length === 1 && dev26[0].motivo === "PAGAMENTO_TARDIO" && dev26[0].valor === "45.00" && dev26[0].status === "PENDENTE",
+      "o pagamento que aparece depois vira devolução PAGAMENTO_TARDIO pendente",
+      [tarde26.status, dev26],
+    );
+    const eTarde26 = await dtoEnc(conta26, c26a.id);
+    confere(
+      eTarde26?.statusEfetivo === "EXPIRADA" && eTarde26.devolucao.status === "PENDENTE" && eTarde26.devolucao.pendente === 45,
+      "contrato para a tela: EXPIRADA com devolução PENDENTE de 45 (a cliente lê 'recebemos seu pagamento depois do prazo')",
+      eTarde26?.devolucao,
+    );
+    // b) A dona cancela com a conferência aberta (aviso de conferir no app); registrar a entrada espera.
+    const c26c = await emConferencia("c26");
+    const fichaC26 = await fichaEnc(c26c.id);
+    const acCancelar = fichaC26?.acoes.find((a) => a.acao === "cancelar");
+    const acRegistrar = fichaC26?.acoes.find((a) => a.acao === "registrar-entrada");
+    confere(
+      acRegistrar?.permitida === false && acCancelar?.permitida === true && /Confira no app InfinitePay antes de cancelar/.test(acCancelar.aviso ?? "") &&
+        fichaC26.pagamentos[0]?.emConferencia === true && fichaC26.pagamentos[0].conferenciaAte !== null,
+      "ficha: registrar-entrada desabilitado, cancelar permitido com o aviso, e o pagamento mostra até quando segura",
+      fichaC26?.acoes,
+    );
+    const reg409 = await acaoEnc(c26c.id, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "PIX" });
+    confere(reg409.status === 409 && reg409.json?.detalhes?.motivo === "pagamento-em-conferencia" && reg409.json.detalhes.conferenciaAte, "registrar-entrada com a conferência aberta → 409 com conferenciaAte", reg409.json);
+    const cancela26 = await acaoEnc(c26c.id, { acao: "cancelar", statusEsperado: "AGUARDANDO_ENTRADA", motivo: "Teste e2e: conferência aberta", devolverCentavos: 0 });
+    confere(
+      cancela26.status === 200 && cancela26.json?.encomenda?.statusEfetivo === "CANCELADA" && /Confira no app InfinitePay antes de cancelar/.test(cancela26.json.aviso ?? ""),
+      "cancelar com a conferência aberta → 200, com o aviso de conferir no app",
+      cancela26.json,
+    );
+    modo({});
+    await liberarVez(c26c.id);
+    const tardeC26 = await avisar(c26c.link.webhook_url, c26c.pg.corpoAviso);
+    const devC26 = await devolucoesEnc(c26c.id);
+    confere(tardeC26.status === 200 && devC26.length === 1 && devC26[0].motivo === "PAGAMENTO_TARDIO" && devC26[0].status === "PENDENTE", "o dinheiro que aparece depois do cancelamento vira devolução pendente", devC26);
+    // c) Registrar a entrada fora do site (depois que a conferência deixa de segurar).
+    const c26d = await emConferencia("d26");
+    await sql("update pagamentos set expira_em = now() - interval '25 hours' where encomenda_id = $1", [c26d.id]);
+    const finAntes26 = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
+    const reg26 = await acaoEnc(c26d.id, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "DINHEIRO", observacao: "Conferi no app (e2e)." });
+    const linhaD26 = await linhaEnc(c26d.id);
+    confere(
+      reg26.status === 200 && linhaD26.status === "CONFIRMADA" && linhaD26.entrada_paga_em !== null && linhaD26.entrada_forma === "DINHEIRO" &&
+        linhaD26.entrada_fora_do_site === true && linhaD26.entrada_observacao === "Conferi no app (e2e)." && linhaD26.entrada_registrada_por_id !== null,
+      "registrar-entrada: CONFIRMADA, com forma, observação e quem registrou",
+      linhaD26,
+    );
+    confere(
+      reg26.json?.encomenda?.entradaForma === "DINHEIRO" && reg26.json.encomenda.entradaForaDoSite === true && reg26.json.encomenda.linhaDoTempo.some((l) => /fora do site/.test(l.texto)),
+      "ficha: entrada fora do site na ficha (forma, quem registrou) e na linha do tempo",
+      reg26.json?.encomenda,
+    );
+    // Com o link da entrada ainda aberto, registrar por fora o encerra no nosso banco e avisa a dona.
+    const enc26f = await novaEncomenda("f26", "AGUARDANDO_ENTRADA", { usuario: uid26, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+    await abrirLinkEnc(conta26, enc26f, "ENTRADA");
+    const reg26f = await acaoEnc(enc26f, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "PIX" });
+    const cobr26f = await cobrancasEnc(enc26f);
+    confere(
+      reg26f.status === 200 && /ainda aceita pagamento/.test(reg26f.json?.aviso ?? "") && cobr26f.every((c) => c.status === "CANCELADO"),
+      "registrar a entrada com o link aberto: o link é encerrado no banco e a dona é avisada",
+      [reg26f.status, reg26f.json?.aviso, cobr26f.map((c) => c.status)],
+    );
+    const finDepois26 = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
+    const deltaFin26 = (k) => Math.round((finDepois26.entradas.lembrancinhas[k] - finAntes26.entradas.lembrancinhas[k]) * 100) / 100;
+    confere(deltaFin26("sinaisForaDoSite") === 90 && deltaFin26("liquido") === 90, "Financeiro: as duas entradas recebidas por fora entram no mês (sinaisForaDoSite +45 +45)", finDepois26.entradas.lembrancinhas);
+    const segundaVez26 = await acaoEnc(c26d.id, { acao: "registrar-entrada", statusEsperado: "CONFIRMADA", formaPagamento: "PIX" });
+    confere(segundaVez26.status === 409, "registrar a entrada de novo → 409", segundaVez26.json);
+    modo({});
+    await liberarVez(c26d.id);
+    const dupD26 = await avisar(c26d.link.webhook_url, c26d.pg.corpoAviso);
+    const devD26 = await devolucoesEnc(c26d.id);
+    confere(dupD26.status === 200 && devD26.length === 1 && devD26[0].motivo === "PAGAMENTO_DUPLICADO" && devD26[0].status === "PENDENTE", "se o pagamento do site aparecer depois, é devolução por duplicidade (a dona decide)", devD26);
+    // d) O retorno do navegador não renova a janela para sempre.
+    const enc26e = await novaEncomenda("e26", "AGUARDANDO_ENTRADA", { usuario: uid26, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+    const link26e = await abrirLinkEnc(conta26, enc26e, "ENTRADA");
+    const pg26e = await pagar({ codigo: link26e.codigo, metodo: "pix", aviso: false });
+    modo({ conferencia404: true });
+    await conta26.req("GET", `/pagamento/retorno${new URL(pg26e.retorno).search}`);
+    const [ret1] = await cobrancasEnc(enc26e);
+    confere(ret1.retorno_em !== null, "retorno dentro da validade do link grava retorno_em", ret1.retorno_em);
+    await sql("update pagamentos set expira_em = now() - interval '40 minutes', consultado_em = null where encomenda_id = $1", [enc26e]);
+    await conta26.req("GET", `/pagamento/retorno${new URL(pg26e.retorno).search}`);
+    const [ret2] = await cobrancasEnc(enc26e);
+    confere(new Date(ret2.retorno_em).getTime() === new Date(ret1.retorno_em).getTime(), "retorno depois de vencimento + 30 min não renova retorno_em", [ret1.retorno_em, ret2.retorno_em]);
+    modo({});
+
+    console.log("27. Aviso forjado: o candidato verdadeiro nunca é sobrescrito nem impedido");
+    const conta27 = await novaConta("f");
+    const uid27 = idDaConta();
+    // a) O verdadeiro chega primeiro (a InfinitePay não consegue conferir), o forjado depois: o verdadeiro fica e confirma
+    //    na reconferência da tela, mesmo sem o aviso se repetir.
+    const enc27a = await novaEncomenda("a27", "AGUARDANDO_ENTRADA", { usuario: uid27 });
+    const link27a = await abrirLinkEnc(conta27, enc27a, "ENTRADA");
+    modo({ falharConferencia: 500 });
+    const pg27a = await pagar({ codigo: link27a.codigo, metodo: "pix" });
+    const forjado27a = await avisar(link27a.webhook_url, { transaction_nsu: `forjado-${marca}-1`, invoice_slug: pg27a.slug });
+    const [c27a] = await cobrancasEnc(enc27a);
+    confere(
+      pg27a.aviso?.status === 400 && forjado27a.status === 400 && c27a.aviso_transacao_nsu === pg27a.transaction_nsu,
+      "aviso forjado depois do verdadeiro: o candidato verdadeiro continua gravado",
+      { gravado: c27a.aviso_transacao_nsu, verdadeiro: pg27a.transaction_nsu },
+    );
+    modo({});
+    await liberarVez(enc27a);
+    const sit27a = await conta27.req("GET", `/api/encomendas/${enc27a}/pagamento?parcela=ENTRADA`);
+    confere(sit27a.json?.etapa === "PAGO" && (await linhaEnc(enc27a)).status === "CONFIRMADA", "a reconferência da tela confirma o verdadeiro", sit27a.json);
+    // b) O forjado chega primeiro e fica gravado: o verdadeiro, ao chegar, é conferido na hora e confirma (não depende do espaço).
+    const enc27b = await novaEncomenda("b27", "AGUARDANDO_ENTRADA", { usuario: uid27 });
+    const link27b = await abrirLinkEnc(conta27, enc27b, "ENTRADA");
+    modo({ falharConferencia: 500 });
+    await avisar(link27b.webhook_url, { transaction_nsu: `forjado-${marca}-2`, invoice_slug: `slug-forjado-${marca}` });
+    const [c27b0] = await cobrancasEnc(enc27b);
+    confere(c27b0.aviso_transacao_nsu === `forjado-${marca}-2`, "candidato forjado gravado (a InfinitePay não respondeu)", c27b0.aviso_transacao_nsu);
+    modo({});
+    await liberarVez(enc27b);
+    const pg27b = await pagar({ codigo: link27b.codigo, metodo: "pix" });
+    confere(pg27b.aviso?.status === 200 && (await linhaEnc(enc27b)).status === "CONFIRMADA", "o aviso verdadeiro confirma mesmo com um candidato forjado gravado", pg27b.aviso);
+    const [c27b] = await cobrancasEnc(enc27b);
+    confere(c27b.status === "APROVADO" && c27b.transacao_nsu === pg27b.transaction_nsu && c27b.aviso_transacao_nsu === null, "cobrança aprovada com a transação verdadeira; o candidato forjado sai", c27b);
+    // c) Forjado sozinho com a InfinitePay no ar: recusado e descartado, nada segura.
+    const enc27c = await novaEncomenda("c27", "AGUARDANDO_ENTRADA", { usuario: uid27 });
+    const link27c = await abrirLinkEnc(conta27, enc27c, "ENTRADA");
+    const forjado27c = await avisar(link27c.webhook_url, { transaction_nsu: `forjado-${marca}-3`, invoice_slug: `slug-forjado-${marca}` });
+    const [c27c] = await cobrancasEnc(enc27c);
+    const e27c = await dtoEnc(conta27, enc27c);
+    confere(
+      forjado27c.status === 200 && c27c.aviso_transacao_nsu === null && e27c.pagamentoEmConferencia.entrada === false && e27c.acoes.pagarEntrada === true,
+      "aviso forjado com a InfinitePay no ar: recusado e descartado, a cliente continua podendo pagar",
+      { status: forjado27c.status, c27c },
+    );
+
+    console.log("28. Folga de 30 min depois do prazo da entrada: paga no último minuto confirma; depois da folga é pagamento tardio");
+    const conta28 = await novaConta("g");
+    const uid28 = idDaConta();
+    // a) Dentro da folga.
+    const enc28a = await novaEncomenda("a28", "AGUARDANDO_ENTRADA", { usuario: uid28, entradaAte: new Date(Date.now() + 10 * 60_000) });
+    const link28a = await abrirLinkEnc(conta28, enc28a, "ENTRADA");
+    // epoch do TIMESTAMP sem fuso (lido como UTC): o pg leria a coluna na hora local e erraria por 3 h.
+    const [{ ms: entradaAteMs28a }] = await sql("select (extract(epoch from entrada_ate) * 1000)::float8 ms from encomendas where id = $1", [enc28a]);
+    confere(Math.abs(Date.parse(link28a.valid_until) - Number(entradaAteMs28a)) < 2_000, "o valid_until do link continua em entradaAte", [link28a.valid_until, entradaAteMs28a]);
+    const pg28a = await pagar({ codigo: link28a.codigo, metodo: "pix", aviso: false });
+    await sql("update encomendas set entrada_ate = now() - interval '10 minutes' where id = $1", [enc28a]);
+    await sql("update pagamentos set expira_em = now() - interval '10 minutes' where encomenda_id = $1", [enc28a]);
+    const dto28a = await dtoEnc(conta28, enc28a);
+    confere(
+      dto28a?.statusEfetivo === "AGUARDANDO_ENTRADA" && dto28a.entradaEmFolga === true && dto28a.acoes.pagarEntrada === false && (await linhaEnc(enc28a)).status === "AGUARDANDO_ENTRADA",
+      "10 min depois do prazo: ainda aguardando (folga), sem 'Pagar'",
+      dto28a,
+    );
+    const novo28a = await conta28.req("POST", `/api/encomendas/${enc28a}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    confere(novo28a.status === 409, "na folga não se abre link novo (409)", novo28a.json);
+    const aviso28a = await avisar(link28a.webhook_url, pg28a.corpoAviso);
+    confere(aviso28a.status === 200 && (await linhaEnc(enc28a)).status === "CONFIRMADA" && (await devolucoesEnc(enc28a)).length === 0, "pagamento dentro da folga confirma normalmente, sem devolução", aviso28a.status);
+    // b) Depois da folga: expirada; o pagamento que chega vira devolução (tardio).
+    const enc28b = await novaEncomenda("b28", "AGUARDANDO_ENTRADA", { usuario: uid28, entradaAte: new Date(Date.now() + 10 * 60_000) });
+    const link28b = await abrirLinkEnc(conta28, enc28b, "ENTRADA");
+    const pg28b = await pagar({ codigo: link28b.codigo, metodo: "pix", aviso: false });
+    await sql("update encomendas set entrada_ate = now() - interval '31 minutes' where id = $1", [enc28b]);
+    await sql("update pagamentos set expira_em = now() - interval '31 minutes' where encomenda_id = $1", [enc28b]);
+    const dto28b = await dtoEnc(conta28, enc28b);
+    confere(dto28b?.statusEfetivo === "EXPIRADA" && dto28b.entradaEmFolga === false && (await linhaEnc(enc28b)).status === "EXPIRADA", "31 min depois do prazo: expirada", dto28b?.statusEfetivo);
+    const aviso28b = await avisar(link28b.webhook_url, pg28b.corpoAviso);
+    const dev28b = await devolucoesEnc(enc28b);
+    confere(aviso28b.status === 200 && dev28b.length === 1 && dev28b[0].motivo === "PAGAMENTO_TARDIO" && (await linhaEnc(enc28b)).status === "EXPIRADA", "depois da folga o pagamento é tardio: devolução pendente e a encomenda segue expirada", dev28b);
+    const dto28b2 = await dtoEnc(conta28, enc28b);
+    confere(dto28b2?.devolucao.status === "PENDENTE" && dto28b2.devolucao.pendente === 45, "a cliente vê a devolução na encomenda expirada", dto28b2?.devolucao);
+    // c) As horas reais para pagar a entrada (a tela não escreve "24 horas" fixo).
+    const enc28c = await novaEncomenda("c28", "SOLICITADA", { usuario: uid28 });
+    const antesAprovar = await dtoEnc(conta28, enc28c);
+    await acaoEnc(enc28c, { acao: "aprovar", statusEsperado: "SOLICITADA" });
+    const depoisAprovar = await dtoEnc(conta28, enc28c);
+    confere(antesAprovar?.prazos.horasParaPagarEntrada === 24 && depoisAprovar?.prazos.horasParaPagarEntrada === 24, "horasParaPagarEntrada: 24 com o corte longe", [antesAprovar?.prazos.horasParaPagarEntrada, depoisAprovar?.prazos.horasParaPagarEntrada]);
+    const enc28d = await novaEncomenda("d28", "SOLICITADA", { usuario: uid28, corteEm: new Date(Date.now() + 5 * 3_600_000) });
+    await acaoEnc(enc28d, { acao: "aprovar", statusEsperado: "SOLICITADA" });
+    const dto28d = await dtoEnc(conta28, enc28d);
+    confere(Math.abs((dto28d?.prazos.horasParaPagarEntrada ?? 0) - 5) < 0.2, "horasParaPagarEntrada: o corte em 5 h limita o prazo a ~5 h", dto28d?.prazos.horasParaPagarEntrada);
+
+    console.log("29. Devolução feita só das devoluções que a tela mostrou (por id)");
+    const enc29 = await novaEncomenda("a29", "AGUARDANDO_ENTRADA");
+    await sql("update encomendas set status = 'CANCELADA', cancelada_por = 'LOJA', encerrada_em = now(), motivo_cancelamento = 'e2e' where id = $1", [enc29]);
+    const novaDev = (sufixo, valor) =>
+      sql("insert into encomenda_devolucoes (id, encomenda_id, motivo, valor, status) values ($1, $2, 'CANCELAMENTO', $3, 'PENDENTE')", [`${enc29}${sufixo}`, enc29, valor]);
+    await novaDev("d1", 10);
+    await novaDev("d2", 20);
+    const ficha29 = await fichaEnc(enc29);
+    confere(ficha29?.devolucoes.length === 2 && ficha29.devolucoes.every((d) => d.id && d.status === "PENDENTE"), "a ficha lista as devoluções pendentes com id", ficha29?.devolucoes);
+    const so1 = await acaoEnc(enc29, { acao: "devolucao-feita", statusEsperado: "CANCELADA", devolucaoIds: [`${enc29}d1`] });
+    const estado29 = async () => Object.fromEntries((await devolucoesEnc(enc29)).map((d) => [d.id.slice(-2), d.status]));
+    confere(so1.status === 200 && JSON.stringify(await estado29()) === JSON.stringify({ d1: "FEITA", d2: "PENDENTE" }), "fecha só a devolução escolhida", await estado29());
+    await novaDev("d3", 5);
+    const repete29 = await acaoEnc(enc29, { acao: "devolucao-feita", statusEsperado: "CANCELADA", devolucaoIds: [`${enc29}d1`, `${enc29}d2`] });
+    confere(
+      repete29.status === 409 && repete29.json?.detalhes?.motivo === "devolucao-mudou" && JSON.stringify(await estado29()) === JSON.stringify({ d1: "FEITA", d2: "PENDENTE", d3: "PENDENTE" }),
+      "um id que já não está pendente → 409 devolucao-mudou e NADA muda (nem as outras)",
+      await estado29(),
+    );
+    const alheio = await acaoEnc(enc29, { acao: "devolucao-feita", statusEsperado: "CANCELADA", devolucaoIds: [`${encId}-inexistente`] });
+    confere(alheio.status === 409 && alheio.json?.detalhes?.motivo === "devolucao-mudou", "id que não é desta encomenda → 409", alheio.json);
+    const so2 = await acaoEnc(enc29, { acao: "devolucao-feita", statusEsperado: "CANCELADA", devolucaoIds: [`${enc29}d2`], observacao: "Devolvi só esta (e2e)." });
+    confere(
+      so2.status === 200 && JSON.stringify(await estado29()) === JSON.stringify({ d1: "FEITA", d2: "FEITA", d3: "PENDENTE" }) && so2.json?.encomenda?.devolucao?.pendente === 5,
+      "a devolução nova (que apareceu depois da tela) continua pendente",
+      await estado29(),
+    );
+
+    console.log("30. Idempotência completa, limite de 3 abertas, trava de ambiente e o percentual aceito");
+    const conta30 = await novaConta("h");
+    const uid30 = idDaConta();
+    const chave30 = `e2e-${marca}-idem`;
+    const cfg30 = (await admin.req("GET", "/api/admin/lembrancinhas")).json.config;
+    const corpoBase30 = (festa, entrega) => ({
+      itens: [{ productId: produto, quantidade: 15 }],
+      dataFesta: festa,
+      dataEntrega: entrega,
+      modoEntrega: "RETIRADA",
+      telefone: "(86) 99999-1234",
+      aceitePolitica: true,
+      politicaVersao: "2026-11-v1",
+      percentualRetido: cfg30.percentualRetido,
+      totalEsperadoCentavos: 15 * cfg30.precoPotinhoCentavos,
+    });
+    const [{ festa: festa30, entrega: entrega30 }] = await sql(
+      `select to_char((now() at time zone 'America/Fortaleza')::date + 12, 'YYYY-MM-DD') festa, to_char((now() at time zone 'America/Fortaleza')::date + 10, 'YYYY-MM-DD') entrega`,
+    );
+    const postar = (corpo, chave = chave30, cli = conta30) => cli.req("POST", "/api/encomendas", { corpo, cabecalhos: { "Idempotency-Key": chave } });
+    // Fechado (padrão): 503, em qualquer modo do teste (sem os dados legais ou com o recurso desativado).
+    if (cfg30.ativo === false) {
+      const fechado = await postar(corpoBase30(festa30, entrega30), `${chave30}-fechado`);
+      confere(fechado.status === 503, "recurso fechado (ou sem CNPJ/CPF e e-mail da loja): 503 e nada gravado", fechado.json);
+      confere((await sql("select count(*)::int n from encomendas where user_id = $1", [uid30]))[0].n === 0, "503 não grava nada");
+    }
+    if (process.env.E2E_DADOS_LEGAIS !== "1") {
+      console.log("  (pulado o resto do caso 30: rode o site e este script com E2E_DADOS_LEGAIS=1)");
+    } else {
+      const [{ disponivel_em_mini: miniAntes30 }] = await sql("select disponivel_em_mini from products where id = $1", [produto]);
+      const taxa30 = (await admin.req("GET", "/api/admin/entrega")).json?.taxaEntregaCentavos ?? 1500;
+      try {
+        const abre30 = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: true } });
+        confere(abre30.status === 200, "painel abre as lembrancinhas", abre30.json);
+        await sql("update products set disponivel_em_mini = true where id = $1", [produto]);
+        // Observação: outro conteúdo com a mesma chave é outra solicitação.
+        const primeira = await postar({ ...corpoBase30(festa30, entrega30), observacao: "Tag azul" });
+        const idPrimeira = primeira.json?.encomenda?.id;
+        if (idPrimeira) encomendas.push(idPrimeira);
+        confere(primeira.status === 201 && primeira.json.encomenda.observacao === "Tag azul", "primeira solicitação → 201", primeira.json);
+        const mesma = await postar({ ...corpoBase30(festa30, entrega30), observacao: "Tag azul" });
+        confere(mesma.status === 200 && mesma.json?.encomenda?.id === idPrimeira, "mesma chave e mesmo conteúdo → 200, a mesma encomenda");
+        const outraObs = await postar({ ...corpoBase30(festa30, entrega30), observacao: "Tag verde" });
+        confere(outraObs.status === 422, "mesma chave com outra observação → 422 (não devolve a antiga em silêncio)", outraObs.json);
+        const semObs = await postar(corpoBase30(festa30, entrega30));
+        confere(semObs.status === 422, "mesma chave sem a observação → 422", semObs.json);
+        // Endereço: entrega com endereço salvo; outro endereço com a mesma chave → 422.
+        await sql("insert into addresses (id, user_id, cep, rua, numero, bairro, cidade, estado) values ($1, $3, '64035420', 'Rua E2E A', '10', 'Centro', 'Teresina', 'PI'), ($2, $3, '64035420', 'Rua E2E B', '20', 'Centro', 'Teresina', 'PI')", [`ad${marca}a`, `ad${marca}b`, uid30]);
+        const entrega = (addressId) => ({ ...corpoBase30(festa30, entrega30), modoEntrega: "ENTREGA", addressId, totalEsperadoCentavos: 15 * cfg30.precoPotinhoCentavos + taxa30 });
+        const chaveE = `${chave30}-entrega`;
+        const ent1 = await postar(entrega(`ad${marca}a`), chaveE);
+        if (ent1.json?.encomenda?.id) encomendas.push(ent1.json.encomenda.id);
+        confere(ent1.status === 201 && ent1.json.encomenda.endereco?.rua === "Rua E2E A", "entrega com endereço salvo → 201", ent1.json);
+        const ent2 = await postar(entrega(`ad${marca}b`), chaveE);
+        confere(ent2.status === 422, "mesma chave com outro endereço → 422", ent2.json);
+        const ent3 = await postar(entrega(`ad${marca}a`), chaveE);
+        confere(ent3.status === 200 && ent3.json?.encomenda?.id === ent1.json?.encomenda?.id, "mesma chave e mesmo endereço → 200");
+        // Conta nova (o limite de 10 solicitações por hora da conta "h" já foi quase todo usado acima), com 2 encomendas
+        // abertas: o limite é de 3, e a corrida da mesma chave devolve a primeira, não 429.
+        const contaL = await novaConta("j");
+        const uidL = idDaConta();
+        await novaEncomenda("l1", "SOLICITADA", { usuario: uidL });
+        await novaEncomenda("l2", "AGUARDANDO_ENTRADA", { usuario: uidL });
+        const chaveC = `${chave30}-corrida`;
+        const [x, y] = await Promise.all([postar(corpoBase30(festa30, entrega30), chaveC, contaL), postar(corpoBase30(festa30, entrega30), chaveC, contaL)]);
+        for (const r of [x, y]) if (r.json?.encomenda?.id) encomendas.push(r.json.encomenda.id);
+        const statuses = [x.status, y.status].sort();
+        confere(
+          statuses[0] === 200 && statuses[1] === 201 && x.json?.encomenda?.id === y.json?.encomenda?.id,
+          "dois envios simultâneos da mesma solicitação com 2 já abertas: 201 e 200 com a mesma encomenda (não 429)",
+          [x.status, y.status, x.json, y.json],
+        );
+        confere((await sql("select count(*)::int n from encomendas where user_id = $1 and idempotency_key = $2", [uidL, chaveC]))[0].n === 1, "uma linha só para a chave");
+        // 3 abertas: outra chave → 429; a chave já usada continua devolvendo a encomenda (a chave vem antes do limite).
+        const quarta = await postar(corpoBase30(festa30, entrega30), `${chave30}-quarta`, contaL);
+        confere(quarta.status === 429 && /3 encomendas/.test(quarta.json?.erro ?? ""), "4ª encomenda aberta → 429", quarta.json);
+        const repeteComLimite = await postar(corpoBase30(festa30, entrega30), chaveC, contaL);
+        confere(repeteComLimite.status === 200 && repeteComLimite.json?.encomenda?.id === x.json?.encomenda?.id, "com 3 abertas, repetir a chave usada → 200 (a chave vem antes do limite)", repeteComLimite.json);
+      } finally {
+        await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: cfg30.ativo } });
+        await sql("update products set disponivel_em_mini = $2 where id = $1", [produto, miniAntes30]);
+      }
+    }
+    // Percentual aceito x efetivo: a aprovação baixa o efetivo, o aceito (e o texto da política) ficam.
+    const encP = await novaEncomenda("p30", "SOLICITADA", { usuario: uid30, percentualAceito: 100 });
+    const corpoCfg = (p) => ({ ativo: cfg30.ativo, precoPotinhoCentavos: cfg30.precoPotinhoCentavos, pesoPotinhoGramas: cfg30.pesoPotinhoGramas, pesoEmbalagemGramas: cfg30.pesoEmbalagemGramas, percentualRetido: p });
+    try {
+      const baixa = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: corpoCfg(50) });
+      confere(baixa.status === 200 && baixa.json?.config?.percentualRetido === 50, "painel baixa o percentual para 50%", baixa.json?.config?.percentualRetido);
+      await acaoEnc(encP, { acao: "aprovar", statusEsperado: "SOLICITADA" });
+      const linhaP = await linhaEnc(encP);
+      confere(linhaP.percentual_aceito === 100 && linhaP.percentual_retido === 50, "aprovar baixa o percentual efetivo (50) e guarda o aceito (100)", [linhaP.percentual_aceito, linhaP.percentual_retido]);
+      const dtoP = await dtoEnc(conta30, encP);
+      confere(
+        dtoP?.politica.percentualAceito === 100 && dtoP.politica.percentualRetido === 50 && /fica com a Geleiô para cobrir/.test(dtoP.politica.textos[2] ?? "") && !/50%/.test(dtoP.politica.textos[2] ?? ""),
+        "o texto da política mostra o que a cliente aceitou (100%), não o efetivo",
+        dtoP?.politica,
+      );
+      const fichaP = await fichaEnc(encP);
+      confere(fichaP?.politica.percentualAceito === 100 && fichaP.politica.percentualRetido === 50, "a ficha mostra o aceito e o efetivo", fichaP?.politica);
+      // O efetivo não passa do aceito (CHECK no banco) e a prévia da desistência depois do corte usa o efetivo.
+      try {
+        await sql("update encomendas set percentual_retido = 100, percentual_aceito = 80 where id = $1", [encP]);
+        confere(false, "CHECK recusa percentual efetivo acima do aceito");
+      } catch (e) {
+        confere(e.code === "23514", "CHECK recusa percentual efetivo acima do aceito", e.message);
+      }
+      const encPC = await novaEncomenda("pc30", "CONFIRMADA", { usuario: uid30, percentualAceito: 100, percentualRetido: 50, corteEm: new Date(Date.now() - 3_600_000) });
+      const dtoPC = await dtoEnc(conta30, encPC);
+      confere(dtoPC?.acoes.desistir?.devolucaoCentavos === 2250 && dtoPC.acoes.desistir.retidoCentavos === 2250, "depois do corte, a desistência retém o percentual efetivo (50% de 45 = 22,50)", dtoPC?.acoes.desistir);
+    } finally {
+      await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: corpoCfg(cfg30.percentualRetido) });
+    }
+
+    console.log("31. Segurança do PATCH da ficha: cliente, sem sessão e requisição de outro site");
+    const enc31 = await novaEncomenda("s31", "SOLICITADA");
+    const corpo31 = { acao: "aprovar", statusEsperado: "SOLICITADA" };
+    const comoCliente = await a.req("PATCH", `/api/admin/encomendas/${enc31}`, { corpo: corpo31 });
+    confere(comoCliente.status === 403, "PATCH da ficha como cliente → 403", comoCliente.status);
+    const patchSemSessao = await cliente().req("PATCH", `/api/admin/encomendas/${enc31}`, { corpo: corpo31 });
+    confere(patchSemSessao.status === 401, "PATCH da ficha sem sessão → 401", patchSemSessao.status);
+    const outroSite = await admin.req("PATCH", `/api/admin/encomendas/${enc31}`, { corpo: corpo31, cabecalhos: { Origin: "https://evil.example" } });
+    confere(outroSite.status === 403, "PATCH da ficha com Origin de outro site → 403", outroSite.status);
+    const crossSite = await admin.req("PATCH", `/api/admin/encomendas/${enc31}`, { corpo: corpo31, cabecalhos: { "Sec-Fetch-Site": "cross-site" } });
+    confere(crossSite.status === 403, "PATCH da ficha com Sec-Fetch-Site: cross-site → 403", crossSite.status);
+    confere((await linhaEnc(enc31)).status === "SOLICITADA", "nenhuma dessas tentativas mudou a encomenda");
+    const desistirCsrf = await a.req("POST", `/api/encomendas/${enc31}/desistir`, { corpo: { devolucaoEsperadaCentavos: 0 }, cabecalhos: { Origin: "https://evil.example" } });
+    confere(desistirCsrf.status === 403, "desistir com Origin de outro site → 403", desistirCsrf.status);
+    const semOrigem = await acaoEnc(enc31, corpo31);
+    confere(semOrigem.status === 200, "sem Origin (cliente HTTP, não navegador) e como admin: vale", semOrigem.status);
+
+    console.log("32. Financeiro na virada de mês e devolução no mês seguinte (set/out de 2025, sem tocar nos meses atuais)");
+    const fin = async (mes) => (await admin.req("GET", `/api/admin/financial-stats?mes=${mes}`)).json?.entradas?.lembrancinhas;
+    const finSet0 = await fin("2025-09");
+    const finOut0 = await fin("2025-10");
+    const enc32a = await novaEncomenda("a32", "CONFIRMADA");
+    const enc32b = await novaEncomenda("b32", "CONFIRMADA");
+    const enc32c = await novaEncomenda("c32", "CONFIRMADA");
+    const pagamentoAprovado = (id, enc, parcela, instante) =>
+      sql(
+        `insert into pagamentos (id, encomenda_id, parcela, gateway, referencia_externa, status, valor, expira_em, aprovado_em)
+         values ($1, $2, $3, 'infinitepay', $4, 'APROVADO', 45, $5, $5)`,
+        [id, enc, parcela, `enc-${enc}-${parcela}-1`, utc(instante)],
+      );
+    await pagamentoAprovado(`${enc32a}p`, enc32a, "ENTRADA", "2025-09-30T23:59:30-03:00");
+    await pagamentoAprovado(`${enc32b}p`, enc32b, "ENTRADA", "2025-10-01T00:00:05-03:00");
+    await sql("update encomendas set entrada_fora_do_site = true, entrada_forma = 'DINHEIRO', entrada_paga_em = $2 where id = $1", [enc32c, utc("2025-09-30T23:59:59-03:00")]);
+    await sql(
+      "insert into encomenda_devolucoes (id, encomenda_id, motivo, valor, status, criada_em, feita_em) values ($1, $2, 'CANCELAMENTO', 45, 'FEITA', $3, $3)",
+      [`${enc32a}d`, enc32a, utc("2025-10-01T00:00:10-03:00")],
+    );
+    const finSet1 = await fin("2025-09");
+    const finOut1 = await fin("2025-10");
+    const dif = (depois, antes, k) => Math.round((depois[k] - antes[k]) * 100) / 100;
+    confere(
+      dif(finSet1, finSet0, "sinais") === 45 && dif(finSet1, finSet0, "sinaisForaDoSite") === 45 && dif(finSet1, finSet0, "devolucoes") === 0 && dif(finSet1, finSet0, "liquido") === 90,
+      "setembro: o sinal pago às 23:59:30 e a entrada por fora às 23:59:59 entram em setembro (a devolução feita à 00:00:10 não)",
+      [finSet0, finSet1],
+    );
+    confere(
+      dif(finOut1, finOut0, "sinais") === 45 && dif(finOut1, finOut0, "devolucoes") === 45 && dif(finOut1, finOut0, "liquido") === 0,
+      "outubro: o sinal pago às 00:00:05 e a devolução feita às 00:00:10 entram em outubro (líquido 0)",
+      [finOut0, finOut1],
+    );
+    const despSet = (await admin.req("GET", "/api/admin/expenses?mes=2025-09")).json;
+    confere(typeof despSet?.lembrancinhas === "number", "Despesas também traz o líquido das lembrancinhas do mês", despSet?.lembrancinhas);
+
+    console.log("33. Desistência: antes e depois do corte, prévia que mudou entre a tela e o clique, link aberto");
+    const conta33 = await novaConta("i");
+    const uid33 = idDaConta();
+    const desistir = (cli, id, esperado, extra = {}) => cli.req("POST", `/api/encomendas/${id}/desistir`, { corpo: { devolucaoEsperadaCentavos: esperado }, ...extra });
+    // a) Antes do corte: devolve tudo (e a de outra conta não enxerga).
+    const e33a = await novaEncomenda("a33", "CONFIRMADA", { usuario: uid33, corteEm: new Date(Date.now() + 3 * 86_400_000) });
+    const d33a = await dtoEnc(conta33, e33a);
+    confere(d33a?.acoes.desistir?.devolucaoCentavos === 4500 && d33a.acoes.desistir.retidoCentavos === 0, "antes do corte: a prévia devolve os 45 pagos", d33a?.acoes.desistir);
+    confere((await desistir(b, e33a, 4500)).status === 404, "desistir de encomenda de outra conta → 404");
+    const ok33a = await desistir(conta33, e33a, 4500);
+    const [dev33a] = await devolucoesEnc(e33a);
+    confere(
+      ok33a.status === 200 && ok33a.json?.devolucao?.valor === 45 && ok33a.json.devolucao.retido === 0 && ok33a.json.encomenda.statusEfetivo === "CANCELADA" && dev33a?.motivo === "DESISTENCIA" && dev33a.valor === "45.00",
+      "desistir antes do corte → CANCELADA com devolução pendente de 45",
+      [ok33a.status, dev33a],
+    );
+    confere((await desistir(conta33, e33a, 4500)).status === 409, "desistir de novo → 409 (já encerrada)");
+    // b) Depois do corte: retém a entrada; esperar o valor antigo é 409 com a prévia nova.
+    const e33b = await novaEncomenda("b33", "CONFIRMADA", { usuario: uid33, corteEm: new Date(Date.now() - 3_600_000) });
+    const d33b = await dtoEnc(conta33, e33b);
+    confere(d33b?.acoes.desistir?.devolucaoCentavos === 0 && d33b.acoes.desistir.retidoCentavos === 4500, "depois do corte: a prévia retém a entrada (100%)", d33b?.acoes.desistir);
+    const errado33b = await desistir(conta33, e33b, 4500);
+    confere(errado33b.status === 409 && errado33b.json?.detalhes?.devolucaoCentavos === 0 && errado33b.json.detalhes.retidoCentavos === 4500 && (await linhaEnc(e33b)).status === "CONFIRMADA", "esperar a devolução de antes do corte → 409 com a prévia nova, nada muda", errado33b.json);
+    const ok33b = await desistir(conta33, e33b, 0);
+    confere(ok33b.status === 200 && ok33b.json?.devolucao?.retido === 45 && (await devolucoesEnc(e33b)).length === 0, "desistir depois do corte → CANCELADA, a entrada fica e não há devolução");
+    // c) O corte passa entre a tela e o clique.
+    const e33c = await novaEncomenda("c33", "CONFIRMADA", { usuario: uid33, corteEm: new Date(Date.now() + 3_600_000) });
+    const d33c = await dtoEnc(conta33, e33c);
+    await sql("update encomendas set corte_em = now() - interval '1 minute' where id = $1", [e33c]);
+    const mudou33c = await desistir(conta33, e33c, d33c.acoes.desistir.devolucaoCentavos);
+    confere(mudou33c.status === 409 && mudou33c.json?.detalhes?.devolucaoCentavos === 0, "o corte passou entre a tela e o clique: 409 com a prévia nova", mudou33c.json);
+    // d) Link aberto: a desistência o encerra no nosso banco, e o pagamento que chegar depois vira devolução.
+    const e33d = await novaEncomenda("d33", "AGUARDANDO_ENTRADA", { usuario: uid33, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+    const link33d = await abrirLinkEnc(conta33, e33d, "ENTRADA");
+    const pg33d = await pagar({ codigo: link33d.codigo, metodo: "pix", aviso: false });
+    const ok33d = await desistir(conta33, e33d, 0);
+    const [c33d] = await cobrancasEnc(e33d);
+    confere(ok33d.status === 200 && c33d.status === "CANCELADO", "desistir com link aberto: o link vira CANCELADO no banco", [ok33d.status, c33d.status]);
+    const tarde33d = await avisar(link33d.webhook_url, pg33d.corpoAviso);
+    const dev33d = await devolucoesEnc(e33d);
+    confere(tarde33d.status === 200 && dev33d.length === 1 && dev33d[0].motivo === "PAGAMENTO_TARDIO" && dev33d[0].status === "PENDENTE", "o pagamento do link que ficou aberto vira devolução pendente", dev33d);
+    // e) Restante já pago e corte passado: o restante volta, a entrada fica.
+    const e33e = await novaEncomenda("e33", "CONFIRMADA", { usuario: uid33, corteEm: new Date(Date.now() - 3_600_000), restantePagoEm: new Date() });
+    const d33e = await dtoEnc(conta33, e33e);
+    confere(d33e?.acoes.desistir?.devolucaoCentavos === 4500 && d33e.acoes.desistir.retidoCentavos === 4500, "depois do corte com o restante pago: volta o restante (45), a entrada (45) fica", d33e?.acoes.desistir);
 
     console.log("13. Meus pedidos e o teto de pendentes");
     const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);
