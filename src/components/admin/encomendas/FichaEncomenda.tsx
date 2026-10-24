@@ -9,7 +9,7 @@ import { diaComSemana } from "@/components/lembrancinhas/datas";
 import { SeloDaEncomenda } from "@/components/lembrancinhas/SeloDaEncomenda";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { DevolucaoDaEncomendaDTO, EncomendaAdminDetalheDTO, PagamentoDaEncomendaDTO } from "@/lib/encomendas-admin";
-import { HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, formatarPrazo, prazoDaEntrada, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
+import { HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, formatarPrazo, marcadasQueSeguemPendentes, prazoDaEntrada, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
 import { enderecoDeRetirada } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 import { FORMAS_PAGAMENTO, ROTULO_FORMA_PAGAMENTO, type FormaPagamento } from "@/lib/vendas";
@@ -698,7 +698,11 @@ function FormDevolucao({
 }) {
   const id = useId();
   const [obs, setObs] = useState("");
-  const [marcadas, setMarcadas] = useState<string[]>(() => pendentes.map((d) => d.id));
+  const [escolhidas, setEscolhidas] = useState<string[]>(() => pendentes.map((d) => d.id));
+  // A ficha pode recarregar com outras devoluções pendentes (409 "devolucao-mudou", outra aba): o que já não
+  // está pendente sai da marcação, senão o envio seguiria com ids velhos e o servidor recusaria de novo.
+  const marcadas = marcadasQueSeguemPendentes(escolhidas, pendentes);
+  const setMarcadas = (proximas: (atuais: string[]) => string[]) => setEscolhidas(proximas(marcadas));
   const total = pendentes.filter((d) => marcadas.includes(d.id)).reduce((soma, d) => soma + d.valor, 0);
   return (
     <form

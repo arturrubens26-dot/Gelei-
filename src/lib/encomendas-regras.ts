@@ -651,6 +651,17 @@ export function alertaDaEncomenda(e: { devolucaoPendente: boolean; pagamentoDive
   return null;
 }
 
+/**
+ * Das devoluções que a dona marcou no formulário, só as que ainda estão pendentes na ficha atual. Depois de um
+ * 409 `devolucao-mudou` a ficha é recarregada e uma devolução fechada em outra aba (ou que sumiu) não pode
+ * seguir no envio: o servidor recusaria tudo de novo (todas ou nenhuma). Uma devolução nova NÃO entra marcada
+ * (a dona precisa ter devolvido de fato para marcar).
+ */
+export function marcadasQueSeguemPendentes(marcadas: readonly string[], pendentes: readonly { id: string }[]): string[] {
+  const ids = new Set(pendentes.map((d) => d.id));
+  return [...new Set(marcadas)].filter((id) => ids.has(id));
+}
+
 /** O que as regras de divergência olham numa cobrança (colunas de `pagamentos`). */
 export type CobrancaParaDivergencia = { id: string; parcela: Parcela | null; status: StatusCobranca; statusGateway: string | null };
 

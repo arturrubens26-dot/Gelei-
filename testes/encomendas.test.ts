@@ -39,6 +39,7 @@ import {
   inicioDoDia,
   linhaDoTempo,
   linkWhatsApp,
+  marcadasQueSeguemPendentes,
   meioDia,
   mensagemWhatsApp,
   mesmaEncomenda,
@@ -618,6 +619,15 @@ describe("painel: alerta e faixa da devolução no cancelamento", () => {
       assert.deepEqual(divergenciasSemDevolucao([divergente, outra, ok], [{ pagamentoId: "p1" }]).map((p) => p.id), ["p2"]);
       assert.deepEqual(divergenciasSemDevolucao([divergente, outra], [{ pagamentoId: "p1" }, { pagamentoId: "p2" }]), []);
     });
+  });
+  it("devoluções marcadas no formulário: depois de a ficha recarregar, só seguem as que ainda estão pendentes", () => {
+    assert.deepEqual(marcadasQueSeguemPendentes(["d1", "d2"], [{ id: "d1" }, { id: "d2" }]), ["d1", "d2"]);
+    // d1 foi fechada em outra aba (409 devolucao-mudou): sai do envio.
+    assert.deepEqual(marcadasQueSeguemPendentes(["d1", "d2"], [{ id: "d2" }]), ["d2"]);
+    // Devolução nova não entra marcada sozinha.
+    assert.deepEqual(marcadasQueSeguemPendentes(["d1"], [{ id: "d1" }, { id: "d3" }]), ["d1"]);
+    assert.deepEqual(marcadasQueSeguemPendentes(["d1"], []), []);
+    assert.deepEqual(marcadasQueSeguemPendentes(["d1", "d1"], [{ id: "d1" }]), ["d1"]);
   });
   it("a loja devolve no mínimo tudo; a pedido da cliente, depois do corte, no mínimo o que a regra manda", () => {
     const e = encomenda({ status: "CONFIRMADA", entradaPagaEm: new Date("2026-11-11T13:00:00Z") });
