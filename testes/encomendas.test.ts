@@ -745,7 +745,7 @@ describe("política de desistência", () => {
   });
   it("0%: devolve tudo também depois do corte; sem frete, sem 'com o frete'", () => {
     const textos = textosDaPolitica(POLITICA_VERSAO, { ...dados, percentualRetido: 0, freteCentavos: 0 });
-    assert.match(textos[2], /também devolvemos 100%/);
+    assert.match(textos[2], /também devolvemos 100% do valor da encomenda/);
     assert.doesNotMatch(textos[4], /frete/);
   });
   it("versão desconhecida é recusada", () => {
