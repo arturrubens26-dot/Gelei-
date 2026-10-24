@@ -31,7 +31,8 @@ export const GET = comTratamento("api/encomendas GET", async () => {
  *     `["aceitePolitica"]`, `["endereco"]`…); 401; 403 origem; 404 `addressId` de outra pessoa;
  * 409 total mudou `detalhes: { precoPotinho, frete, total, entrada, restante, pesoTotalGramas }` (reais)
  *     ou política mudou `detalhes: { politicaVersao, percentualRetido }`;
- * 422 `detalhes: { indisponiveis: productId[] }`, chave reaproveitada com outro conteúdo, ou CEP
+ * 422 `detalhes: { indisponiveis: productId[] }`, chave reaproveitada com outro conteúdo (potinhos, datas, modo,
+ *     telefone, observação ou endereço), ou CEP
  *     inválido/que não bate com a cidade (`detalhes["endereco.cep"]`);
  * 429 limite por hora ou 3 encomendas abertas; 503 recurso desativado ou pagamento indisponível.
  */
