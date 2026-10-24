@@ -78,7 +78,7 @@ const produtos = [
     id: "abacaxi-125g",
     nome: "Abacaxi, 125g",
     descricao:
-      "Dourada, doce na medida e com a acidez leve da fruta. Boa no café da manhã e nas receitas.",
+      "Geleia dourada, doce na medida e com a acidez leve da fruta. Boa no café da manhã e nas receitas.",
     preco: "15.00",
     pesoGramas: 125,
   },
@@ -86,7 +86,7 @@ const produtos = [
     id: "morango-112g",
     nome: "Morango, 112g",
     descricao:
-      "Vermelho vivo e com o aroma da fruta. Um clássico que combina com pães, bolos e sobremesas.",
+      "Com o vermelho vivo e o aroma da fruta. Um clássico que combina com pães, bolos e sobremesas.",
     preco: "15.00",
     pesoGramas: 112,
   },
@@ -94,7 +94,7 @@ const produtos = [
     id: "maracuja-125g",
     nome: "Maracujá, 125g",
     descricao:
-      "No ponto entre o doce e o ácido, perfumada e com as sementes da fruta. Cobertura pronta para sobremesas e ótima nas torradas.",
+      "Polpa de maracujá com as sementes, azedinha e perfumada, no ponto entre o doce e o ácido. Cobertura pronta para sobremesas e ótima nas torradas.",
     preco: "15.00",
     pesoGramas: 125,
   },
