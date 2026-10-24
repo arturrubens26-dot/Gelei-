@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma, type Pagamento } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import {
+  divergenciasSemDevolucao,
   estadoDaConferencia,
   etapaDaParcela,
   type CobrancaParaConferencia,
@@ -82,6 +83,40 @@ export async function encerrarCobrancasDaEncomenda(encomendaId: string, parcela?
     await db.pagamento.updateMany({ where: { id: { in: abertas.map((p) => p.id) }, status: "PENDENTE" }, data: { status: "CANCELADO" } });
   }
   return { linkAberto: abertas.some((p) => p.gateway === "infinitepay" && p.expiraEm > agora) };
+}
+
+const OBSERVACAO_DIVERGENCIA =
+  "Pagamento com divergência (valor, método ou parcelas não conferiam): confira no app InfinitePay quanto entrou e devolva.";
+
+/**
+ * Abre devolução PENDENTE para cada cobrança paga com divergência (`cobrancaDivergente`) que ainda não tem
+ * uma (pelo `pagamentoId`), DENTRO da transação de quem encerra a encomenda (cancelar, expirar) ou registra
+ * a parcela por fora: o dinheiro entrou pelo site, mas a cobrança nunca foi dada como paga e não há mais o
+ * que quitar com ele. Sem isto o alerta sumiria e a dona não teria o que devolver. O valor é o da parcela
+ * (o quanto entrou de fato a dona confere no app: a divergência é justamente o valor, o método ou as
+ * parcelas não baterem). `PAGAMENTO_TARDIO`: encomenda encerrada; `PAGAMENTO_DUPLICADO`: parcela registrada
+ * por fora. Sem divergências, não faz nada. Devolve quantas abriu. `parcela`: só as dessa parcela.
+ */
+export async function abrirDevolucoesDeDivergencias(
+  tx: Prisma.TransactionClient,
+  encomendaId: string,
+  motivo: "PAGAMENTO_TARDIO" | "PAGAMENTO_DUPLICADO",
+  parcela?: Parcela,
+): Promise<number> {
+  const [cobrancas, devolucoes] = await Promise.all([
+    tx.pagamento.findMany({
+      where: { encomendaId, status: { in: ["PENDENTE", "CANCELADO"] }, ...(parcela ? { parcela } : {}) },
+      select: { id: true, parcela: true, status: true, statusGateway: true, valor: true },
+    }),
+    tx.encomendaDevolucao.findMany({ where: { encomendaId, pagamentoId: { not: null } }, select: { pagamentoId: true } }),
+  ]);
+  const pendentes = divergenciasSemDevolucao(cobrancas, devolucoes);
+  if (pendentes.length === 0) return 0;
+  await tx.encomendaDevolucao.createMany({
+    data: pendentes.map((p) => ({ encomendaId, pagamentoId: p.id, motivo, valor: p.valor, observacao: OBSERVACAO_DIVERGENCIA })),
+  });
+  console.warn(`[encomendas] encomenda ${encomendaId}: ${pendentes.length} devolução(ões) aberta(s) por pagamento com divergência (${motivo})`);
+  return pendentes.length;
 }
 
 /**

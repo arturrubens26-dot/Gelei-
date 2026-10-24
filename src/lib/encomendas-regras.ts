@@ -642,6 +642,51 @@ export function alertaDaEncomenda(e: { devolucaoPendente: boolean; pagamentoDive
   return null;
 }
 
+/** O que as regras de divergência olham numa cobrança (colunas de `pagamentos`). */
+export type CobrancaParaDivergencia = { id: string; parcela: Parcela | null; status: StatusCobranca; statusGateway: string | null };
+
+/**
+ * Cobranças pagas com divergência (`cobrancaDivergente`) que ainda não têm devolução aberta por causa delas
+ * (`pagamentoId`). É o que a loja precisa devolver quando a encomenda é cancelada, expira ou a parcela é
+ * registrada por fora: o dinheiro entrou, só não foi dado como pago pelo site.
+ */
+export function divergenciasSemDevolucao<T extends CobrancaParaDivergencia>(
+  cobrancas: readonly T[],
+  devolucoes: readonly { pagamentoId: string | null }[],
+): T[] {
+  const jaDevolvidas = new Set(devolucoes.map((d) => d.pagamentoId));
+  return cobrancas.filter((p) => cobrancaDivergente(p) && !jaDevolvidas.has(p.id));
+}
+
+/**
+ * O alerta PAGO_COM_DIVERGENCIA vale enquanto houver cobrança divergente sem devolução aberta e a divergência
+ * ainda pede uma decisão da dona:
+ * - parcela não paga e encomenda aberta (ela ainda pode registrar a parcela ou cancelar);
+ * - encomenda CANCELADA ou EXPIRADA (o dinheiro entrou e não ficou nada a quitar);
+ * - parcela dada como recebida fora do site (o dinheiro do site é a segunda entrada).
+ * Nos dois últimos casos a própria ação (cancelar, expirar, registrar) abre a devolução (`abrirDevolucoesDeDivergencias`),
+ * que passa a ser o alerta DEVOLUCAO_PENDENTE e, depois de feita, tira este.
+ */
+export function pagamentoDivergenteAberto(e: {
+  status: StatusEncomenda;
+  entradaPagaEm: Date | null;
+  restantePagoEm: Date | null;
+  entradaForaDoSite: boolean;
+  restanteForaDoSite: boolean;
+  pagamentos: readonly CobrancaParaDivergencia[];
+  devolucoes: readonly { pagamentoId: string | null }[];
+}): boolean {
+  const encerradaSemQuitar = e.status === "CANCELADA" || e.status === "EXPIRADA";
+  return divergenciasSemDevolucao(e.pagamentos, e.devolucoes).some((p) => {
+    const entrada = p.parcela === "ENTRADA";
+    const paga = entrada ? e.entradaPagaEm !== null : e.restantePagoEm !== null;
+    const foraDoSite = entrada ? e.entradaForaDoSite : e.restanteForaDoSite;
+    if (encerradaSemQuitar) return true;
+    if (!paga) return !statusFinal(e.status);
+    return foraDoSite;
+  });
+}
+
 /**
  * Quanto a loja pode devolver ao cancelar (centavos): no mínimo o que a regra manda (tudo, quando a
  * loja cancela; a regra do corte, quando a cliente pediu pelo WhatsApp), no máximo tudo o que foi pago.

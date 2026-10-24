@@ -30,6 +30,7 @@ import {
   devolucaoNaDesistencia,
   diaDaLoja,
   diaValido,
+  divergenciasSemDevolucao,
   encomendaSchema,
   etapaDaParcela,
   faixaDaDevolucaoNoCancelamento,
@@ -41,6 +42,7 @@ import {
   meioDia,
   mensagemWhatsApp,
   mesmaEncomenda,
+  pagamentoDivergenteAberto,
   pesoDaEncomenda,
   prazoDaEntrada,
   prazosDaEncomenda,
@@ -543,6 +545,55 @@ describe("painel: alerta e faixa da devolução no cancelamento", () => {
     assert.equal(alertaDaEncomenda({ ...nada, avisoParadoHaMaisDe30Min: true }), "AVISO_NAO_CONFERIDO");
     assert.equal(alertaDaEncomenda({ ...nada, avisoParadoHaMaisDe30Min: true, pagamentoDivergente: true }), "PAGO_COM_DIVERGENCIA");
     assert.equal(alertaDaEncomenda({ devolucaoPendente: true, pagamentoDivergente: true, avisoParadoHaMaisDe30Min: true }), "DEVOLUCAO_PENDENTE");
+  });
+  describe("divergência: o alerta não some ao cancelar, expirar ou registrar por fora", () => {
+    const divergente = { id: "p1", parcela: "ENTRADA" as const, status: "PENDENTE" as const, statusGateway: "divergente:valor" };
+    const base = {
+      status: "AGUARDANDO_ENTRADA" as StatusEncomenda,
+      entradaPagaEm: null as Date | null,
+      restantePagoEm: null as Date | null,
+      entradaForaDoSite: false,
+      restanteForaDoSite: false,
+      pagamentos: [divergente] as { id: string; parcela: "ENTRADA" | "RESTANTE"; status: "PENDENTE" | "CANCELADO" | "APROVADO"; statusGateway: string | null }[],
+      devolucoes: [] as { pagamentoId: string | null }[],
+    };
+    const agora = new Date("2026-11-11T13:00:00Z");
+    it("aberta e parcela não paga: alerta (como antes)", () => {
+      assert.equal(pagamentoDivergenteAberto(base), true);
+      assert.equal(pagamentoDivergenteAberto({ ...base, pagamentos: [{ ...divergente, statusGateway: "pago" }] }), false);
+      assert.equal(pagamentoDivergenteAberto({ ...base, pagamentos: [{ ...divergente, statusGateway: "nao-pago" }] }), false);
+    });
+    it("cancelada ou expirada: o alerta continua até haver devolução ligada à cobrança", () => {
+      for (const status of ["CANCELADA", "EXPIRADA"] as const) {
+        assert.equal(pagamentoDivergenteAberto({ ...base, status }), true, status);
+        // A cobrança cancelada no nosso banco (link encerrado) segue divergente.
+        assert.equal(pagamentoDivergenteAberto({ ...base, status, pagamentos: [{ ...divergente, status: "CANCELADO" }] }), true, status);
+        assert.equal(pagamentoDivergenteAberto({ ...base, status, devolucoes: [{ pagamentoId: "p1" }] }), false, `${status} com devolução`);
+        // Devolução de outra cobrança (ou sem cobrança, como a do cancelamento) não resolve esta.
+        assert.equal(pagamentoDivergenteAberto({ ...base, status, devolucoes: [{ pagamentoId: "p2" }, { pagamentoId: null }] }), true, status);
+      }
+    });
+    it("parcela registrada por fora: o dinheiro do site é a segunda entrada, o alerta continua até a devolução", () => {
+      const registrada = { ...base, status: "CONFIRMADA" as StatusEncomenda, entradaPagaEm: agora, entradaForaDoSite: true };
+      assert.equal(pagamentoDivergenteAberto(registrada), true);
+      assert.equal(pagamentoDivergenteAberto({ ...registrada, devolucoes: [{ pagamentoId: "p1" }] }), false);
+      // Restante: a divergência do restante vale pela situação do restante, não da entrada.
+      const restante = { ...divergente, id: "p3", parcela: "RESTANTE" as const };
+      assert.equal(pagamentoDivergenteAberto({ ...registrada, pagamentos: [restante] }), true, "restante ainda não pago, encomenda aberta");
+      const quitadaPorFora = { ...registrada, restantePagoEm: agora, restanteForaDoSite: true, pagamentos: [restante] };
+      assert.equal(pagamentoDivergenteAberto(quitadaPorFora), true);
+      assert.equal(pagamentoDivergenteAberto({ ...quitadaPorFora, devolucoes: [{ pagamentoId: "p3" }] }), false);
+    });
+    it("parcela paga pelo site não gera alerta (nada a devolver sem aprovação de outra cobrança)", () => {
+      assert.equal(pagamentoDivergenteAberto({ ...base, status: "CONFIRMADA", entradaPagaEm: agora }), false);
+    });
+    it("divergenciasSemDevolucao separa as cobranças ainda sem devolução", () => {
+      const outra = { id: "p2", parcela: "RESTANTE" as const, status: "CANCELADO" as const, statusGateway: "divergente:parcelas" };
+      const ok = { id: "p4", parcela: "ENTRADA" as const, status: "APROVADO" as const, statusGateway: "pago" };
+      assert.deepEqual(divergenciasSemDevolucao([divergente, outra, ok], []).map((p) => p.id), ["p1", "p2"]);
+      assert.deepEqual(divergenciasSemDevolucao([divergente, outra, ok], [{ pagamentoId: "p1" }]).map((p) => p.id), ["p2"]);
+      assert.deepEqual(divergenciasSemDevolucao([divergente, outra], [{ pagamentoId: "p1" }, { pagamentoId: "p2" }]), []);
+    });
   });
   it("a loja devolve no mínimo tudo; a pedido da cliente, depois do corte, no mínimo o que a regra manda", () => {
     const e = encomenda({ status: "CONFIRMADA", entradaPagaEm: new Date("2026-11-11T13:00:00Z") });

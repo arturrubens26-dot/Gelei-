@@ -28,7 +28,7 @@ import {
   type ModoEntrega,
   type StatusEncomenda,
 } from "@/lib/encomendas-regras";
-import { cobrancaEmConferencia, encerrarCobrancasDaEncomenda } from "@/lib/encomendas-pagamentos";
+import { abrirDevolucoesDeDivergencias, cobrancaEmConferencia, encerrarCobrancasDaEncomenda } from "@/lib/encomendas-pagamentos";
 import { taxaDeEntregaAtualCentavos } from "@/lib/entrega";
 import { MENSAGEM_FORA_DA_AREA, calcularFrete, cepAtendido } from "@/lib/entrega-regras";
 import { CAMPOS_ENDERECO, obterOuCriarEndereco, type EnderecoSalvo } from "@/lib/enderecos";
@@ -418,15 +418,21 @@ export async function expirarVencidas(agora: Date, filtro: { userId?: string; en
     if (v.pagamentos.some((p) => (p.status === "PENDENTE" && p.expiraEm > agora) || cobrancaEmConferencia(p, agora.getTime()))) continue;
     if (v.pagamentos.some((p) => p.status === "PENDENTE")) await encerrarCobrancasDaEncomenda(v.id, "ENTRADA");
     const ultimoVencimento = v.pagamentos.reduce((max, p) => (p.expiraEm > max ? p.expiraEm : max), v.entradaAte!);
-    const { count } = await db.encomenda.updateMany({
-      where: {
-        id: v.id,
-        status: "AGUARDANDO_ENTRADA",
-        entradaPagaEm: null,
-        entradaAte: { lte: fimDaFolga },
-        pagamentos: { none: { parcela: "ENTRADA", status: "PENDENTE" } },
-      },
-      data: { status: "EXPIRADA", encerradaEm: ultimoVencimento > agora ? agora : ultimoVencimento },
+    // Junto com a expiração, abre a devolução do que entrou com divergência (passado o limite da conferência,
+    // a divergência deixa de segurar a encomenda, mas o dinheiro continua sendo da cliente).
+    const count = await db.$transaction(async (tx) => {
+      const { count } = await tx.encomenda.updateMany({
+        where: {
+          id: v.id,
+          status: "AGUARDANDO_ENTRADA",
+          entradaPagaEm: null,
+          entradaAte: { lte: fimDaFolga },
+          pagamentos: { none: { parcela: "ENTRADA", status: "PENDENTE" } },
+        },
+        data: { status: "EXPIRADA", encerradaEm: ultimoVencimento > agora ? agora : ultimoVencimento },
+      });
+      if (count === 1) await abrirDevolucoesDeDivergencias(tx, v.id, "PAGAMENTO_TARDIO", "ENTRADA");
+      return count;
     });
     expiradas += count;
   }
@@ -736,6 +742,8 @@ export async function desistirDaEncomenda(
     if (previa.devolucao > 0) {
       await tx.encomendaDevolucao.create({ data: { encomendaId: lido.id, motivo: "DESISTENCIA", valor: reaisDe(previa.devolucao) } });
     }
+    // Passado o limite da conferência, uma divergência não segura mais a desistência: o dinheiro dela também volta.
+    await abrirDevolucoesDeDivergencias(tx, lido.id, "PAGAMENTO_TARDIO");
     return true;
   });
   if (!desistiu) throw new ErroNegocio(409, "A encomenda mudou enquanto você desistia. Atualize a página e confira.");

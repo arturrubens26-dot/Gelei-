@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { hojeNaLoja } from "@/lib/despesas";
 import { AVISO_JURIDICO } from "@/lib/encomendas-politica";
 import {
+  abrirDevolucoesDeDivergencias,
   cobrancaEmConferencia,
   encerrarCobrancasDaEncomenda,
   marcarDevolucoesFeitas,
@@ -14,7 +15,6 @@ import {
   AVISO_CANCELAR_EM_CONFERENCIA,
   ROTULO_STATUS_ENCOMENDA,
   STATUS_CONFIRMADOS,
-  statusFinal,
   acoesDaLoja,
   agendaPorDia,
   alertaDaEncomenda,
@@ -23,6 +23,7 @@ import {
   faixaDaDevolucaoNoCancelamento,
   linkWhatsApp,
   mensagemWhatsApp,
+  pagamentoDivergenteAberto,
   prazoDaEntrada,
   statusEfetivo,
   transicaoPermitida,
@@ -215,15 +216,11 @@ type EncomendaAdminCompleta = Prisma.EncomendaGetPayload<{ include: typeof inclu
 
 function alertaDe(e: EncomendaCompleta, agora: Date): AlertaEncomenda | null {
   const t = agora.getTime();
-  const aberta = !statusFinal(e.status);
   return alertaDaEncomenda({
     devolucaoPendente: e.devolucoes.some((d) => d.status === "PENDENTE"),
-    // Divergência só importa enquanto a parcela não foi dada como paga (pelo site ou registrada pela dona).
-    pagamentoDivergente:
-      aberta &&
-      e.pagamentos.some(
-        (p) => cobrancaDivergente(p) && (p.parcela === "ENTRADA" ? e.entradaPagaEm === null : e.restantePagoEm === null),
-      ),
+    // A divergência segue visível até a dona decidir: com a encomenda cancelada, expirada ou a parcela registrada
+    // por fora, a ação abre uma devolução (ver `pagamentoDivergenteAberto`) e o alerta passa a ser ela.
+    pagamentoDivergente: pagamentoDivergenteAberto(e),
     avisoParadoHaMaisDe30Min: e.pagamentos.some(
       (p) =>
         (p.status === "PENDENTE" || p.status === "CANCELADO") &&
@@ -543,6 +540,20 @@ export async function executarAcaoAdmin(
     const { count } = await db.encomenda.updateMany({ where: { ...comoLida, ...extra }, data });
     if (count !== 1) throw conflito(MENSAGEM_MUDOU, e.status, "status-mudou");
   };
+  // Registrar a parcela por fora: junto, abre a devolução do dinheiro que entrou pelo site com divergência
+  // (a cobrança nunca foi dada como paga; com a parcela quitada por fora, aquele dinheiro é a segunda entrada).
+  const registrarParcela = async (data: Prisma.EncomendaUncheckedUpdateManyInput, parcela: Parcela): Promise<number> => {
+    const abertas = await db.$transaction(async (tx) => {
+      const { count } = await tx.encomenda.updateMany({ where: comoLida, data });
+      if (count !== 1) return null;
+      return abrirDevolucoesDeDivergencias(tx, id, "PAGAMENTO_DUPLICADO", parcela);
+    });
+    if (abertas === null) throw conflito(MENSAGEM_MUDOU, e.status, "status-mudou");
+    return abertas;
+  };
+  const AVISO_DIVERGENCIA_REGISTRADA =
+    "Havia um pagamento do site com divergência nesta parcela: abrimos uma devolução pendente. Confira no app InfinitePay quanto entrou: " +
+    "se aquele dinheiro for a própria parcela que você registrou, não devolva em duplicidade.";
   const emConferencia = (parcela?: Parcela) =>
     e.pagamentos.some((p) => (!parcela || p.parcela === parcela) && cobrancaEmConferencia(p, agora.getTime()));
   let aviso: string | undefined;
@@ -596,19 +607,26 @@ export async function executarAcaoAdmin(
         );
       }
       const { linkAberto } = await encerrarCobrancasDaEncomenda(id, "ENTRADA");
-      await atualizar({
-        status: "CONFIRMADA",
-        entradaPagaEm: agora,
-        entradaForma: acao.formaPagamento,
-        entradaForaDoSite: true,
-        entradaObservacao: acao.observacao,
-        entradaRegistradaPorId: adminId,
-      });
+      const divergencias = await registrarParcela(
+        {
+          status: "CONFIRMADA",
+          entradaPagaEm: agora,
+          entradaForma: acao.formaPagamento,
+          entradaForaDoSite: true,
+          entradaObservacao: acao.observacao,
+          entradaRegistradaPorId: adminId,
+        },
+        "ENTRADA",
+      );
+      const partes: string[] = [];
       if (linkAberto) {
-        aviso =
+        partes.push(
           "O link da entrada que estava aberto foi encerrado no site, mas ainda aceita pagamento na InfinitePay por até 1 hora. " +
-          "Se a cliente pagar, aparecerá uma devolução pendente por pagamento em duplicidade: devolva pelo app InfinitePay.";
+            "Se a cliente pagar, aparecerá uma devolução pendente por pagamento em duplicidade: devolva pelo app InfinitePay.",
+        );
       }
+      if (divergencias > 0) partes.push(AVISO_DIVERGENCIA_REGISTRADA);
+      aviso = partes.length > 0 ? partes.join(" ") : undefined;
       break;
     }
     case "registrar-restante": {
@@ -620,18 +638,25 @@ export async function executarAcaoAdmin(
         throw conflito("Há um pagamento do restante sendo conferido. Confira no app InfinitePay antes de registrar.", e.status, "pagamento-em-conferencia");
       }
       const { linkAberto } = await encerrarCobrancasDaEncomenda(id, "RESTANTE");
-      await atualizar({
-        restantePagoEm: agora,
-        restanteForma: acao.formaPagamento,
-        restanteForaDoSite: true,
-        restanteObservacao: acao.observacao,
-        restanteRegistradoPorId: adminId,
-      });
+      const divergencias = await registrarParcela(
+        {
+          restantePagoEm: agora,
+          restanteForma: acao.formaPagamento,
+          restanteForaDoSite: true,
+          restanteObservacao: acao.observacao,
+          restanteRegistradoPorId: adminId,
+        },
+        "RESTANTE",
+      );
+      const partes: string[] = [];
       if (linkAberto) {
-        aviso =
+        partes.push(
           "O link do restante que estava aberto foi encerrado no site, mas ainda aceita pagamento na InfinitePay por até 1 hora. " +
-          "Se a cliente pagar, aparecerá uma devolução pendente: devolva pelo app InfinitePay.";
+            "Se a cliente pagar, aparecerá uma devolução pendente: devolva pelo app InfinitePay.",
+        );
       }
+      if (divergencias > 0) partes.push(AVISO_DIVERGENCIA_REGISTRADA);
+      aviso = partes.length > 0 ? partes.join(" ") : undefined;
       break;
     }
     case "cancelar": {
@@ -659,16 +684,22 @@ export async function executarAcaoAdmin(
             encerradaEm: agora,
           },
         });
-        if (count !== 1) return false;
+        if (count !== 1) return null;
         if (acao.devolverCentavos > 0) {
           await tx.encomendaDevolucao.create({
             data: { encomendaId: id, motivo: acao.aPedidoDaCliente ? "DESISTENCIA" : "CANCELAMENTO", valor: reaisDe(acao.devolverCentavos) },
           });
         }
-        return true;
+        // Dinheiro que entrou com divergência e nunca foi dado como pago: também é devolução (ou o alerta sumiria com a ficha encerrada).
+        return abrirDevolucoesDeDivergencias(tx, id, "PAGAMENTO_TARDIO");
       });
-      if (!cancelou) throw conflito(MENSAGEM_MUDOU, e.status, "status-mudou");
+      if (cancelou === null) throw conflito(MENSAGEM_MUDOU, e.status, "status-mudou");
       const partes: string[] = [];
+      if (cancelou > 0) {
+        partes.push(
+          "Havia pagamento do site com divergência: abrimos uma devolução pendente. Confira no app InfinitePay quanto entrou e devolva.",
+        );
+      }
       if (acao.devolverCentavos > 0) {
         partes.push(`Devolva ${(acao.devolverCentavos / 100).toFixed(2).replace(".", ",")} reais pelo app InfinitePay e marque "Marquei como devolvida".`);
       }
