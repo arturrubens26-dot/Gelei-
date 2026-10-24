@@ -70,7 +70,7 @@ const produtos = [
     id: "abacaxi-com-pimenta-125g",
     nome: "Abacaxi com Pimenta, 125g",
     descricao:
-      "Abacaxi cozido devagar com pimenta: começa doce e tropical e termina com um calorzinho que pede mais uma colherada. Pedacinhos de fruta e de pimenta à vista no pote.",
+      "Começa doce e tropical e termina com um calorzinho que pede mais uma colherada. Pedacinhos de fruta e de pimenta à vista no pote.",
     preco: "15.00",
     pesoGramas: 125,
   },
@@ -78,7 +78,7 @@ const produtos = [
     id: "abacaxi-125g",
     nome: "Abacaxi, 125g",
     descricao:
-      "Abacaxi maduro cozido em fogo baixo até virar geleia dourada, doce na medida e com a acidez leve da fruta. Boa no café da manhã e nas receitas.",
+      "Dourada, doce na medida e com a acidez leve da fruta. Boa no café da manhã e nas receitas.",
     preco: "15.00",
     pesoGramas: 125,
   },
@@ -86,7 +86,7 @@ const produtos = [
     id: "morango-112g",
     nome: "Morango, 112g",
     descricao:
-      "Morangos selecionados cozidos em fogo baixo, com o vermelho vivo e o aroma da fruta. Um clássico que combina com pães, bolos e sobremesas.",
+      "Vermelho vivo e com o aroma da fruta. Um clássico que combina com pães, bolos e sobremesas.",
     preco: "15.00",
     pesoGramas: 112,
   },
@@ -94,7 +94,7 @@ const produtos = [
     id: "maracuja-125g",
     nome: "Maracujá, 125g",
     descricao:
-      "Polpa de maracujá com as sementes, azedinha e perfumada, no ponto entre o doce e o ácido. Cobertura pronta para sobremesas e ótima nas torradas.",
+      "No ponto entre o doce e o ácido, perfumada e com as sementes da fruta. Cobertura pronta para sobremesas e ótima nas torradas.",
     preco: "15.00",
     pesoGramas: 125,
   },
