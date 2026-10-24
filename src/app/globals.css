@@ -36,6 +36,22 @@
     @apply bg-destaque font-textos text-primaria antialiased;
   }
 
+  /* Marca d'água da loja (LojaLayout): atrás do conteúdo (o body é `isolate`), sem receber clique. */
+  .marca-dagua {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: url("/marca/marca-dagua.png") center / min(78vmin, 640px) no-repeat;
+    opacity: 0.09;
+  }
+
+  @media print {
+    .marca-dagua {
+      display: none;
+    }
+  }
+
   h1,
   h2,
   h3,

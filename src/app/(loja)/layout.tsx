@@ -6,6 +6,8 @@ import { Header } from "@/components/Header";
 export default function LojaLayout({ children }: LayoutProps<"/">) {
   return (
     <CarrinhoProvider>
+      {/* Marca d'água: o potinho da marca, em traço vinho bem suave, fixo atrás de toda a loja. */}
+      <div aria-hidden="true" className="marca-dagua" />
       <Header />
       {children}
       <Footer />
