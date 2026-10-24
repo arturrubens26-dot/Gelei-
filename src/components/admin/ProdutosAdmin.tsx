@@ -458,7 +458,7 @@ function FormularioProduto({
             id={`${id}-descricao`}
             rotulo="Descrição"
             erro={erros.descricao}
-            dica={`${form.descricao.length}/300 caracteres. Aparece no cartão do produto.`}
+            dica={`${form.descricao.length}/300 caracteres. Aparece no verso da foto, quando a cliente clica nela.`}
           >
             <textarea
               {...aria("descricao", true)}
@@ -485,7 +485,7 @@ function FormularioProduto({
                 aoMudar={(valor) => setForm((f) => ({ ...f, [campo]: valor }))}
               />
             ))}
-            <PreviaDoVerso sabor={form.sabor.trim()} foto={fotoNaTela} harmonizacoes={form.harmonizacoes} destaques={form.destaques} />
+            <PreviaDoVerso sabor={form.sabor.trim()} foto={fotoNaTela} descricao={form.descricao} harmonizacoes={form.harmonizacoes} destaques={form.destaques} />
           </fieldset>
 
           <label className="flex items-center gap-2 text-sm font-semibold">
@@ -595,18 +595,31 @@ function CampoDoVerso({
 }
 
 /** Como o cartão vai ficar na loja: a mesma foto que vira (clique para ver o verso). */
-function PreviaDoVerso({ sabor, foto, harmonizacoes, destaques }: { sabor: string; foto: string | null; harmonizacoes: string; destaques: string }) {
+function PreviaDoVerso({
+  sabor,
+  foto,
+  descricao,
+  harmonizacoes,
+  destaques,
+}: {
+  sabor: string;
+  foto: string | null;
+  descricao: string;
+  harmonizacoes: string;
+  destaques: string;
+}) {
   // Sem repetidos (o servidor recusa) e no máximo o limite de cada lista: é só uma prévia.
   const lista = (texto: string, max: number) => [...new Set(itensDoTexto(texto))].slice(0, max);
   const h = lista(harmonizacoes, MAX_HARMONIZACOES);
   const d = lista(destaques, MAX_DESTAQUES);
-  if (h.length === 0 && d.length === 0) return null;
+  const texto = descricao.trim();
+  if (!texto && h.length === 0 && d.length === 0) return null;
   return (
     <div>
       <p className="text-sm font-semibold">Prévia na loja</p>
       <p className="mb-2 text-xs text-primaria/75">Clique na foto para ver o verso, como a cliente verá.</p>
       <div className="cartao w-full max-w-80 p-2.5">
-        <FotoComVerso sabor={sabor || "produto novo"} harmonizacoes={h} destaques={d}>
+        <FotoComVerso sabor={sabor || "produto novo"} descricao={texto} harmonizacoes={h} destaques={d}>
           {foto ? (
             // eslint-disable-next-line @next/next/no-img-element -- prévia local (blob:) ou a foto atual
             <img src={foto} alt="" className="aspect-square w-full object-cover" />

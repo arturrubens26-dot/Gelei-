@@ -23,23 +23,17 @@ export function ProdutoCard({ produto, prioritario = false }: { produto: Produto
       className="aspect-square w-full object-cover"
     />
   );
-  const temVerso = produto.harmonizacoes.length > 0 || produto.destaques.length > 0;
 
   return (
     <article className="cartao flex flex-col p-2.5">
-      {/* Com harmonizações ou destaques, a foto vira (só ela: o preço e o botão ficam no lugar). */}
-      {temVerso ? (
-        <FotoComVerso sabor={sabor} harmonizacoes={produto.harmonizacoes} destaques={produto.destaques}>
-          {foto}
-        </FotoComVerso>
-      ) : (
-        <div className="overflow-hidden rounded-sm bg-[#f3ece3]">{foto}</div>
-      )}
+      {/* A foto sempre vira e o verso traz a descrição, as harmonizações e os destaques (só ela: o preço e o botão ficam no lugar). */}
+      <FotoComVerso sabor={sabor} descricao={produto.descricao} harmonizacoes={produto.harmonizacoes} destaques={produto.destaques}>
+        {foto}
+      </FotoComVerso>
       <div className="flex flex-1 flex-col items-center px-4 pb-4 pt-5 text-center">
         <h3 className="font-titulos text-xl font-semibold leading-snug text-primaria">{sabor}</h3>
         {peso && <p className="mt-1 text-sm text-primaria/80">{peso}</p>}
-        <p className="mt-3 max-w-[32ch] flex-1 text-sm leading-relaxed text-primaria/85">{produto.descricao}</p>
-        <p className="mt-4 text-2xl font-semibold text-primaria">{formatarBRL(produto.preco)}</p>
+        <p className="mt-4 flex-1 text-2xl font-semibold text-primaria">{formatarBRL(produto.preco)}</p>
         <div className="mt-4 w-full">
           <BotaoAdicionar produto={produto} />
         </div>

@@ -18,12 +18,15 @@ import { TITULO_DESTAQUES, TITULO_HARMONIZACOES } from "@/lib/produtos-regras";
  */
 export function FotoComVerso({
   sabor,
+  descricao,
   harmonizacoes,
   destaques,
   children,
 }: {
   /** "Pimenta": vai no nome do botão. */
   sabor: string;
+  /** A descrição do sabor: fica no verso, no lugar de aparecer sob a foto. */
+  descricao?: string;
   harmonizacoes: string[];
   destaques: string[];
   /** A foto (FotoDoPote), renderizada no servidor. */
@@ -48,7 +51,7 @@ export function FotoComVerso({
         }}
         className="absolute inset-0 z-10 cursor-pointer touch-manipulation rounded-sm"
       >
-        <span className="sr-only">Harmonizações e destaques: {sabor}</span>
+        <span className="sr-only">Sobre o sabor e harmonizações: {sabor}</span>
       </button>
 
       <div className="virador">
@@ -56,7 +59,7 @@ export function FotoComVerso({
           {children}
           <Etiqueta>
             <IconeVirar />
-            Harmonizações
+            Sobre o sabor
           </Etiqueta>
         </div>
 
@@ -65,10 +68,12 @@ export function FotoComVerso({
           inert={!virado}
           className="face verso flex flex-col justify-center gap-[4cqw] rounded-sm bg-destaque px-[6cqw] pt-[5cqw] pb-[10cqw] text-left text-primaria shadow-[inset_0_0_0_4px_#fff7ee,inset_0_0_0_5px_rgb(212_175_55/0.55)]"
         >
-          {harmonizacoes.length > 0 && <Lista titulo={TITULO_HARMONIZACOES} itens={harmonizacoes} />}
-          {harmonizacoes.length > 0 && destaques.length > 0 && (
-            <span aria-hidden="true" className="mx-auto block h-px w-1/4 shrink-0 bg-accent2/70" />
+          {descricao && (
+            <p className="line-clamp-5 min-w-0 text-[clamp(0.75rem,4.2cqw,0.95rem)] leading-[1.35]">{descricao}</p>
           )}
+          {descricao && (harmonizacoes.length > 0 || destaques.length > 0) && <Divisoria />}
+          {harmonizacoes.length > 0 && <Lista titulo={TITULO_HARMONIZACOES} itens={harmonizacoes} />}
+          {harmonizacoes.length > 0 && destaques.length > 0 && <Divisoria />}
           {destaques.length > 0 && <Lista titulo={TITULO_DESTAQUES} itens={destaques} />}
           <Etiqueta>
             <IconeVirar invertido />
@@ -78,6 +83,10 @@ export function FotoComVerso({
       </div>
     </div>
   );
+}
+
+function Divisoria() {
+  return <span aria-hidden="true" className="mx-auto block h-px w-1/4 shrink-0 bg-accent2/70" />;
 }
 
 function Lista({ titulo, itens }: { titulo: string; itens: string[] }) {
