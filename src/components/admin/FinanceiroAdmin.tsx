@@ -301,6 +301,7 @@ function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembr
       <dl className="flex flex-col divide-y divide-accent1/70 text-sm">
         <Linha rotulo="Entradas (50%) pelo site" valor={l.sinais} detalhe="parcela que confirma a encomenda" discreto />
         <Linha rotulo="Restantes pelo site" valor={l.restantes} detalhe="com o frete, quando há entrega" discreto />
+        {l.sinaisForaDoSite > 0 && <Linha rotulo="Entradas recebidas na loja" valor={l.sinaisForaDoSite} detalhe="dinheiro ou PIX direto, ou conferida no app" discreto />}
         {l.restantesForaDoSite > 0 && <Linha rotulo="Restantes recebidos na loja" valor={l.restantesForaDoSite} detalhe="dinheiro ou PIX direto" discreto />}
         {l.devolucoes > 0 && <Linha rotulo="Devoluções feitas" valor={-l.devolucoes} detalhe="desistências e cancelamentos" discreto />}
         <Linha rotulo="Líquido das lembrancinhas" valor={l.liquido} detalhe="já somado às entradas do mês" />
