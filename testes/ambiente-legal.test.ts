@@ -90,12 +90,14 @@ describe("bypass do teste ponta a ponta (E2E_DADOS_LEGAIS)", () => {
     assert.equal(e2eDadosLegaisAtivo({ ...local, E2E_DADOS_LEGAIS: "0" }), false);
     assert.equal(e2eDadosLegaisAtivo({ ...local, E2E_DADOS_LEGAIS: undefined }), false);
     assert.equal(e2eDadosLegaisAtivo({ ...local, APP_ENV: "development" }), true);
+    assert.equal(e2eDadosLegaisAtivo({ ...local, APP_ENV: "demo" }), true, "o .env local usa APP_ENV=demo para o pagamento simulado");
   });
   it("recusa com NETLIFY, APP_ENV publicado ou APP_URL que não é loopback (inclusive sem APP_URL)", () => {
     assert.match(motivoDeRecusarE2eDadosLegais({ ...local, NETLIFY: "true" }) ?? "", /Netlify/);
     assert.equal(e2eDadosLegaisAtivo({ ...local, NETLIFY: "true" }), false);
     assert.equal(e2eDadosLegaisAtivo({ ...local, APP_ENV: "production" }), false);
-    assert.equal(e2eDadosLegaisAtivo({ ...local, APP_ENV: "demo" }), false);
+    assert.equal(e2eDadosLegaisAtivo({ ...local, APP_ENV: "Produção" }), false);
+    assert.equal(e2eDadosLegaisAtivo({ ...local, APP_ENV: "demo", APP_URL: "https://demo.geleio.example" }), false, "demonstração publicada: a APP_URL não é local");
     assert.equal(e2eDadosLegaisAtivo({ ...local, APP_URL: "https://geleio.example" }), false);
     assert.equal(e2eDadosLegaisAtivo({ ...local, APP_URL: undefined }), false);
     assert.equal(e2eDadosLegaisAtivo({ E2E_DADOS_LEGAIS: "1" }), false);
@@ -129,11 +131,13 @@ describe("validarAmbiente recusa E2E_DADOS_LEGAIS fora de um ambiente local", ()
     configurar({ E2E_DADOS_LEGAIS: "1", NETLIFY: "true", APP_URL: "http://localhost:3200" });
     assert.throws(() => validarAmbiente(), /E2E_DADOS_LEGAIS é só para o teste ponta a ponta neste computador/);
   });
-  it("com APP_ENV de produção ou demonstração: não sobe", () => {
+  it("com APP_ENV de produção: não sobe; APP_ENV=demo local (o .env desta máquina) sobe, e demonstração publicada não", () => {
     configurar({ E2E_DADOS_LEGAIS: "1", APP_ENV: "production", APP_URL: "http://localhost:3200" });
     assert.throws(() => validarAmbiente(), /APP_ENV=production/);
     configurar({ E2E_DADOS_LEGAIS: "1", APP_ENV: "demo", APP_URL: "http://localhost:3200" });
-    assert.throws(() => validarAmbiente(), /APP_ENV=demo/);
+    assert.doesNotThrow(() => validarAmbiente());
+    configurar({ E2E_DADOS_LEGAIS: "1", APP_ENV: "demo", APP_URL: "https://demo.geleio.example" });
+    assert.throws(() => validarAmbiente(), /APP_URL/);
   });
   it("com APP_URL do site (https) ou sem APP_URL: não sobe", () => {
     configurar({ E2E_DADOS_LEGAIS: "1", APP_URL: "https://geleio.example" });

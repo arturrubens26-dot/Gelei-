@@ -30,19 +30,23 @@ export function appUrlEmLoopback(bruto: string | undefined): boolean {
   }
 }
 
-/** APP_ENV de quem desenvolve ou testa neste computador; qualquer outro valor (demo, production…) é ambiente publicado. */
-const APP_ENV_LOCAIS = new Set(["development", "dev", "test", "local"]);
+/**
+ * APP_ENV que diz "este é o site de produção". `demo` NÃO entra aqui: o .env local usa APP_ENV=demo para o
+ * pagamento simulado funcionar sob `next start`; um site de demonstração publicado cai na outra trava (a
+ * APP_URL não é http://localhost).
+ */
+const APP_ENV_PRODUCAO = new Set(["production", "prod", "producao", "produção"]);
 
 /**
  * E2E_DADOS_LEGAIS=1 faz o teste ponta a ponta local ignorar a trava dos dados legais (D13). Por que o
- * processo NÃO é o site publicado: sem NETLIFY, sem APP_ENV de produção ou de demonstração e com a APP_URL
+ * processo NÃO é o site publicado: sem NETLIFY, sem APP_ENV de produção e com a APP_URL
  * em http://localhost (o teste sobe `next start`, que roda com NODE_ENV=production, então só o NODE_ENV não
  * distingue). `null`: pode; texto: por que não pode (para o aviso de quem esqueceu a variável no site).
  */
 export function motivoDeRecusarE2eDadosLegais(env: Record<string, string | undefined> = process.env): string | null {
   if (env.NETLIFY && env.NETLIFY !== "false") return "o site está na Netlify (NETLIFY)";
   const appEnv = env.APP_ENV?.trim().toLowerCase();
-  if (appEnv && !APP_ENV_LOCAIS.has(appEnv)) return `APP_ENV=${appEnv} não é um ambiente local`;
+  if (appEnv && APP_ENV_PRODUCAO.has(appEnv)) return `APP_ENV=${appEnv} é o ambiente de produção`;
   if (!appUrlEmLoopback(env.APP_URL)) return "a APP_URL não é http://localhost nem http://127.0.0.1";
   return null;
 }
