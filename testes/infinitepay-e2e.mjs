@@ -163,7 +163,7 @@ async function main() {
     const consultas1 = falsa.chamadas.payment_check;
     const pg1 = await pagar({ codigo: link1.codigo, metodo: "pix" });
     confere(pg1.aviso?.status === 200 && pg1.aviso.corpo?.resultado === "aprovado", "aviso → 200 aprovado", pg1.aviso);
-    confere(falsa.chamadas.payment_check === consultas1 + 1, "o aviso faz UMA consulta (não chama o canário)", falsa.chamadas.payment_check - consultas1);
+    confere(falsa.chamadas.payment_check === consultas1 + 2, "o aviso que PAGA faz DUAS consultas (a principal e o canário)", falsa.chamadas.payment_check - consultas1);
     const s1 = await a.req("GET", `/api/orders/${p1.pedido.id}/pagamento`);
     confere(s1.json?.etapa === "PAGO" && s1.json.pedidoStatus === "PAGO", "etapa PAGO", s1.json);
     confere(s1.json?.cobranca?.metodo === "pix" && s1.json.cobranca.parcelas === 1 && s1.json.cobranca.valorPago === p1.pedido.total, "método, parcelas e valor pago");
@@ -227,7 +227,9 @@ async function main() {
     });
     confere(outroToken.status === 401, "token de outra cobrança → 401", outroToken.status);
     confere((await cobrancas(p3.pedido.id))[0].aviso_transacao_nsu === null, "banco: nada gravado");
+    const consultas3 = falsa.chamadas.payment_check;
     const falso = await pagar({ codigo: link3.codigo, metodo: "pix", avisoFalso: true });
+    confere(falsa.chamadas.payment_check === consultas3 + 1, "o aviso que NÃO paga faz UMA consulta (sem canário)", falsa.chamadas.payment_check - consultas3);
     confere(falso.aviso?.status === 200 && falso.aviso.corpo?.resultado === "invalido", "aviso com transação inexistente → 200 invalido", falso.aviso);
     const [c3] = await cobrancas(p3.pedido.id);
     confere((await statusPedido(p3.pedido.id)) === "PENDENTE" && c3.aviso_transacao_nsu === null && c3.status === "PENDENTE", "continua PENDENTE e o candidato foi apagado", c3);
@@ -300,8 +302,8 @@ async function main() {
     const repete = await fetch(link7.webhook_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pg7.corpoAviso) });
     confere(repete.status === 200 && (await statusPedido(p7.pedido.id)) === "PAGO", "repetição do aviso → PAGO", repete.status);
 
-    console.log("8. A mesma transação para duas cobranças (API hipotética que não amarra o pedido)");
-    modo({ naoAmarraPedido: true });
+    console.log("8. A mesma transação para duas cobranças (API hipotética que não amarra e engana o canário: o UNIQUE é a última barreira)");
+    modo({ naoAmarraPedido: true, canarioCego: true });
     const p8a = await novoPedido(a);
     const p8b = await novoPedido(a);
     const pg8 = await pagar({ codigo: codigoDe(p8a.pagamento.checkoutUrl), metodo: "pix" });
@@ -561,7 +563,13 @@ async function main() {
     confere((await statusPedido(outro24.pedido.id)) === "PENDENTE", "API que não amarra: o próprio retorno também não confirma (fail-closed)");
     await esperar(3_100); // o retorno reservou a vez desta cobrança
     const avisoOutro24 = await avisar(falsa.links.get(codigoDe(outro24.pagamento.checkoutUrl)).webhook_url, pgOutro24.corpoAviso);
-    confere(avisoOutro24.status === 200 && (await statusPedido(outro24.pedido.id)) === "PAGO", "o aviso confirma a compra de verdade", avisoOutro24.status);
+    // Com o canário também no aviso, uma API que não amarra nunca confirma sozinha: a dona confere no app.
+    const [cOutro24] = await cobrancas(outro24.pedido.id);
+    confere(
+      avisoOutro24.status === 200 && (await avisoOutro24.json()).resultado === "divergente" && (await statusPedido(outro24.pedido.id)) === "PENDENTE" && cOutro24.status_gateway === "divergente:nao-amarra",
+      "o aviso também não confirma: divergente:nao-amarra para a dona conferir no app",
+      cOutro24,
+    );
     modo({});
 
     // b) Canário com falha (500, 404, tempo): não confirma pelo retorno e não grava nada; depois confirma.
@@ -578,7 +586,7 @@ async function main() {
     }
 
     // b2) A vez reservada pelo retorno é devolvida quando o canário falha: o aviso que chega colado
-    //     (sem esperar os 3 s entre consultas) confirma, com uma consulta só.
+    //     (sem esperar os 3 s entre consultas) confirma, com duas consultas (a principal e o canário).
     for (const [rotulo, falha] of [["canário com 500", 500], ["canário com tempo esgotado", "tempo"]]) {
       const pc = await novoPedido(conta24);
       const pgc = await pagar({ codigo: codigoDe(pc.pagamento.checkoutUrl), metodo: "pix", aviso: false });
@@ -590,8 +598,8 @@ async function main() {
       const consultasAntes = falsa.chamadas.payment_check;
       const avisoColado = await avisar(falsa.links.get(codigoDe(pc.pagamento.checkoutUrl)).webhook_url, pgc.corpoAviso);
       confere(
-        avisoColado.status === 200 && (await statusPedido(pc.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultasAntes + 1,
-        `${rotulo}: o aviso colado confirma (sem ADIADO) com uma consulta`,
+        avisoColado.status === 200 && (await statusPedido(pc.pedido.id)) === "PAGO" && falsa.chamadas.payment_check === consultasAntes + 2,
+        `${rotulo}: o aviso colado confirma (sem ADIADO), com a consulta e o canário`,
         { status: avisoColado.status, consultas: falsa.chamadas.payment_check - consultasAntes },
       );
     }
@@ -629,6 +637,171 @@ async function main() {
       const [c] = await cobrancas(p.pedido.id);
       confere((await statusPedido(p.pedido.id)) === "PAGO" && c.comprovante_url === null, `recibo de ${rotulo}: confirma sem gravar o comprovante`, c.comprovante_url);
     }
+
+    console.log("25. Canário também no aviso: a API que não amarra → divergente:nao-amarra; canário que falha → 400 sem prender a vez");
+    const conta25 = await novaConta("d");
+    modo({ naoAmarraPedido: true });
+    const p25 = await novoPedido(conta25);
+    const link25 = falsa.links.get(codigoDe(p25.pagamento.checkoutUrl));
+    const consultas25 = falsa.chamadas.payment_check;
+    const pg25 = await pagar({ codigo: link25.codigo, metodo: "pix" });
+    confere(pg25.aviso?.status === 200 && pg25.aviso.corpo?.resultado === "divergente", "aviso com a API que não amarra → 200 divergente", pg25.aviso);
+    confere(falsa.chamadas.payment_check === consultas25 + 2, "duas consultas (a principal e o canário)");
+    const [c25] = await cobrancas(p25.pedido.id);
+    confere(
+      (await statusPedido(p25.pedido.id)) === "PENDENTE" && c25.status === "PENDENTE" && c25.status_gateway === "divergente:nao-amarra" && c25.transacao_nsu === null,
+      "NÃO vira PAGO; marca divergente:nao-amarra e não grava a transação",
+      c25,
+    );
+    const ficha25 = await admin.req("GET", `/api/admin/orders/${p25.pedido.id}`);
+    confere(ficha25.json?.pedido?.pagamento?.alerta === "PAGO_COM_DIVERGENCIA", "painel: PAGO_COM_DIVERGENCIA (a dona confere no app)", ficha25.json?.pedido?.pagamento);
+    const s25 = await conta25.req("GET", `/api/orders/${p25.pedido.id}/pagamento`);
+    confere(s25.json?.etapa === "CONFIRMANDO", "a cliente vê CONFIRMANDO (não PAGAR)", s25.json?.etapa);
+    modo({});
+
+    // Canário que falha no aviso: 400 (a InfinitePay repete) e a vez é devolvida, então a repetição
+    // colada (sem esperar os 3 s entre consultas) confirma.
+    const p25b = await novoPedido(conta25);
+    modo({ falharCanario: 500 });
+    const pg25b = await pagar({ codigo: codigoDe(p25b.pagamento.checkoutUrl), metodo: "pix" });
+    confere(pg25b.aviso?.status === 400 && pg25b.aviso.corpo?.resultado === "transitorio", "canário com 500 no aviso → 400 transitorio", pg25b.aviso);
+    modo({});
+    const [c25b] = await cobrancas(p25b.pedido.id);
+    confere((await statusPedido(p25b.pedido.id)) === "PENDENTE" && c25b.status_gateway !== "pago", "continua PENDENTE", c25b.status_gateway);
+    const repete25b = await avisar(falsa.links.get(codigoDe(p25b.pagamento.checkoutUrl)).webhook_url, pg25b.corpoAviso);
+    confere(repete25b.status === 200 && (await statusPedido(p25b.pedido.id)) === "PAGO", "a repetição colada confirma (a vez foi devolvida)", repete25b.status);
+
+    console.log("26. Aviso forjado (a cliente conhece o token): confere antes de gravar, não troca o candidato verdadeiro, NAO_PAGO que expira");
+    const conta26 = await novaConta("e");
+    const pagoPorFora = async (c) => {
+      const pedido = await novoPedido(c);
+      return { pedido, pg: await pagar({ codigo: codigoDe(pedido.pagamento.checkoutUrl), metodo: "pix", aviso: false }) };
+    };
+    const alerta = async (pedidoId) => (await admin.req("GET", `/api/admin/orders/${pedidoId}`)).json?.pedido?.pagamento?.alerta ?? null;
+
+    // a) Transação de OUTRO link de mesmo valor no aviso: não confirma, fica guardada (lugar livre) e
+    //    marcada "não pago"; o aviso de verdade confirma depois, mesmo com o forjado guardado.
+    const alvo26 = await novoPedido(conta26);
+    const { pg: pgOutro26 } = await pagoPorFora(conta26);
+    const linkAlvo26 = falsa.links.get(codigoDe(alvo26.pagamento.checkoutUrl));
+    const consultas26 = falsa.chamadas.payment_check;
+    const forjado26 = await avisar(linkAlvo26.webhook_url, { transaction_nsu: pgOutro26.transaction_nsu, invoice_slug: pgOutro26.slug, order_nsu: linkAlvo26.order_nsu });
+    confere(
+      forjado26.status === 400 && (await forjado26.json()).resultado === "pendente" && (await statusPedido(alvo26.pedido.id)) === "PENDENTE",
+      "aviso forjado com a transação de outro link de mesmo valor: não confirma (400 pendente)",
+      forjado26.status,
+    );
+    confere(falsa.chamadas.payment_check === consultas26 + 1, "o forjado que dá \"não pago\" faz uma consulta só (sem canário)");
+    const [cf26] = await cobrancas(alvo26.pedido.id);
+    confere(cf26.aviso_transacao_nsu === pgOutro26.transaction_nsu && cf26.status_gateway === "nao-pago", "o forjado fica guardado e marcado nao-pago (o lugar estava livre)", cf26);
+    confere((await alerta(alvo26.pedido.id)) === null, "painel: nenhum alerta");
+    await esperar(3_100); // o aviso forjado reservou a vez desta cobrança por 3 s
+    const pgAlvo26 = await pagar({ codigo: linkAlvo26.codigo, metodo: "pix" });
+    const [cv26] = await cobrancas(alvo26.pedido.id);
+    confere(
+      pgAlvo26.aviso?.status === 200 && pgAlvo26.aviso.corpo?.resultado === "aprovado" && (await statusPedido(alvo26.pedido.id)) === "PAGO" && cv26.transacao_nsu === pgAlvo26.transaction_nsu && cv26.aviso_transacao_nsu === null,
+      "o aviso de verdade aprova sem precisar gravar, e limpa o forjado",
+      cv26,
+    );
+
+    // b) Candidato verdadeiro guardado (InfinitePay fora no aviso): nem um forjado "não pago" nem um
+    //    "inválido" o sobrescrevem ou apagam, e a marca do verdadeiro não é pisada.
+    const verd = await novoPedido(conta26);
+    const { pg: pgOutro26b } = await pagoPorFora(conta26);
+    modo({ falharConferencia: 500 });
+    const pgVerd = await pagar({ codigo: codigoDe(verd.pagamento.checkoutUrl), metodo: "pix" });
+    modo({});
+    confere(pgVerd.aviso?.status === 400, "aviso verdadeiro com a InfinitePay fora → 400", pgVerd.aviso);
+    const [cb0] = await cobrancas(verd.pedido.id);
+    confere(cb0.aviso_transacao_nsu === pgVerd.transaction_nsu, "o candidato verdadeiro foi guardado (conferência indecisa)");
+    await esperar(3_100);
+    const linkVerd = falsa.links.get(codigoDe(verd.pagamento.checkoutUrl));
+    const forjadoB = await avisar(linkVerd.webhook_url, { transaction_nsu: pgOutro26b.transaction_nsu, invoice_slug: pgOutro26b.slug, order_nsu: linkVerd.order_nsu });
+    const [cb1] = await cobrancas(verd.pedido.id);
+    confere(
+      forjadoB.status === 400 && cb1.aviso_transacao_nsu === pgVerd.transaction_nsu && cb1.status_gateway !== "nao-pago",
+      "forjado \"não pago\" NÃO sobrescreve o candidato verdadeiro nem grava marca",
+      { aviso: cb1.aviso_transacao_nsu === pgVerd.transaction_nsu, marca: cb1.status_gateway },
+    );
+    await esperar(3_100);
+    const inexistente = await avisar(linkVerd.webhook_url, { transaction_nsu: "00000000-0000-4000-8000-000000000001", invoice_slug: "fat_forjada_x", order_nsu: linkVerd.order_nsu });
+    const [cb2] = await cobrancas(verd.pedido.id);
+    confere(
+      inexistente.status === 200 && (await inexistente.json()).resultado === "invalido" && cb2.aviso_transacao_nsu === pgVerd.transaction_nsu && cb2.status_gateway !== "invalido",
+      "forjado com transação inexistente (inválido) NÃO apaga o candidato verdadeiro nem grava marca",
+      { aviso: cb2.aviso_transacao_nsu === pgVerd.transaction_nsu, marca: cb2.status_gateway },
+    );
+    await esperar(3_100);
+    const verdadeiro = await avisar(linkVerd.webhook_url, pgVerd.corpoAviso);
+    confere(verdadeiro.status === 200 && (await statusPedido(verd.pedido.id)) === "PAGO", "o aviso verdadeiro repetido confirma", verdadeiro.status);
+
+    // c) "Não pago" que expira: o forjado guardado passa de 30 min e a tela o descarta (sem alerta enquanto
+    //    a última marca é "nao-pago"), e o pedido volta a PAGAR.
+    const exp26 = await novoPedido(conta26);
+    const { pg: pgOutro26c } = await pagoPorFora(conta26);
+    const linkExp26 = falsa.links.get(codigoDe(exp26.pagamento.checkoutUrl));
+    await avisar(linkExp26.webhook_url, { transaction_nsu: pgOutro26c.transaction_nsu, invoice_slug: pgOutro26c.slug, order_nsu: linkExp26.order_nsu });
+    const [ce0] = await cobrancas(exp26.pedido.id);
+    confere(ce0.aviso_transacao_nsu === pgOutro26c.transaction_nsu && ce0.status_gateway === "nao-pago", "forjado guardado e marcado nao-pago", ce0);
+    const sExp26a = await conta26.req("GET", `/api/orders/${exp26.pedido.id}/pagamento`);
+    confere(sExp26a.json?.etapa === "CONFIRMANDO", "dentro da janela, a tela mostra CONFIRMANDO", sExp26a.json?.etapa);
+    await sql("update pagamentos set avisado_em = now() - interval '40 minutes', consultado_em = null where order_id = $1", [exp26.pedido.id]);
+    confere((await alerta(exp26.pedido.id)) === null, "painel: sem AVISO_NAO_CONFERIDO enquanto a última marca é nao-pago");
+    const sExp26b = await conta26.req("GET", `/api/orders/${exp26.pedido.id}/pagamento`);
+    const [ce1] = await cobrancas(exp26.pedido.id);
+    confere(
+      ce1.aviso_transacao_nsu === null && ce1.status_gateway === "nao-pago" && sExp26b.json?.etapa === "PAGAR" && (await statusPedido(exp26.pedido.id)) === "PENDENTE",
+      "passou da janela: o \"não pago\" é descartado e a cliente volta a PAGAR",
+      { ce1, etapa: sExp26b.json?.etapa },
+    );
+
+    console.log("27. Abuso do aviso: adiado sem gravar, limite por cobrança e por IP");
+    const conta27 = await novaConta("f");
+    // a) Conferida há menos de 3 s: o segundo aviso recebe 400 "adiado" ANTES de qualquer escrita.
+    const ped27 = await novoPedido(conta27);
+    const linkPed27 = falsa.links.get(codigoDe(ped27.pagamento.checkoutUrl));
+    const alheia = async () => {
+      const o = await novoPedido(conta27);
+      return pagar({ codigo: codigoDe(o.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    };
+    const alheiaA = await alheia();
+    const alheiaB = await alheia();
+    const um = await avisar(linkPed27.webhook_url, { transaction_nsu: alheiaA.transaction_nsu, invoice_slug: alheiaA.slug, order_nsu: linkPed27.order_nsu });
+    const dois = await avisar(linkPed27.webhook_url, { transaction_nsu: alheiaB.transaction_nsu, invoice_slug: alheiaB.slug, order_nsu: linkPed27.order_nsu });
+    const [c27] = await cobrancas(ped27.pedido.id);
+    confere(
+      um.status === 400 && dois.status === 400 && (await dois.json()).resultado === "adiado" && c27.aviso_transacao_nsu === alheiaA.transaction_nsu,
+      "segundo aviso em menos de 3 s: 400 adiado, sem gravar (o primeiro candidato continua)",
+      { um: um.status, dois: dois.status },
+    );
+    // b) Limite por cobrança: 30 avisos a cada 10 min; os seguintes recebem 400 "limite" sem tocar no banco.
+    const ped27b = await novoPedido(conta27);
+    const urlB = falsa.links.get(codigoDe(ped27b.pagamento.checkoutUrl)).webhook_url;
+    const respostas = [];
+    for (let i = 0; i < 33; i++) {
+      const r = await avisar(urlB, {});
+      respostas.push({ status: r.status, resultado: (await r.json()).resultado });
+    }
+    confere(
+      respostas.slice(0, 30).every((r) => r.status === 200 && r.resultado === "sem-candidato") && respostas.slice(30).every((r) => r.status === 400 && r.resultado === "limite"),
+      "limite por cobrança: 30 passam, do 31º em diante 400 limite",
+      respostas.map((r) => r.status).join(","),
+    );
+    // c) Limite por IP (o site recebe o IP pelo cabeçalho confiável): 120 por minuto, depois 429.
+    const ipUnico = `10.99.${Math.floor(Math.random() * 200) + 1}.${Math.floor(Math.random() * 200) + 1}`;
+    const tokenRuim = "A".repeat(43);
+    const codigos = [];
+    for (let i = 0; i < 125; i++) {
+      const r = await fetch(`${BASE}/api/webhooks/infinitepay/ped-naoexiste-1/${tokenRuim}`, { method: "POST", headers: { "X-Forwarded-For": ipUnico }, body: "{}" });
+      codigos.push(r.status);
+    }
+    confere(
+      codigos.slice(0, 120).every((c) => c === 401) && codigos.slice(120).every((c) => c === 429),
+      "limite por IP: 120 por minuto (401 do token), depois 429",
+      { primeiros: [...new Set(codigos.slice(0, 120))], ultimos: codigos.slice(120) },
+    );
+    const outroIp = await fetch(`${BASE}/api/webhooks/infinitepay/ped-naoexiste-1/${tokenRuim}`, { method: "POST", headers: { "X-Forwarded-For": "10.99.250.250" }, body: "{}" });
+    confere(outroIp.status === 401, "outro IP não é afetado", outroIp.status);
 
     console.log("21. Token do aviso com segredo próprio");
     if (process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() && process.env.INFINITEPAY_WEBHOOK_SECRET.trim() !== process.env.SESSION_SECRET) {
@@ -922,167 +1095,169 @@ async function main() {
     const fichaEnc = async (id) => (await admin.req("GET", `/api/admin/encomendas/${id}`)).json?.encomenda;
     const idDaConta = () => contas[contas.length - 1];
 
-    console.log("25. O canário de amarração vale também para a parcela de encomenda (entrada e restante)");
-    const conta25 = await novaConta("d");
-    const uid25 = idDaConta();
+    console.log("34. O canário de amarração vale também para a parcela de encomenda (entrada e restante)");
+    const conta34 = await novaConta("enc-d");
+    const uid34 = idDaConta();
     // a) API hipotética que NÃO amarra: a transação do link de OUTRA encomenda, de mesmo valor, apresentada no retorno.
     modo({ naoAmarraPedido: true });
-    const alvo25 = await novaEncomenda("a25", "AGUARDANDO_ENTRADA", { usuario: uid25 });
-    const outro25 = await novaEncomenda("o25", "AGUARDANDO_ENTRADA", { usuario: uid25 });
-    const linkAlvo25 = await abrirLinkEnc(conta25, alvo25, "ENTRADA");
-    const linkOutro25 = await abrirLinkEnc(conta25, outro25, "ENTRADA");
-    const pgOutro25 = await pagar({ codigo: linkOutro25.codigo, metodo: "pix", aviso: false });
-    const antes25 = falsa.chamadas.payment_check;
-    const q25 = new URLSearchParams({ order_nsu: linkAlvo25.order_nsu, transaction_nsu: pgOutro25.transaction_nsu, slug: pgOutro25.slug });
-    const r25 = await conta25.req("GET", `/pagamento/retorno?${q25}`);
-    const [cAlvo25] = await cobrancasEnc(alvo25);
+    const alvo34 = await novaEncomenda("a34", "AGUARDANDO_ENTRADA", { usuario: uid34 });
+    const outro34 = await novaEncomenda("o34", "AGUARDANDO_ENTRADA", { usuario: uid34 });
+    const linkAlvo34 = await abrirLinkEnc(conta34, alvo34, "ENTRADA");
+    const linkOutro34 = await abrirLinkEnc(conta34, outro34, "ENTRADA");
+    const pgOutro34 = await pagar({ codigo: linkOutro34.codigo, metodo: "pix", aviso: false });
+    const antes34 = falsa.chamadas.payment_check;
+    const q34 = new URLSearchParams({ order_nsu: linkAlvo34.order_nsu, transaction_nsu: pgOutro34.transaction_nsu, slug: pgOutro34.slug });
+    const r34 = await conta34.req("GET", `/pagamento/retorno?${q34}`);
+    const [cAlvo34] = await cobrancasEnc(alvo34);
     confere(
-      r25.status === 303 && r25.local === `${BASE}/minhas-encomendas/${alvo25}?retorno=1` && (await linhaEnc(alvo25)).status === "AGUARDANDO_ENTRADA" &&
-        falsa.chamadas.payment_check === antes25 + 2 && semMarcaEnc(cAlvo25) && (await devolucoesEnc(alvo25)).length === 0,
+      r34.status === 303 && r34.local === `${BASE}/minhas-encomendas/${alvo34}?retorno=1` && (await linhaEnc(alvo34)).status === "AGUARDANDO_ENTRADA" &&
+        falsa.chamadas.payment_check === antes34 + 2 && semMarcaEnc(cAlvo34) && (await devolucoesEnc(alvo34)).length === 0,
       "encomenda, API que não amarra: o canário barra o retorno da ENTRADA (duas consultas, nada gravado)",
-      { cAlvo25, consultas: falsa.chamadas.payment_check - antes25 },
+      { cAlvo34, consultas: falsa.chamadas.payment_check - antes34 },
     );
-    await conta25.req("GET", `/pagamento/retorno${new URL(pgOutro25.retorno).search}`);
-    confere((await linhaEnc(outro25)).status === "AGUARDANDO_ENTRADA", "encomenda, API que não amarra: nem a compra de verdade confirma pelo retorno (fail-closed)");
-    await liberarVez(outro25);
-    const avisoOutro25 = await avisar(linkOutro25.webhook_url, pgOutro25.corpoAviso);
-    confere(avisoOutro25.status === 200 && (await linhaEnc(outro25)).status === "CONFIRMADA", "o aviso confirma a entrada de verdade", avisoOutro25.status);
+    await conta34.req("GET", `/pagamento/retorno${new URL(pgOutro34.retorno).search}`);
+    confere((await linhaEnc(outro34)).status === "AGUARDANDO_ENTRADA", "encomenda, API que não amarra: nem a compra de verdade confirma pelo retorno (fail-closed)");
+    await liberarVez(outro34);
+    const avisoOutro34 = await avisar(linkOutro34.webhook_url, pgOutro34.corpoAviso);
+    // O canário vale em toda origem (endurecimento do aviso): com a API que não amarra, nem o aviso confirma; marca divergência para a dona conferir.
+    const [cOutro34] = await cobrancasEnc(outro34);
+    confere(avisoOutro34.status === 200 && (await linhaEnc(outro34)).status === "AGUARDANDO_ENTRADA" && cOutro34.status_gateway === "divergente:nao-amarra", "API que não amarra: o aviso também não confirma a encomenda; grava divergente:nao-amarra", [avisoOutro34.status, cOutro34.status_gateway]);
     modo({});
     // b) Canário com falha (500): não confirma pelo retorno, só retorno_em; depois confirma.
-    const enc25b = await novaEncomenda("b25", "AGUARDANDO_ENTRADA", { usuario: uid25 });
-    const linkB25 = await abrirLinkEnc(conta25, enc25b, "ENTRADA");
-    const pgB25 = await pagar({ codigo: linkB25.codigo, metodo: "pix", aviso: false });
+    const enc25b = await novaEncomenda("b34", "AGUARDANDO_ENTRADA", { usuario: uid34 });
+    const linkB34 = await abrirLinkEnc(conta34, enc25b, "ENTRADA");
+    const pgB34 = await pagar({ codigo: linkB34.codigo, metodo: "pix", aviso: false });
     modo({ falharCanario: 500 });
-    await conta25.req("GET", `/pagamento/retorno${new URL(pgB25.retorno).search}`);
+    await conta34.req("GET", `/pagamento/retorno${new URL(pgB34.retorno).search}`);
     modo({});
-    const [cB25] = await cobrancasEnc(enc25b);
+    const [cB34] = await cobrancasEnc(enc25b);
     confere(
-      (await linhaEnc(enc25b)).status === "AGUARDANDO_ENTRADA" && cB25.status_gateway === "aberto" && cB25.transacao_nsu === null && cB25.retorno_em !== null,
+      (await linhaEnc(enc25b)).status === "AGUARDANDO_ENTRADA" && cB34.status_gateway === "aberto" && cB34.transacao_nsu === null && cB34.retorno_em !== null,
       "encomenda, canário com falha: a entrada não confirma, só retorno_em",
-      cB25,
+      cB34,
     );
     await liberarVez(enc25b);
-    await conta25.req("GET", `/pagamento/retorno${new URL(pgB25.retorno).search}`);
+    await conta34.req("GET", `/pagamento/retorno${new URL(pgB34.retorno).search}`);
     confere((await linhaEnc(enc25b)).status === "CONFIRMADA", "encomenda, canário de volta: o retorno confirma a entrada");
     // c) O mesmo no RESTANTE: barrado com a API que não amarra, e confirmado quando ela amarra.
     modo({ naoAmarraPedido: true });
-    const alvoR25 = await novaEncomenda("r25", "CONFIRMADA", { usuario: uid25 });
-    const outroR25 = await novaEncomenda("s25", "CONFIRMADA", { usuario: uid25 });
-    const linkAlvoR25 = await abrirLinkEnc(conta25, alvoR25, "RESTANTE");
-    const linkOutroR25 = await abrirLinkEnc(conta25, outroR25, "RESTANTE");
-    const pgOutroR25 = await pagar({ codigo: linkOutroR25.codigo, metodo: "pix", aviso: false });
-    const qR25 = new URLSearchParams({ order_nsu: linkAlvoR25.order_nsu, transaction_nsu: pgOutroR25.transaction_nsu, slug: pgOutroR25.slug });
-    await conta25.req("GET", `/pagamento/retorno?${qR25}`);
-    const [cAlvoR25] = await cobrancasEnc(alvoR25);
-    confere((await linhaEnc(alvoR25)).restante_pago_em === null && semMarcaEnc(cAlvoR25), "encomenda, API que não amarra: o retorno do RESTANTE também é barrado", cAlvoR25);
+    const alvoR34 = await novaEncomenda("r34", "CONFIRMADA", { usuario: uid34 });
+    const outroR34 = await novaEncomenda("s34", "CONFIRMADA", { usuario: uid34 });
+    const linkAlvoR34 = await abrirLinkEnc(conta34, alvoR34, "RESTANTE");
+    const linkOutroR34 = await abrirLinkEnc(conta34, outroR34, "RESTANTE");
+    const pgOutroR34 = await pagar({ codigo: linkOutroR34.codigo, metodo: "pix", aviso: false });
+    const qR34 = new URLSearchParams({ order_nsu: linkAlvoR34.order_nsu, transaction_nsu: pgOutroR34.transaction_nsu, slug: pgOutroR34.slug });
+    await conta34.req("GET", `/pagamento/retorno?${qR34}`);
+    const [cAlvoR34] = await cobrancasEnc(alvoR34);
+    confere((await linhaEnc(alvoR34)).restante_pago_em === null && semMarcaEnc(cAlvoR34), "encomenda, API que não amarra: o retorno do RESTANTE também é barrado", cAlvoR34);
     modo({});
-    const pgR25 = await pagar({ codigo: linkAlvoR25.codigo, metodo: "pix", aviso: false });
-    await liberarVez(alvoR25);
-    await conta25.req("GET", `/pagamento/retorno${new URL(pgR25.retorno).search}`);
-    const linhaR25 = await linhaEnc(alvoR25);
-    confere(linhaR25.restante_pago_em !== null && linhaR25.restante_forma === "PIX", "encomenda, API que amarra: o retorno quita o restante", linhaR25);
+    const pgR34 = await pagar({ codigo: linkAlvoR34.codigo, metodo: "pix", aviso: false });
+    await liberarVez(alvoR34);
+    await conta34.req("GET", `/pagamento/retorno${new URL(pgR34.retorno).search}`);
+    const linhaR34 = await linhaEnc(alvoR34);
+    confere(linhaR34.restante_pago_em !== null && linhaR34.restante_forma === "PIX", "encomenda, API que amarra: o retorno quita o restante", linhaR34);
 
-    console.log("26. Conferência que não prende: no máximo 24 h, e a dona tem saída (cancelar; registrar a entrada)");
-    const conta26 = await novaConta("e");
-    const uid26 = idDaConta();
+    console.log("35. Conferência que não prende: no máximo 24 h, e a dona tem saída (cancelar; registrar a entrada)");
+    const conta35 = await novaConta("enc-e");
+    const uid35 = idDaConta();
     // Encomenda aguardando a entrada, com o link aberto e um aviso que a InfinitePay "não consegue conferir" (chave recusada).
     const emConferencia = async (sufixo) => {
-      const id = await novaEncomenda(sufixo, "AGUARDANDO_ENTRADA", { usuario: uid26, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
-      const link = await abrirLinkEnc(conta26, id, "ENTRADA");
+      const id = await novaEncomenda(sufixo, "AGUARDANDO_ENTRADA", { usuario: uid35, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+      const link = await abrirLinkEnc(conta35, id, "ENTRADA");
       modo({ falharConferencia: 401 });
       const pg = await pagar({ codigo: link.codigo, metodo: "pix" });
       return { id, link, pg };
     };
     // a) O aviso recente segura; com mais de 24 h depois do vencimento do link, a encomenda expira; o pagamento que
     //    ainda aparecer depois vira devolução (pagamento tardio) e a cliente a vê na encomenda.
-    const c26a = await emConferencia("a26");
+    const c26a = await emConferencia("a35");
     confere(c26a.pg.aviso?.status === 400, "aviso sem desfecho (chave recusada) → 400", c26a.pg.aviso);
     await sql("update encomendas set entrada_ate = now() - interval '2 hours' where id = $1", [c26a.id]);
     await sql("update pagamentos set expira_em = now() - interval '2 hours' where encomenda_id = $1", [c26a.id]);
-    const seg26 = await dtoEnc(conta26, c26a.id);
+    const seg35 = await dtoEnc(conta35, c26a.id);
     confere(
-      seg26?.statusEfetivo === "AGUARDANDO_ENTRADA" && seg26.pagamentoEmConferencia?.entrada === true && seg26.acoes.pagarEntrada === false &&
-        seg26.acoes.desistirBloqueado === true && seg26.entradaEmFolga === false,
+      seg35?.statusEfetivo === "AGUARDANDO_ENTRADA" && seg35.pagamentoEmConferencia?.entrada === true && seg35.acoes.pagarEntrada === false &&
+        seg35.acoes.desistirBloqueado === true && seg35.entradaEmFolga === false,
       "aviso recente: continua aguardando (não expira), sem 'Pagar' e com a desistência bloqueada",
-      seg26,
+      seg35,
     );
-    const sit26 = await conta26.req("GET", `/api/encomendas/${c26a.id}/pagamento?parcela=ENTRADA`);
-    confere(sit26.json?.etapa === "CONFIRMANDO" && sit26.json.pagamentoEmConferencia === true, "situação da parcela: CONFIRMANDO e pagamentoEmConferencia", sit26.json);
-    const desiste26 = await conta26.req("POST", `/api/encomendas/${c26a.id}/desistir`, { corpo: { devolucaoEsperadaCentavos: 0 } });
-    confere(desiste26.status === 409 && /conferido/.test(desiste26.json?.erro ?? ""), "desistir com pagamento em conferência → 409", desiste26.json);
-    const novoLink26 = await conta26.req("POST", `/api/encomendas/${c26a.id}/pagamento`, { corpo: { parcela: "ENTRADA" } });
-    confere(novoLink26.status === 409, "não abre link novo com o aviso em conferência", novoLink26.json);
+    const sit35 = await conta35.req("GET", `/api/encomendas/${c26a.id}/pagamento?parcela=ENTRADA`);
+    confere(sit35.json?.etapa === "CONFIRMANDO" && sit35.json.pagamentoEmConferencia === true, "situação da parcela: CONFIRMANDO e pagamentoEmConferencia", sit35.json);
+    const desiste35 = await conta35.req("POST", `/api/encomendas/${c26a.id}/desistir`, { corpo: { devolucaoEsperadaCentavos: 0 } });
+    confere(desiste35.status === 409 && /conferido/.test(desiste35.json?.erro ?? ""), "desistir com pagamento em conferência → 409", desiste35.json);
+    const novoLink35 = await conta35.req("POST", `/api/encomendas/${c26a.id}/pagamento`, { corpo: { parcela: "ENTRADA" } });
+    confere(novoLink35.status === 409, "não abre link novo com o aviso em conferência", novoLink35.json);
     await sql("update pagamentos set expira_em = now() - interval '25 hours' where encomenda_id = $1", [c26a.id]);
     await sql("update encomendas set entrada_ate = now() - interval '25 hours' where id = $1", [c26a.id]);
-    const solta26 = await dtoEnc(conta26, c26a.id);
+    const solta35 = await dtoEnc(conta35, c26a.id);
     confere(
-      solta26?.statusEfetivo === "EXPIRADA" && (await linhaEnc(c26a.id)).status === "EXPIRADA" && solta26.pagamentoEmConferencia.entrada === false,
+      solta35?.statusEfetivo === "EXPIRADA" && (await linhaEnc(c26a.id)).status === "EXPIRADA" && solta35.pagamentoEmConferencia.entrada === false,
       "mais de 24 h depois do vencimento do link: não segura mais, a encomenda expira",
-      solta26,
+      solta35,
     );
     // Avisos NOVOS (forjados) não renovam a contagem: ela parte do vencimento do link.
-    const forjado26 = await avisar(c26a.link.webhook_url, { transaction_nsu: `forjado-${marca}`, invoice_slug: c26a.pg.slug });
-    const aindaSolta26 = await dtoEnc(conta26, c26a.id);
-    confere(aindaSolta26?.statusEfetivo === "EXPIRADA" && aindaSolta26.pagamentoEmConferencia.entrada === false, "aviso forjado depois das 24 h não segura de novo", [forjado26.status, aindaSolta26?.statusEfetivo]);
+    const forjado35 = await avisar(c26a.link.webhook_url, { transaction_nsu: `forjado-${marca}`, invoice_slug: c26a.pg.slug });
+    const aindaSolta35 = await dtoEnc(conta35, c26a.id);
+    confere(aindaSolta35?.statusEfetivo === "EXPIRADA" && aindaSolta35.pagamentoEmConferencia.entrada === false, "aviso forjado depois das 24 h não segura de novo", [forjado35.status, aindaSolta35?.statusEfetivo]);
     modo({});
     await liberarVez(c26a.id);
-    const tarde26 = await avisar(c26a.link.webhook_url, c26a.pg.corpoAviso);
-    const dev26 = await devolucoesEnc(c26a.id);
+    const tarde35 = await avisar(c26a.link.webhook_url, c26a.pg.corpoAviso);
+    const dev35 = await devolucoesEnc(c26a.id);
     confere(
-      tarde26.status === 200 && dev26.length === 1 && dev26[0].motivo === "PAGAMENTO_TARDIO" && dev26[0].valor === "45.00" && dev26[0].status === "PENDENTE",
+      tarde35.status === 200 && dev35.length === 1 && dev35[0].motivo === "PAGAMENTO_TARDIO" && dev35[0].valor === "45.00" && dev35[0].status === "PENDENTE",
       "o pagamento que aparece depois vira devolução PAGAMENTO_TARDIO pendente",
-      [tarde26.status, dev26],
+      [tarde35.status, dev35],
     );
-    const eTarde26 = await dtoEnc(conta26, c26a.id);
+    const eTarde35 = await dtoEnc(conta35, c26a.id);
     confere(
-      eTarde26?.statusEfetivo === "EXPIRADA" && eTarde26.devolucao.status === "PENDENTE" && eTarde26.devolucao.pendente === 45,
+      eTarde35?.statusEfetivo === "EXPIRADA" && eTarde35.devolucao.status === "PENDENTE" && eTarde35.devolucao.pendente === 45,
       "contrato para a tela: EXPIRADA com devolução PENDENTE de 45 (a cliente lê 'recebemos seu pagamento depois do prazo')",
-      eTarde26?.devolucao,
+      eTarde35?.devolucao,
     );
     // b) A dona cancela com a conferência aberta (aviso de conferir no app); registrar a entrada espera.
-    const c26c = await emConferencia("c26");
-    const fichaC26 = await fichaEnc(c26c.id);
-    const acCancelar = fichaC26?.acoes.find((a) => a.acao === "cancelar");
-    const acRegistrar = fichaC26?.acoes.find((a) => a.acao === "registrar-entrada");
+    const c26c = await emConferencia("c35");
+    const fichaC35 = await fichaEnc(c26c.id);
+    const acCancelar = fichaC35?.acoes.find((a) => a.acao === "cancelar");
+    const acRegistrar = fichaC35?.acoes.find((a) => a.acao === "registrar-entrada");
     confere(
       acRegistrar?.permitida === false && acCancelar?.permitida === true && /Confira no app InfinitePay antes de cancelar/.test(acCancelar.aviso ?? "") &&
-        fichaC26.pagamentos[0]?.emConferencia === true && fichaC26.pagamentos[0].conferenciaAte !== null,
+        fichaC35.pagamentos[0]?.emConferencia === true && fichaC35.pagamentos[0].conferenciaAte !== null,
       "ficha: registrar-entrada desabilitado, cancelar permitido com o aviso, e o pagamento mostra até quando segura",
-      fichaC26?.acoes,
+      fichaC35?.acoes,
     );
     const reg409 = await acaoEnc(c26c.id, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "PIX" });
     confere(reg409.status === 409 && reg409.json?.detalhes?.motivo === "pagamento-em-conferencia" && reg409.json.detalhes.conferenciaAte, "registrar-entrada com a conferência aberta → 409 com conferenciaAte", reg409.json);
-    const cancela26 = await acaoEnc(c26c.id, { acao: "cancelar", statusEsperado: "AGUARDANDO_ENTRADA", motivo: "Teste e2e: conferência aberta", devolverCentavos: 0 });
+    const cancela35 = await acaoEnc(c26c.id, { acao: "cancelar", statusEsperado: "AGUARDANDO_ENTRADA", motivo: "Teste e2e: conferência aberta", devolverCentavos: 0 });
     confere(
-      cancela26.status === 200 && cancela26.json?.encomenda?.statusEfetivo === "CANCELADA" && /Confira no app InfinitePay antes de cancelar/.test(cancela26.json.aviso ?? ""),
+      cancela35.status === 200 && cancela35.json?.encomenda?.statusEfetivo === "CANCELADA" && /Confira no app InfinitePay antes de cancelar/.test(cancela35.json.aviso ?? ""),
       "cancelar com a conferência aberta → 200, com o aviso de conferir no app",
-      cancela26.json,
+      cancela35.json,
     );
     modo({});
     await liberarVez(c26c.id);
-    const tardeC26 = await avisar(c26c.link.webhook_url, c26c.pg.corpoAviso);
-    const devC26 = await devolucoesEnc(c26c.id);
-    confere(tardeC26.status === 200 && devC26.length === 1 && devC26[0].motivo === "PAGAMENTO_TARDIO" && devC26[0].status === "PENDENTE", "o dinheiro que aparece depois do cancelamento vira devolução pendente", devC26);
+    const tardeC35 = await avisar(c26c.link.webhook_url, c26c.pg.corpoAviso);
+    const devC35 = await devolucoesEnc(c26c.id);
+    confere(tardeC35.status === 200 && devC35.length === 1 && devC35[0].motivo === "PAGAMENTO_TARDIO" && devC35[0].status === "PENDENTE", "o dinheiro que aparece depois do cancelamento vira devolução pendente", devC35);
     // c) Registrar a entrada fora do site (depois que a conferência deixa de segurar).
-    const c26d = await emConferencia("d26");
+    const c26d = await emConferencia("d35");
     await sql("update pagamentos set expira_em = now() - interval '25 hours' where encomenda_id = $1", [c26d.id]);
-    const finAntes26 = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
-    const reg26 = await acaoEnc(c26d.id, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "DINHEIRO", observacao: "Conferi no app (e2e)." });
-    const linhaD26 = await linhaEnc(c26d.id);
+    const finAntes35 = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
+    const reg35 = await acaoEnc(c26d.id, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "DINHEIRO", observacao: "Conferi no app (e2e)." });
+    const linhaD35 = await linhaEnc(c26d.id);
     confere(
-      reg26.status === 200 && linhaD26.status === "CONFIRMADA" && linhaD26.entrada_paga_em !== null && linhaD26.entrada_forma === "DINHEIRO" &&
-        linhaD26.entrada_fora_do_site === true && linhaD26.entrada_observacao === "Conferi no app (e2e)." && linhaD26.entrada_registrada_por_id !== null,
+      reg35.status === 200 && linhaD35.status === "CONFIRMADA" && linhaD35.entrada_paga_em !== null && linhaD35.entrada_forma === "DINHEIRO" &&
+        linhaD35.entrada_fora_do_site === true && linhaD35.entrada_observacao === "Conferi no app (e2e)." && linhaD35.entrada_registrada_por_id !== null,
       "registrar-entrada: CONFIRMADA, com forma, observação e quem registrou",
-      linhaD26,
+      linhaD35,
     );
     confere(
-      reg26.json?.encomenda?.entradaForma === "DINHEIRO" && reg26.json.encomenda.entradaForaDoSite === true && reg26.json.encomenda.linhaDoTempo.some((l) => /fora do site/.test(l.texto)),
+      reg35.json?.encomenda?.entradaForma === "DINHEIRO" && reg35.json.encomenda.entradaForaDoSite === true && reg35.json.encomenda.linhaDoTempo.some((l) => /fora do site/.test(l.texto)),
       "ficha: entrada fora do site na ficha (forma, quem registrou) e na linha do tempo",
-      reg26.json?.encomenda,
+      reg35.json?.encomenda,
     );
     // Com o link da entrada ainda aberto, registrar por fora o encerra no nosso banco e avisa a dona.
-    const enc26f = await novaEncomenda("f26", "AGUARDANDO_ENTRADA", { usuario: uid26, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
-    await abrirLinkEnc(conta26, enc26f, "ENTRADA");
+    const enc26f = await novaEncomenda("f35", "AGUARDANDO_ENTRADA", { usuario: uid35, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+    await abrirLinkEnc(conta35, enc26f, "ENTRADA");
     const reg26f = await acaoEnc(enc26f, { acao: "registrar-entrada", statusEsperado: "AGUARDANDO_ENTRADA", formaPagamento: "PIX" });
     const cobr26f = await cobrancasEnc(enc26f);
     confere(
@@ -1090,37 +1265,37 @@ async function main() {
       "registrar a entrada com o link aberto: o link é encerrado no banco e a dona é avisada",
       [reg26f.status, reg26f.json?.aviso, cobr26f.map((c) => c.status)],
     );
-    const finDepois26 = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
-    const deltaFin26 = (k) => Math.round((finDepois26.entradas.lembrancinhas[k] - finAntes26.entradas.lembrancinhas[k]) * 100) / 100;
-    confere(deltaFin26("sinaisForaDoSite") === 90 && deltaFin26("liquido") === 90, "Financeiro: as duas entradas recebidas por fora entram no mês (sinaisForaDoSite +45 +45)", finDepois26.entradas.lembrancinhas);
-    const segundaVez26 = await acaoEnc(c26d.id, { acao: "registrar-entrada", statusEsperado: "CONFIRMADA", formaPagamento: "PIX" });
-    confere(segundaVez26.status === 409, "registrar a entrada de novo → 409", segundaVez26.json);
+    const finDepois35 = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
+    const deltaFin35 = (k) => Math.round((finDepois35.entradas.lembrancinhas[k] - finAntes35.entradas.lembrancinhas[k]) * 100) / 100;
+    confere(deltaFin35("sinaisForaDoSite") === 90 && deltaFin35("liquido") === 90, "Financeiro: as duas entradas recebidas por fora entram no mês (sinaisForaDoSite +45 +45)", finDepois35.entradas.lembrancinhas);
+    const segundaVez35 = await acaoEnc(c26d.id, { acao: "registrar-entrada", statusEsperado: "CONFIRMADA", formaPagamento: "PIX" });
+    confere(segundaVez35.status === 409, "registrar a entrada de novo → 409", segundaVez35.json);
     modo({});
     await liberarVez(c26d.id);
-    const dupD26 = await avisar(c26d.link.webhook_url, c26d.pg.corpoAviso);
-    const devD26 = await devolucoesEnc(c26d.id);
-    confere(dupD26.status === 200 && devD26.length === 1 && devD26[0].motivo === "PAGAMENTO_DUPLICADO" && devD26[0].status === "PENDENTE", "se o pagamento do site aparecer depois, é devolução por duplicidade (a dona decide)", devD26);
+    const dupD35 = await avisar(c26d.link.webhook_url, c26d.pg.corpoAviso);
+    const devD35 = await devolucoesEnc(c26d.id);
+    confere(dupD35.status === 200 && devD35.length === 1 && devD35[0].motivo === "PAGAMENTO_DUPLICADO" && devD35[0].status === "PENDENTE", "se o pagamento do site aparecer depois, é devolução por duplicidade (a dona decide)", devD35);
     // d) O retorno do navegador não renova a janela para sempre.
-    const enc26e = await novaEncomenda("e26", "AGUARDANDO_ENTRADA", { usuario: uid26, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
-    const link26e = await abrirLinkEnc(conta26, enc26e, "ENTRADA");
+    const enc26e = await novaEncomenda("e35", "AGUARDANDO_ENTRADA", { usuario: uid35, entradaAte: new Date(Date.now() + 3 * 3_600_000) });
+    const link26e = await abrirLinkEnc(conta35, enc26e, "ENTRADA");
     const pg26e = await pagar({ codigo: link26e.codigo, metodo: "pix", aviso: false });
     modo({ conferencia404: true });
-    await conta26.req("GET", `/pagamento/retorno${new URL(pg26e.retorno).search}`);
+    await conta35.req("GET", `/pagamento/retorno${new URL(pg26e.retorno).search}`);
     const [ret1] = await cobrancasEnc(enc26e);
     confere(ret1.retorno_em !== null, "retorno dentro da validade do link grava retorno_em", ret1.retorno_em);
     await sql("update pagamentos set expira_em = now() - interval '40 minutes', consultado_em = null where encomenda_id = $1", [enc26e]);
-    await conta26.req("GET", `/pagamento/retorno${new URL(pg26e.retorno).search}`);
+    await conta35.req("GET", `/pagamento/retorno${new URL(pg26e.retorno).search}`);
     const [ret2] = await cobrancasEnc(enc26e);
     confere(new Date(ret2.retorno_em).getTime() === new Date(ret1.retorno_em).getTime(), "retorno depois de vencimento + 30 min não renova retorno_em", [ret1.retorno_em, ret2.retorno_em]);
     modo({});
 
-    console.log("27. Aviso forjado: o candidato verdadeiro nunca é sobrescrito nem impedido");
-    const conta27 = await novaConta("f");
-    const uid27 = idDaConta();
+    console.log("36. Aviso forjado: o candidato verdadeiro nunca é sobrescrito nem impedido");
+    const conta36 = await novaConta("enc-f");
+    const uid36 = idDaConta();
     // a) O verdadeiro chega primeiro (a InfinitePay não consegue conferir), o forjado depois: o verdadeiro fica e confirma
     //    na reconferência da tela, mesmo sem o aviso se repetir.
-    const enc27a = await novaEncomenda("a27", "AGUARDANDO_ENTRADA", { usuario: uid27 });
-    const link27a = await abrirLinkEnc(conta27, enc27a, "ENTRADA");
+    const enc27a = await novaEncomenda("a36", "AGUARDANDO_ENTRADA", { usuario: uid36 });
+    const link27a = await abrirLinkEnc(conta36, enc27a, "ENTRADA");
     modo({ falharConferencia: 500 });
     const pg27a = await pagar({ codigo: link27a.codigo, metodo: "pix" });
     const forjado27a = await avisar(link27a.webhook_url, { transaction_nsu: `forjado-${marca}-1`, invoice_slug: pg27a.slug });
@@ -1132,11 +1307,11 @@ async function main() {
     );
     modo({});
     await liberarVez(enc27a);
-    const sit27a = await conta27.req("GET", `/api/encomendas/${enc27a}/pagamento?parcela=ENTRADA`);
+    const sit27a = await conta36.req("GET", `/api/encomendas/${enc27a}/pagamento?parcela=ENTRADA`);
     confere(sit27a.json?.etapa === "PAGO" && (await linhaEnc(enc27a)).status === "CONFIRMADA", "a reconferência da tela confirma o verdadeiro", sit27a.json);
     // b) O forjado chega primeiro e fica gravado: o verdadeiro, ao chegar, é conferido na hora e confirma (não depende do espaço).
-    const enc27b = await novaEncomenda("b27", "AGUARDANDO_ENTRADA", { usuario: uid27 });
-    const link27b = await abrirLinkEnc(conta27, enc27b, "ENTRADA");
+    const enc27b = await novaEncomenda("b36", "AGUARDANDO_ENTRADA", { usuario: uid36 });
+    const link27b = await abrirLinkEnc(conta36, enc27b, "ENTRADA");
     modo({ falharConferencia: 500 });
     await avisar(link27b.webhook_url, { transaction_nsu: `forjado-${marca}-2`, invoice_slug: `slug-forjado-${marca}` });
     const [c27b0] = await cobrancasEnc(enc27b);
@@ -1148,11 +1323,11 @@ async function main() {
     const [c27b] = await cobrancasEnc(enc27b);
     confere(c27b.status === "APROVADO" && c27b.transacao_nsu === pg27b.transaction_nsu && c27b.aviso_transacao_nsu === null, "cobrança aprovada com a transação verdadeira; o candidato forjado sai", c27b);
     // c) Forjado sozinho com a InfinitePay no ar: recusado e descartado, nada segura.
-    const enc27c = await novaEncomenda("c27", "AGUARDANDO_ENTRADA", { usuario: uid27 });
-    const link27c = await abrirLinkEnc(conta27, enc27c, "ENTRADA");
+    const enc27c = await novaEncomenda("c36", "AGUARDANDO_ENTRADA", { usuario: uid36 });
+    const link27c = await abrirLinkEnc(conta36, enc27c, "ENTRADA");
     const forjado27c = await avisar(link27c.webhook_url, { transaction_nsu: `forjado-${marca}-3`, invoice_slug: `slug-forjado-${marca}` });
     const [c27c] = await cobrancasEnc(enc27c);
-    const e27c = await dtoEnc(conta27, enc27c);
+    const e27c = await dtoEnc(conta36, enc27c);
     confere(
       forjado27c.status === 200 && c27c.aviso_transacao_nsu === null && e27c.pagamentoEmConferencia.entrada === false && e27c.acoes.pagarEntrada === true,
       "aviso forjado com a InfinitePay no ar: recusado e descartado, a cliente continua podendo pagar",
@@ -1160,7 +1335,7 @@ async function main() {
     );
 
     console.log("28. Folga de 30 min depois do prazo da entrada: paga no último minuto confirma; depois da folga é pagamento tardio");
-    const conta28 = await novaConta("g");
+    const conta28 = await novaConta("enc-g");
     const uid28 = idDaConta();
     // a) Dentro da folga.
     const enc28a = await novaEncomenda("a28", "AGUARDANDO_ENTRADA", { usuario: uid28, entradaAte: new Date(Date.now() + 10 * 60_000) });
@@ -1234,7 +1409,7 @@ async function main() {
     );
 
     console.log("30. Idempotência completa, limite de 3 abertas, trava de ambiente e o percentual aceito");
-    const conta30 = await novaConta("h");
+    const conta30 = await novaConta("enc-h");
     const uid30 = idDaConta();
     const chave30 = `e2e-${marca}-idem`;
     const cfg30 = (await admin.req("GET", "/api/admin/lembrancinhas")).json.config;
@@ -1292,7 +1467,7 @@ async function main() {
         confere(ent3.status === 200 && ent3.json?.encomenda?.id === ent1.json?.encomenda?.id, "mesma chave e mesmo endereço → 200");
         // Conta nova (o limite de 10 solicitações por hora da conta "h" já foi quase todo usado acima), com 2 encomendas
         // abertas: o limite é de 3, e a corrida da mesma chave devolve a primeira, não 429.
-        const contaL = await novaConta("j");
+        const contaL = await novaConta("enc-j");
         const uidL = idDaConta();
         await novaEncomenda("l1", "SOLICITADA", { usuario: uidL });
         await novaEncomenda("l2", "AGUARDANDO_ENTRADA", { usuario: uidL });
@@ -1401,7 +1576,7 @@ async function main() {
     confere(typeof despSet?.lembrancinhas === "number", "Despesas também traz o líquido das lembrancinhas do mês", despSet?.lembrancinhas);
 
     console.log("33. Desistência: antes e depois do corte, prévia que mudou entre a tela e o clique, link aberto");
-    const conta33 = await novaConta("i");
+    const conta33 = await novaConta("enc-i");
     const uid33 = idDaConta();
     const desistir = (cli, id, esperado, extra = {}) => cli.req("POST", `/api/encomendas/${id}/desistir`, { corpo: { devolucaoEsperadaCentavos: esperado }, ...extra });
     // a) Antes do corte: devolve tudo (e a de outra conta não enxerga).

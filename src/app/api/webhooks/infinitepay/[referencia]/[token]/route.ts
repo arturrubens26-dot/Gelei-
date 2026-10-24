@@ -1,5 +1,6 @@
 import { unstable_rethrow } from "next/navigation";
 import { comTratamento, lerJsonDoAviso, registrarErro } from "@/lib/api";
+import { dentroDoLimite, dentroDoLimitePorCliente } from "@/lib/auth/limitador";
 import { infinitePayConfigurado } from "@/lib/infinitepay";
 import { avisoAutentico, processarAvisoDaInfinitePay } from "@/lib/pagamentos";
 
@@ -9,13 +10,19 @@ const FORMATO_ENSAIO = /^ensaio-\d{12}$/;
 /**
  * POST /api/webhooks/infinitepay/<referencia>/<token> — aviso de pagamento aprovado da InfinitePay.
  *
- * O aviso NÃO é prova de nada (não é assinado): o token HMAC da cobrança no caminho prova só que quem
- * chama conhece a URL que nós demos; a transação e o slug do corpo viram um "candidato", e o servidor
- * confere no payment_check com a própria chave, a referência do NOSSO banco e o valor
- * (src/lib/pagamentos.ts). Sem CSRF: é servidor para servidor.
+ * O aviso NÃO é prova de nada (não é assinado). O token HMAC da cobrança no caminho filtra só
+ * terceiros: a cliente o vê no código das páginas de pagamento e do comprovante da InfinitePay (ensaio,
+ * passo 8), então o aviso é dado da cliente, como o retorno do navegador, e a segurança vem da
+ * conferência, não do token. A transação e o slug do corpo viram um "candidato": o servidor confere no
+ * payment_check com a própria chave, a referência do NOSSO banco, o valor e o canário de amarração, e
+ * só DEPOIS guarda o candidato (sem trocar outro dentro da janela; src/lib/pagamentos.ts). Sem CSRF: é
+ * servidor para servidor. A InfinitePay repete o aviso só por ~3 min depois de um 400.
  *
  * Respostas (`{ recebido, resultado }`):
+ * - 429: mais de 120 avisos por minuto do mesmo IP (só com IP_HEADER_CONFIAVEL);
  * - 401: token errado (nada é lido nem gravado);
+ * - 400 "limite": mais de 30 avisos em 10 min para a mesma cobrança; 400 "adiado": a cobrança foi
+ *   conferida há menos de 3 s (nos dois, nada é gravado);
  * - 200: confirmado, já confirmado antes, divergente (a dona confere no app), recusado de vez ou
  *   ignorado (cobrança desconhecida, corpo sem transação);
  * - 400: a InfinitePay não respondeu à conferência, ainda não acha a transação, ainda não marca como
@@ -34,9 +41,21 @@ export const POST = comTratamento(
       console.info(`[webhooks/infinitepay] aviso de ENSAIO ${referencia} recebido; respondendo 400 de propósito`);
       return Response.json({ recebido: false, resultado: "ensaio" }, { status: 400 });
     }
+    // Limites em memória, ANTES de qualquer leitura de corpo ou consulta ao banco. Por IP: muito acima
+    // do que a InfinitePay manda (ela repetiu o aviso 5 vezes em ~3 min, por cobrança). Sem IP
+    // confiável (IP_HEADER_CONFIAVEL), não há limite por IP.
+    if (!dentroDoLimitePorCliente(request, "webhook-infinitepay", { porIp: 120, janelaMs: 60_000 })) {
+      return Response.json({ recebido: false, resultado: "limite-ip" }, { status: 429 });
+    }
     // O token é conferido ANTES de ler o corpo: quem não tem a URL não gasta nem a leitura.
     if (!avisoAutentico(referencia, token)) {
       return Response.json({ recebido: false, resultado: "token-invalido" }, { status: 401 });
+    }
+    // Por cobrança: o token é conhecido da cliente (aparece na página da InfinitePay), então um
+    // laço de avisos não pode virar um laço de consultas. 400, para um aviso de verdade que passe do
+    // limite ser repetido pela InfinitePay depois.
+    if (!dentroDoLimite(`webhook-infinitepay-ref|${referencia}`, 30, 10 * 60_000)) {
+      return Response.json({ recebido: false, resultado: "limite" }, { status: 400 });
     }
     // Daqui em diante, QUALQUER falha (banco fora, corpo grande demais, erro inesperado) responde 400:
     // é o código que a InfinitePay repete. Um 500 ou 503 poderia fazer o aviso se perder.

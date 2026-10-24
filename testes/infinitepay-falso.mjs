@@ -21,8 +21,11 @@
 //   POST /__teste/pagar  { codigo, metodo?, parcelas?, valorErrado?, aviso? } → { transaction_nsu, slug, order_nsu, retorno, aviso }
 //   POST /__teste/modo   { falharConferencia?: 0|500|"tempo", falharLinks?: 0|500, comSlug?, naoAmarraPedido?,
 //                          conferencia404?, falharCanario?: 0|404|500|"tempo" }
+//                        canarioCego? }
 //                        (naoAmarraPedido: uma API hipotética que NÃO amarra a transação; falharCanario: falha
-//                        só a consulta com um order_nsu que nenhum link tem, como o canário do retorno)
+//                        só a consulta com um order_nsu que nenhum link tem, como o canário; canarioCego: junto
+//                        com naoAmarraPedido, responde "não pago" ao order_nsu que nenhum link tem, enganando o
+//                        canário: o UNIQUE da transação passa a ser a última barreira)
 //   GET  /__teste/estado → links e transações
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -37,6 +40,7 @@ export const MODO_PADRAO = Object.freeze({
   naoAmarraPedido: false,
   conferencia404: false,
   falharCanario: 0,
+  canarioCego: false,
 });
 
 export function iniciarInfinitePayFalsa({ porta = 4010, host = "127.0.0.1", silencioso = false } = {}) {
@@ -199,7 +203,7 @@ ${botao("Aviso falso (transação inexistente)", { metodo: "pix", avisoFalso: 1 
           capture_method: t.capture_method,
         });
         // API hipotética que não amarra: qualquer transação existente responde "pago".
-        if (t && modo.naoAmarraPedido) return json(res, 200, pago(t));
+        if (t && modo.naoAmarraPedido && !(modo.canarioCego && desconhecido)) return json(res, 200, pago(t));
         // Slug errado (ou transação inexistente): success=false (ensaio: order_nsu certo e slug errado).
         if (!t || t.slug !== b.slug) return json(res, 200, { success: false });
         // Transação e slug certos, com OUTRO order_nsu: "não pago", com tudo zerado (ensaio, passo 6).

@@ -81,7 +81,10 @@ export function alvoDaCobranca(c: {
 /**
  * Token do aviso, por cobrança: HMAC-SHA256(SESSION_SECRET, "infinitepay-aviso:" + order_nsu), em
  * base64url. Vai no CAMINHO do webhook_url (não se sabe se a InfinitePay preserva a query). O aviso
- * não é assinado: sem a URL certa, ninguém consegue nem gravar um candidato.
+ * não é assinado, e o token NÃO é segredo da cliente: a página de pagamento e a do comprovante da
+ * InfinitePay mostram o webhook_url completo (ensaio de 2026-10-23, passo 8). Ele filtra só
+ * terceiros; o corpo do aviso é dado da cliente, como o do retorno, e a segurança vem da conferência
+ * (referência do nosso banco, valor e canário de amarração, em src/lib/pagamentos.ts).
  */
 export function tokenDoAviso(segredo: string, referencia: string): string {
   return createHmac("sha256", segredo).update(`infinitepay-aviso:${referencia}`).digest("base64url");
