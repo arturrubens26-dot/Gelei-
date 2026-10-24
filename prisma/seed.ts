@@ -61,35 +61,40 @@ const produtos = [
   {
     id: "pimenta-112g",
     nome: "Pimenta, 112g",
-    descricao: "Geleia de pimenta com ardência equilibrada. Para petiscos, queijos e carnes.",
+    descricao:
+      "Vermelha e brilhante, com a ardência na medida certa: o doce chega primeiro e a pimenta vem logo depois. Transforma uma tábua de queijos em petisco de festa.",
     preco: "15.00",
     pesoGramas: 112,
   },
   {
     id: "abacaxi-com-pimenta-125g",
     nome: "Abacaxi com Pimenta, 125g",
-    descricao: "O doce do abacaxi com um ardido suave de pimenta. Vai bem com queijos e carnes.",
+    descricao:
+      "Abacaxi cozido devagar com pimenta: começa doce e tropical e termina com um calorzinho que pede mais uma colherada. Pedacinhos de fruta e de pimenta à vista no pote.",
     preco: "15.00",
     pesoGramas: 125,
   },
   {
     id: "abacaxi-125g",
     nome: "Abacaxi, 125g",
-    descricao: "Abacaxi maduro cozido devagar até virar geleia. Doce na medida, com acidez leve.",
+    descricao:
+      "Abacaxi maduro cozido em fogo baixo até virar geleia dourada, doce na medida e com a acidez leve da fruta. Boa no café da manhã e nas receitas.",
     preco: "15.00",
     pesoGramas: 125,
   },
   {
     id: "morango-112g",
     nome: "Morango, 112g",
-    descricao: "Morangos selecionados, cozidos em fogo baixo. Sabor de fruta de verdade.",
+    descricao:
+      "Morangos selecionados cozidos em fogo baixo, com o vermelho vivo e o aroma da fruta. Um clássico que combina com pães, bolos e sobremesas.",
     preco: "15.00",
     pesoGramas: 112,
   },
   {
     id: "maracuja-125g",
     nome: "Maracujá, 125g",
-    descricao: "Polpa de maracujá com sementes, azedinha e perfumada. Ótima em torradas e sobremesas.",
+    descricao:
+      "Polpa de maracujá com as sementes, azedinha e perfumada, no ponto entre o doce e o ácido. Cobertura pronta para sobremesas e ótima nas torradas.",
     preco: "15.00",
     pesoGramas: 125,
   },
@@ -102,15 +107,25 @@ const produtos = [
  */
 const VERSO: Record<(typeof produtos)[number]["id"], { harmonizacoes: string[]; destaques: string[] }> = {
   "pimenta-112g": {
-    harmonizacoes: ["Cream cheese com torradas", "Queijo coalho na chapa", "Costelinha e carnes assadas", "Tábua de frios"],
+    harmonizacoes: [
+      "Cream cheese com torradas",
+      "Queijo coalho na chapa",
+      "Brie ou gouda com pão italiano",
+      "Tábua de frios e carnes assadas",
+    ],
     destaques: [
       "Doce e picante na mesma colherada",
-      "Vermelho intenso que deixa a tábua de frios bonita",
+      "Vermelho brilhante que embeleza qualquer tábua de queijos",
       "Transforma um petisco simples em entrada de festa",
     ],
   },
   "abacaxi-com-pimenta-125g": {
-    harmonizacoes: ["Queijo coalho na brasa", "Lombo ou pernil assado", "Frango grelhado", "Cream cheese com biscoito salgado"],
+    harmonizacoes: [
+      "Queijo coalho na brasa",
+      "Cream cheese com torrada integral",
+      "Muçarela de búfala com pão italiano",
+      "Lombo, pernil e frango grelhado",
+    ],
     destaques: [
       "O doce do abacaxi com um toque picante",
       "Pedacinhos de fruta e de pimenta à vista no pote",
@@ -118,7 +133,12 @@ const VERSO: Record<(typeof produtos)[number]["id"], { harmonizacoes: string[]; 
     ],
   },
   "abacaxi-125g": {
-    harmonizacoes: ["Pão quentinho com manteiga", "Bolo simples e rocambole", "Iogurte com frutas", "Queijo minas frescal"],
+    harmonizacoes: [
+      "Pão francês quentinho com manteiga",
+      "Queijo minas frescal ou ricota",
+      "Torradas com cream cheese",
+      "Iogurte, bolo simples e rocambole",
+    ],
     destaques: [
       "Sabor de abacaxi, docinho com a acidez da fruta",
       "Cor dourada que alegra o café da manhã",
@@ -126,11 +146,21 @@ const VERSO: Record<(typeof produtos)[number]["id"], { harmonizacoes: string[]; 
     ],
   },
   "maracuja-125g": {
-    harmonizacoes: ["Cheesecake e mousse", "Iogurte com granola", "Queijo brie ou camembert", "Torradas no café da manhã"],
+    harmonizacoes: [
+      "Brie ou camembert com torradas",
+      "Cream cheese no pão de forma tostado",
+      "Cheesecake, mousse e panna cotta",
+      "Iogurte natural com granola",
+    ],
     destaques: ["Azedinha e perfumada, como a fruta", "Com as sementes, que dão crocância", "Cobertura pronta para sobremesas"],
   },
   "morango-112g": {
-    harmonizacoes: ["Torradas e pão com manteiga", "Panqueca e waffle", "Sorvete de creme", "Queijo brie ou cream cheese"],
+    harmonizacoes: [
+      "Pão com manteiga e torradas",
+      "Cream cheese ou ricota fresca",
+      "Brie ou camembert com torradas",
+      "Panqueca, waffle e sorvete de creme",
+    ],
     destaques: [
       "Um clássico do café da manhã e do lanche",
       "Vermelho vivo e aroma de morango",

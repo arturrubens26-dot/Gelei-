@@ -58,10 +58,12 @@ describe("e-mail de contato", () => {
 });
 
 describe("pendências legais", () => {
-  it("vazio bloqueia (a constante nasce vazia)", () => {
+  it("vazio bloqueia", () => {
     assert.deepEqual(pendenciasLegais({ documento: null, email: null }), ["o CNPJ (ou CPF) da loja", "o e-mail de contato"]);
     assert.deepEqual(pendenciasLegais({ documento: "  ", email: "" }), ["o CNPJ (ou CPF) da loja", "o e-mail de contato"]);
-    assert.deepEqual(pendenciasLegais(dadosLegais), ["o CNPJ (ou CPF) da loja", "o e-mail de contato"], "o que está no código hoje");
+  });
+  it("os dados que estão no código hoje (CPF e e-mail da dona) não deixam pendência", () => {
+    assert.deepEqual(pendenciasLegais(dadosLegais), []);
   });
   it("preenchido com formato inválido continua bloqueando, com a mensagem certa", () => {
     assert.deepEqual(pendenciasLegais({ documento: "123", email: "contato@" }), ["um CNPJ (ou CPF) válido da loja", "um e-mail de contato válido"]);

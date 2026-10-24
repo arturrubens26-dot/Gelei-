@@ -67,7 +67,7 @@ export function CaixaDoKit({
         width={logos.principal.largura}
         height={logos.principal.altura}
         sizes={tamanhos.logo}
-        className="pointer-events-none absolute left-[22%] top-[3.5%] h-auto w-[27%] select-none"
+        className="pointer-events-none absolute left-[23.5%] top-[6%] h-auto w-[24%] select-none"
       />
 
       {/* Janela da caixa: o fundo é o papelão de dentro, mais escuro em cima (na sombra da tampa). */}
