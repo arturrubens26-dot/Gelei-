@@ -14,3 +14,10 @@ export function diaComSemana(dia: string): string {
 
 /** "2026-11-07" → "07/11". */
 export const diaCurto = (dia: string) => formatarDia(dia).slice(0, 5);
+
+/** 24 → "24 horas"; 1 → "1 hora"; 0,5 → "30 minutos"; 3,5 → "3,5 horas". */
+export function textoDeHoras(horas: number): string {
+  if (horas < 1) return `${Math.round(horas * 60)} minutos`;
+  const texto = Number.isInteger(horas) ? String(horas) : horas.toFixed(1).replace(".", ",");
+  return `${texto} ${horas === 1 ? "hora" : "horas"}`;
+}

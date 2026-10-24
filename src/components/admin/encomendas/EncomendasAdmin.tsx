@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import { CartaoEncomendaAdmin } from "@/components/admin/encomendas/comum";
 import { diaComSemana, diaCurto } from "@/components/lembrancinhas/datas";
+import { formatarPrazo, prazoDaEntrada } from "@/lib/encomendas-regras";
 import type { EncomendaAdminDTO, ListaEncomendasAdminDTO, VisaoEncomendas } from "@/lib/encomendas-admin";
 
 const ABAS: { visao: VisaoEncomendas; rotulo: string; contagem?: keyof ListaEncomendasAdminDTO["contagens"] }[] = [
@@ -73,7 +74,7 @@ export function EncomendasAdmin({ visaoInicial }: { visaoInicial: VisaoEncomenda
   }
 
   async function aprovar(e: EncomendaAdminDTO) {
-    if (!window.confirm(`Aprovar a encomenda ${e.codigo} (${e.potinhos} potinhos, ${e.modoEntrega === "RETIRADA" ? "retirada" : "entrega"} em ${diaCurto(e.dataEntrega)})? A cliente terá 24 horas para pagar a entrada.`)) return;
+    if (!window.confirm(`Aprovar a encomenda ${e.codigo} (${e.potinhos} potinhos, ${e.modoEntrega === "RETIRADA" ? "retirada" : "entrega"} em ${diaCurto(e.dataEntrega)})? A cliente terá até ${formatarPrazo(prazoDaEntrada(new Date(), new Date(e.prazos.corteEm)))} para pagar a entrada.`)) return;
     setOcupado(e.id);
     setMensagem(null);
     try {

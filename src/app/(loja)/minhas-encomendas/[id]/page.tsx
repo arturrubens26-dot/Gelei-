@@ -114,6 +114,7 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
               situacaoInicial={entrada}
               pagarAte={e.prazos.entradaAte}
               descricao="50% do valor dos potinhos, para confirmar a encomenda."
+              horasParaPagar={e.prazos.horasParaPagarEntrada}
               restanteForaDoSite={false}
             />
             <PagamentoDaParcela
@@ -123,6 +124,7 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
               situacaoInicial={restante}
               pagarAte={null}
               descricao={`${e.frete > 0 ? "Inclui a taxa de entrega. " : ""}Pague até o dia da ${palavra} (${diaCurto(e.dataEntrega)}).`}
+              horasParaPagar={e.prazos.horasParaPagarEntrada}
               restanteForaDoSite={e.restanteForaDoSite}
             />
           </div>

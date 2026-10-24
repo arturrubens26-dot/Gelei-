@@ -12,6 +12,7 @@ import { formatarBRL } from "@/lib/dinheiro";
 import { textosDaPolitica } from "@/lib/encomendas-politica";
 import {
   ANTECEDENCIA_MIN_DIAS,
+  HORAS_PARA_PAGAR_ENTRADA,
   TAMANHO_MAX_TEXTO,
   calcularValores,
   corteDaEntrega,
@@ -663,7 +664,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
           <li className="flex items-baseline justify-between gap-4 rounded-md border border-accent2/60 bg-white/70 p-3">
             <span>
               <strong className="font-semibold">Entrada (50% dos potinhos)</strong>
-              <span className="block text-primaria/80">Depois que a Geleiô aprovar, em até 24 horas, pelo site (PIX ou cartão).</span>
+              <span className="block text-primaria/80">Depois que a Geleiô aprovar, em até {HORAS_PARA_PAGAR_ENTRADA} horas (nunca depois do prazo de desistência), pelo site (PIX ou cartão).</span>
             </span>
             <span className="shrink-0 font-semibold tabular-nums">{contas ? brl(contas.entrada) : "—"}</span>
           </li>

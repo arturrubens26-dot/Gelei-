@@ -9,7 +9,7 @@ import { Ornamento } from "@/components/marca/Ornamento";
 import { getUsuarioAtual } from "@/lib/auth/dal";
 import { hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
-import { ANTECEDENCIA_MIN_DIAS, DIAS_CORTE_ANTES_DA_ENTREGA } from "@/lib/encomendas-regras";
+import { ANTECEDENCIA_MIN_DIAS, DIAS_CORTE_ANTES_DA_ENTREGA, HORAS_PARA_PAGAR_ENTRADA } from "@/lib/encomendas-regras";
 import { listarEnderecos } from "@/lib/enderecos";
 import { obterTaxaDeEntregaCentavos } from "@/lib/entrega";
 import { obterLembrancinhas, type LembrancinhasDTO } from "@/lib/lembrancinhas";
@@ -99,7 +99,7 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
             Conferimos a agenda e respondemos até o dia seguinte. Você acompanha tudo em Minhas encomendas.
           </Passo>
           <Passo numero={3} titulo="Você paga a entrada">
-            50% do valor dos potinhos, em até 24 horas depois da aprovação, com PIX ou cartão. Aí a encomenda está confirmada.
+            50% do valor dos potinhos, em até {HORAS_PARA_PAGAR_ENTRADA} horas depois da aprovação (nunca depois do prazo de desistência), com PIX ou cartão. Aí a encomenda está confirmada.
           </Passo>
           <Passo numero={4} titulo="Preparo e entrega">
             O restante é pago até o dia da entrega ou da retirada. Dá para desistir com devolução integral até {DIAS_CORTE_ANTES_DA_ENTREGA}{" "}

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
+import { textoDeHoras } from "@/components/lembrancinhas/datas";
 import { LinkInstagram, PagamentoConfirmado, PagamentoPorEtapa, temEtapaECobranca } from "@/components/checkout/PagamentoPorEtapa";
 import { SeloDaEtapa } from "@/components/checkout/SeloDoPagamento";
 import { formatarBRL } from "@/lib/dinheiro";
@@ -70,6 +71,8 @@ type Props = {
   pagarAte: string | null;
   /** Frase sob o título: o que a parcela cobre e até quando (ex.: "Inclui a entrega. Até o dia da entrega (07/11)."). */
   descricao: string;
+  /** Horas que ela terá para pagar a entrada (`prazos.horasParaPagarEntrada`: 24 h, ou menos se o prazo de desistência vier antes). */
+  horasParaPagar: number;
   /** O restante foi recebido pela Geleiô fora do site (dinheiro, PIX direto). */
   restanteForaDoSite: boolean;
 };
@@ -80,7 +83,7 @@ type Props = {
  * na volta, `?retorno=1`), pago com método e comprovante. Ao mudar de etapa para paga ou encerrada,
  * a página inteira se atualiza (status, prazos, a outra parcela e a desistência mudam juntos).
  */
-export function PagamentoDaParcela({ encomendaId, parcela, valor, situacaoInicial, pagarAte, descricao, restanteForaDoSite }: Props) {
+export function PagamentoDaParcela({ encomendaId, parcela, valor, situacaoInicial, pagarAte, descricao, horasParaPagar, restanteForaDoSite }: Props) {
   const router = useRouter();
   const base = `/api/encomendas/${encodeURIComponent(encomendaId)}`;
   const corpo = JSON.stringify({ parcela });
@@ -138,7 +141,7 @@ export function PagamentoDaParcela({ encomendaId, parcela, valor, situacaoInicia
         return s.motivoIndisponivel !== "PAGAMENTO_FORA_DO_AR" ? (
           <p className="text-primaria/85">
             {parcela === "ENTRADA"
-              ? "Liberada quando a Geleiô aprovar a encomenda. Você terá 24 horas para pagar."
+              ? `Liberada quando a Geleiô aprovar a encomenda. Você terá ${textoDeHoras(horasParaPagar)} para pagar.`
               : "Liberado depois que a entrada for paga."}
           </p>
         ) : (
