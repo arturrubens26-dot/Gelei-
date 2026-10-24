@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { EstoqueInsumos } from "./EstoqueInsumos";
 import { ListaProducoes } from "./ListaProducoes";
 
@@ -8,7 +8,15 @@ type Aba = "producoes" | "estoque";
 
 /** Página Produção: os lotes de geleia e o estoque de insumos (duas visões da mesma cozinha). */
 export function ProducaoAdmin() {
-  const [aba, setAba] = useState<Aba>("producoes");
+  // A aba vem do endereço (?aba=estoque): o menu tem um atalho para o estoque, e o "voltar" a respeita.
+  const aba: Aba = useSearchParams().get("aba") === "estoque" ? "estoque" : "producoes";
+  function setAba(alvo: Aba) {
+    const url = new URL(window.location.href);
+    if (alvo === "estoque") url.searchParams.set("aba", "estoque");
+    else url.searchParams.delete("aba");
+    // O Next acompanha o history.replaceState: useSearchParams (e o item marcado do menu) mudam junto, sem buscar a página de novo.
+    window.history.replaceState(null, "", url);
+  }
   const botao = (alvo: Aba, rotulo: string) => (
     <button
       type="button"

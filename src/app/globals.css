@@ -5,6 +5,13 @@
 /* Tokens (cores, fontes, utilitários gingham) vêm do design system. */
 @config "../../tailwind.config.ts";
 
+/* Menu do painel (components/admin/menu). "fixado": o <html data-painel-fixado="true"> que o script do
+   <head> põe antes da primeira pintura. "aberto": o trilho com data-aberto="true" (mouse ou teclado).
+   "expandido": os filhos do trilho, quando ele está aberto ou fixado (rótulos e títulos aparecem). */
+@custom-variant fixado (html[data-painel-fixado="true"] &);
+@custom-variant aberto (&[data-aberto="true"]);
+@custom-variant expandido (&:is(.painel-menu[data-aberto="true"] *, html[data-painel-fixado="true"] .painel-menu *));
+
 @layer base {
   :root {
     color-scheme: light;
@@ -333,6 +340,27 @@
     opacity: 1;
     transform: none;
   }
+}
+
+/* A gaveta do menu do painel (celular e tablet) entra pela esquerda; com movimento reduzido, aparece parada. */
+@keyframes gaveta-entra {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes fundo-da-gaveta {
+  from {
+    opacity: 0;
+  }
+}
+
+.gaveta-painel[open] {
+  animation: gaveta-entra 0.22s ease-out;
+}
+
+.gaveta-painel[open]::backdrop {
+  animation: fundo-da-gaveta 0.22s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

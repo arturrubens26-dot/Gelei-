@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SCRIPT_MENU_FIXADO } from "@/components/admin/menu/scriptDoMenu";
 import { marca } from "@/design-system";
 import "./globals.css";
 
@@ -14,8 +15,11 @@ export const metadata: Metadata = {
 // painel administrativo tem o próprio layout em (admin)/admin/layout.tsx.
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="pt-BR" className="h-full">
+    // suppressHydrationWarning: o script do <head> põe data-painel-fixado no <html> antes do React hidratar.
+    <html lang="pt-BR" className="h-full" suppressHydrationWarning>
       <head>
+        {/* Menu do painel fixado ou recolhido, lido antes da primeira pintura (a barra não pisca). */}
+        <script dangerouslySetInnerHTML={{ __html: SCRIPT_MENU_FIXADO }} />
         {/* As fontes vêm do Google Fonts via @import (globals.css). Abrir a conexão antes encurta a espera. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
