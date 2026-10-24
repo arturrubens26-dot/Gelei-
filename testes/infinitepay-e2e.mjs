@@ -745,6 +745,54 @@ async function main() {
       { ce1, etapa: sExp26b.json?.etapa },
     );
 
+    console.log("27. Abuso do aviso: adiado sem gravar, limite por cobrança e por IP");
+    const conta27 = await novaConta("f");
+    // a) Conferida há menos de 3 s: o segundo aviso recebe 400 "adiado" ANTES de qualquer escrita.
+    const ped27 = await novoPedido(conta27);
+    const linkPed27 = falsa.links.get(codigoDe(ped27.pagamento.checkoutUrl));
+    const alheia = async () => {
+      const o = await novoPedido(conta27);
+      return pagar({ codigo: codigoDe(o.pagamento.checkoutUrl), metodo: "pix", aviso: false });
+    };
+    const alheiaA = await alheia();
+    const alheiaB = await alheia();
+    const um = await avisar(linkPed27.webhook_url, { transaction_nsu: alheiaA.transaction_nsu, invoice_slug: alheiaA.slug, order_nsu: linkPed27.order_nsu });
+    const dois = await avisar(linkPed27.webhook_url, { transaction_nsu: alheiaB.transaction_nsu, invoice_slug: alheiaB.slug, order_nsu: linkPed27.order_nsu });
+    const [c27] = await cobrancas(ped27.pedido.id);
+    confere(
+      um.status === 400 && dois.status === 400 && (await dois.json()).resultado === "adiado" && c27.aviso_transacao_nsu === alheiaA.transaction_nsu,
+      "segundo aviso em menos de 3 s: 400 adiado, sem gravar (o primeiro candidato continua)",
+      { um: um.status, dois: dois.status },
+    );
+    // b) Limite por cobrança: 30 avisos a cada 10 min; os seguintes recebem 400 "limite" sem tocar no banco.
+    const ped27b = await novoPedido(conta27);
+    const urlB = falsa.links.get(codigoDe(ped27b.pagamento.checkoutUrl)).webhook_url;
+    const respostas = [];
+    for (let i = 0; i < 33; i++) {
+      const r = await avisar(urlB, {});
+      respostas.push({ status: r.status, resultado: (await r.json()).resultado });
+    }
+    confere(
+      respostas.slice(0, 30).every((r) => r.status === 200 && r.resultado === "sem-candidato") && respostas.slice(30).every((r) => r.status === 400 && r.resultado === "limite"),
+      "limite por cobrança: 30 passam, do 31º em diante 400 limite",
+      respostas.map((r) => r.status).join(","),
+    );
+    // c) Limite por IP (o site recebe o IP pelo cabeçalho confiável): 120 por minuto, depois 429.
+    const ipUnico = `10.99.${Math.floor(Math.random() * 200) + 1}.${Math.floor(Math.random() * 200) + 1}`;
+    const tokenRuim = "A".repeat(43);
+    const codigos = [];
+    for (let i = 0; i < 125; i++) {
+      const r = await fetch(`${BASE}/api/webhooks/infinitepay/ped-naoexiste-1/${tokenRuim}`, { method: "POST", headers: { "X-Forwarded-For": ipUnico }, body: "{}" });
+      codigos.push(r.status);
+    }
+    confere(
+      codigos.slice(0, 120).every((c) => c === 401) && codigos.slice(120).every((c) => c === 429),
+      "limite por IP: 120 por minuto (401 do token), depois 429",
+      { primeiros: [...new Set(codigos.slice(0, 120))], ultimos: codigos.slice(120) },
+    );
+    const outroIp = await fetch(`${BASE}/api/webhooks/infinitepay/ped-naoexiste-1/${tokenRuim}`, { method: "POST", headers: { "X-Forwarded-For": "10.99.250.250" }, body: "{}" });
+    confere(outroIp.status === 401, "outro IP não é afetado", outroIp.status);
+
     console.log("21. Token do aviso com segredo próprio");
     if (process.env.INFINITEPAY_WEBHOOK_SECRET?.trim() && process.env.INFINITEPAY_WEBHOOK_SECRET.trim() !== process.env.SESSION_SECRET) {
       const comSessao = await avisar(

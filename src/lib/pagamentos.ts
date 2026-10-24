@@ -685,7 +685,6 @@ export async function processarAvisoDaInfinitePay(referencia: string, token: str
   const p = await db.pagamento.findUnique({ where: { gateway_referenciaExterna: { gateway: "infinitepay", referenciaExterna: referencia } } });
   if (!p) return { status: 200, resultado: "desconhecida" };
   if (p.status === "APROVADO" || p.status === "ESTORNADO") return { status: 200, resultado: "ja-aprovada" };
-
   const aviso = lerAviso(corpo, { origemLocal: origemDaApiDeTeste() });
   if (!aviso) return { status: 200, resultado: "sem-candidato" };
   if (aviso.referencia && aviso.referencia !== referencia) return { status: 200, resultado: "referencia-diferente" };
@@ -693,6 +692,12 @@ export async function processarAvisoDaInfinitePay(referencia: string, token: str
   if (p.faturaSlug && p.faturaSlug !== aviso.slug) {
     console.warn(`[pagamentos] cobrança ${p.id}: aviso com slug de outra fatura, ignorado`);
     return { status: 200, resultado: "slug-diferente" };
+  }
+
+  // Conferida há menos de 3 s: 400 ANTES de qualquer escrita (a InfinitePay repete). Um laço de avisos
+  // não vira um laço de gravações nem de consultas. (As checagens acima só leem.)
+  if (p.consultadoEm && Date.now() - p.consultadoEm.getTime() < INTERVALO_CONSULTA_AVISO_MS) {
+    return { status: 400, resultado: "adiado" };
   }
 
   // Confere ANTES de gravar: o candidato só é guardado se a conferência não decidir (guardarCandidato).

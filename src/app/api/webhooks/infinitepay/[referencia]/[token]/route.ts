@@ -1,5 +1,6 @@
 import { unstable_rethrow } from "next/navigation";
 import { comTratamento, lerJsonDoAviso, registrarErro } from "@/lib/api";
+import { dentroDoLimite, dentroDoLimitePorCliente } from "@/lib/auth/limitador";
 import { infinitePayConfigurado } from "@/lib/infinitepay";
 import { avisoAutentico, processarAvisoDaInfinitePay } from "@/lib/pagamentos";
 
@@ -34,9 +35,21 @@ export const POST = comTratamento(
       console.info(`[webhooks/infinitepay] aviso de ENSAIO ${referencia} recebido; respondendo 400 de propósito`);
       return Response.json({ recebido: false, resultado: "ensaio" }, { status: 400 });
     }
+    // Limites em memória, ANTES de qualquer leitura de corpo ou consulta ao banco. Por IP: muito acima
+    // do que a InfinitePay manda (ela repetiu o aviso 5 vezes em ~3 min, por cobrança). Sem IP
+    // confiável (IP_HEADER_CONFIAVEL), não há limite por IP.
+    if (!dentroDoLimitePorCliente(request, "webhook-infinitepay", { porIp: 120, janelaMs: 60_000 })) {
+      return Response.json({ recebido: false, resultado: "limite-ip" }, { status: 429 });
+    }
     // O token é conferido ANTES de ler o corpo: quem não tem a URL não gasta nem a leitura.
     if (!avisoAutentico(referencia, token)) {
       return Response.json({ recebido: false, resultado: "token-invalido" }, { status: 401 });
+    }
+    // Por cobrança: o token é conhecido da cliente (aparece na página da InfinitePay), então um
+    // laço de avisos não pode virar um laço de consultas. 400, para um aviso de verdade que passe do
+    // limite ser repetido pela InfinitePay depois.
+    if (!dentroDoLimite(`webhook-infinitepay-ref|${referencia}`, 30, 10 * 60_000)) {
+      return Response.json({ recebido: false, resultado: "limite" }, { status: 400 });
     }
     // Daqui em diante, QUALQUER falha (banco fora, corpo grande demais, erro inesperado) responde 400:
     // é o código que a InfinitePay repete. Um 500 ou 503 poderia fazer o aviso se perder.
