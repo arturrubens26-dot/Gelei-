@@ -13,7 +13,7 @@ import { FUSO_LOJA, formatarDia, hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ModoEntrega } from "@/lib/entrega-regras";
 import { normalizarComposicao, type SaborNoKit } from "@/lib/kits-regras";
-import { JANELA_CONFIRMANDO_MS, cobrancaDivergente, retornoRecente, type EtapaPagamento, type StatusCobranca } from "@/lib/pagamentos-regras";
+import { JANELA_CONFIRMANDO_MS, MARCA_NAO_PAGO, cobrancaDivergente, retornoRecente, type EtapaPagamento, type StatusCobranca } from "@/lib/pagamentos-regras";
 import { enderecoSchema, telefoneSchema } from "@/lib/validacao";
 import { FORMAS_PAGAMENTO, MAX_PRECO_UNITARIO_CENTAVOS, somarDias, textoLivreValido } from "@/lib/vendas";
 
@@ -649,6 +649,26 @@ export function alertaDaEncomenda(e: { devolucaoPendente: boolean; pagamentoDive
   if (e.pagamentoDivergente) return "PAGO_COM_DIVERGENCIA";
   if (e.avisoParadoHaMaisDe30Min) return "AVISO_NAO_CONFERIDO";
   return null;
+}
+
+/**
+ * Há aviso de pagamento parado há 30 min ou mais? Cobrança PENDENTE ou CANCELADO com candidato do aviso
+ * gravado e `avisadoEm` na janela vencida. Não vale quando a última conferência disse "não pago"
+ * (`MARCA_NAO_PAGO`): isso é uma resposta, não uma conferência parada, e o candidato é descartado na
+ * próxima consulta (mesma regra do alerta dos pedidos, `alertaDoPagamento`).
+ */
+export function avisoParadoHaMaisDe30Min(
+  cobrancas: readonly { status: StatusCobranca; statusGateway: string | null; avisoTransacaoNsu: string | null; avisadoEm: Date | null }[],
+  agora: Date,
+): boolean {
+  return cobrancas.some(
+    (p) =>
+      (p.status === "PENDENTE" || p.status === "CANCELADO") &&
+      p.avisoTransacaoNsu !== null &&
+      p.avisadoEm !== null &&
+      agora.getTime() - p.avisadoEm.getTime() >= JANELA_CONFIRMANDO_MS &&
+      p.statusGateway !== MARCA_NAO_PAGO,
+  );
 }
 
 /**

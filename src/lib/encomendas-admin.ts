@@ -18,6 +18,7 @@ import {
   acoesDaLoja,
   agendaPorDia,
   alertaDaEncomenda,
+  avisoParadoHaMaisDe30Min,
   conferenciaAte,
   entradaEmFolgaAgora,
   faixaDaDevolucaoNoCancelamento,
@@ -57,7 +58,7 @@ import { codigoPedido } from "@/lib/formatacao";
 import { origemPublica } from "@/lib/infinitepay";
 import { ID_CONFIG_LEMBRANCINHAS, lerConfigLembrancinhas, pendenciasParaAbrir } from "@/lib/lembrancinhas";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
-import { JANELA_CONFIRMANDO_MS, cobrancaDivergente, rotuloDoMetodo, type MetodoPagamento } from "@/lib/pagamentos-regras";
+import { cobrancaDivergente, rotuloDoMetodo, type MetodoPagamento } from "@/lib/pagamentos-regras";
 import { separarNome } from "@/lib/produtos-regras";
 import { somarDias, type FormaPagamento } from "@/lib/vendas";
 
@@ -215,19 +216,13 @@ const incluirAdmin = {
 type EncomendaAdminCompleta = Prisma.EncomendaGetPayload<{ include: typeof incluirAdmin }>;
 
 function alertaDe(e: EncomendaCompleta, agora: Date): AlertaEncomenda | null {
-  const t = agora.getTime();
   return alertaDaEncomenda({
     devolucaoPendente: e.devolucoes.some((d) => d.status === "PENDENTE"),
     // A divergência segue visível até a dona decidir: com a encomenda cancelada, expirada ou a parcela registrada
     // por fora, a ação abre uma devolução (ver `pagamentoDivergenteAberto`) e o alerta passa a ser ela.
     pagamentoDivergente: pagamentoDivergenteAberto(e),
-    avisoParadoHaMaisDe30Min: e.pagamentos.some(
-      (p) =>
-        (p.status === "PENDENTE" || p.status === "CANCELADO") &&
-        p.avisoTransacaoNsu !== null &&
-        p.avisadoEm !== null &&
-        t - p.avisadoEm.getTime() >= JANELA_CONFIRMANDO_MS,
-    ),
+    // Sem o "não pago" da última conferência (como nos pedidos): é uma resposta, não conferência parada.
+    avisoParadoHaMaisDe30Min: avisoParadoHaMaisDe30Min(e.pagamentos, agora),
   });
 }
 

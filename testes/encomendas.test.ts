@@ -20,6 +20,7 @@ import {
   acoesDaLoja,
   agendaPorDia,
   alertaDaEncomenda,
+  avisoParadoHaMaisDe30Min,
   calcularValores,
   fimDaFolgaDaEntrada,
   primeiroNomeSeguro,
@@ -619,6 +620,25 @@ describe("painel: alerta e faixa da devolução no cancelamento", () => {
       assert.deepEqual(divergenciasSemDevolucao([divergente, outra, ok], [{ pagamentoId: "p1" }]).map((p) => p.id), ["p2"]);
       assert.deepEqual(divergenciasSemDevolucao([divergente, outra], [{ pagamentoId: "p1" }, { pagamentoId: "p2" }]), []);
     });
+  });
+  it("aviso parado há 30 min ou mais: ignora a cobrança cuja última conferência disse 'não pago' (como nos pedidos)", () => {
+    const agora = new Date("2026-11-11T13:00:00Z");
+    const aviso = (statusGateway: string | null, atrasoMin: number, extra: object = {}) => ({
+      status: "PENDENTE" as const,
+      statusGateway,
+      avisoTransacaoNsu: "t1" as string | null,
+      avisadoEm: new Date(agora.getTime() - atrasoMin * MIN) as Date | null,
+      ...extra,
+    });
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("aberto", 30)], agora), true);
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("aberto", 29)], agora), false);
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("nao-pago", 120)], agora), false, "'não pago' é resposta, não conferência parada");
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("nao-pago", 120), aviso("aberto", 40)], agora), true, "outra cobrança parada ainda alerta");
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("divergente:valor", 120)], agora), true);
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("aberto", 90, { status: "CANCELADO" })], agora), true, "link cancelado no banco ainda pode ser pago");
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("aberto", 90, { status: "APROVADO" })], agora), false);
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("aberto", 90, { avisoTransacaoNsu: null })], agora), false);
+    assert.equal(avisoParadoHaMaisDe30Min([aviso("aberto", 90, { avisadoEm: null })], agora), false);
   });
   it("devoluções marcadas no formulário: depois de a ficha recarregar, só seguem as que ainda estão pendentes", () => {
     assert.deepEqual(marcadasQueSeguemPendentes(["d1", "d2"], [{ id: "d1" }, { id: "d2" }]), ["d1", "d2"]);
