@@ -662,7 +662,6 @@ async function main() {
 
     console.log("26. Aviso forjado (a cliente conhece o token): confere antes de gravar, não troca o candidato verdadeiro, NAO_PAGO que expira");
     const conta26 = await novaConta("e");
-    const webhookDe = (pedido) => falsa.links.get(codigoDe(pedido.pagamento.checkoutUrl)).webhook_url;
     const pagoPorFora = async (c) => {
       const pedido = await novoPedido(c);
       return { pedido, pg: await pagar({ codigo: codigoDe(pedido.pagamento.checkoutUrl), metodo: "pix", aviso: false }) };

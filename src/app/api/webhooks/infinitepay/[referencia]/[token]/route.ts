@@ -10,13 +10,19 @@ const FORMATO_ENSAIO = /^ensaio-\d{12}$/;
 /**
  * POST /api/webhooks/infinitepay/<referencia>/<token> — aviso de pagamento aprovado da InfinitePay.
  *
- * O aviso NÃO é prova de nada (não é assinado): o token HMAC da cobrança no caminho prova só que quem
- * chama conhece a URL que nós demos; a transação e o slug do corpo viram um "candidato", e o servidor
- * confere no payment_check com a própria chave, a referência do NOSSO banco e o valor
- * (src/lib/pagamentos.ts). Sem CSRF: é servidor para servidor.
+ * O aviso NÃO é prova de nada (não é assinado). O token HMAC da cobrança no caminho filtra só
+ * terceiros: a cliente o vê no código das páginas de pagamento e do comprovante da InfinitePay (ensaio,
+ * passo 8), então o aviso é dado da cliente, como o retorno do navegador, e a segurança vem da
+ * conferência, não do token. A transação e o slug do corpo viram um "candidato": o servidor confere no
+ * payment_check com a própria chave, a referência do NOSSO banco, o valor e o canário de amarração, e
+ * só DEPOIS guarda o candidato (sem trocar outro dentro da janela; src/lib/pagamentos.ts). Sem CSRF: é
+ * servidor para servidor. A InfinitePay repete o aviso só por ~3 min depois de um 400.
  *
  * Respostas (`{ recebido, resultado }`):
+ * - 429: mais de 120 avisos por minuto do mesmo IP (só com IP_HEADER_CONFIAVEL);
  * - 401: token errado (nada é lido nem gravado);
+ * - 400 "limite": mais de 30 avisos em 10 min para a mesma cobrança; 400 "adiado": a cobrança foi
+ *   conferida há menos de 3 s (nos dois, nada é gravado);
  * - 200: confirmado, já confirmado antes, divergente (a dona confere no app), recusado de vez ou
  *   ignorado (cobrança desconhecida, corpo sem transação);
  * - 400: a InfinitePay não respondeu à conferência, ainda não acha a transação, ainda não marca como

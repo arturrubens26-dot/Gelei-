@@ -51,9 +51,11 @@ export type { CobrancaDTO, SituacaoPagamentoDTO } from "@/lib/pagamentos-regras"
  *
  * Regra de ouro: o pedido só vira PAGO depois do payment_check feito por ESTE servidor com a própria
  * chave, com a referência do NOSSO banco e o valor conferido (`confirmarCobranca`, a única porta
- * para PAGO). O aviso (webhook, que não é assinado) e o retorno do navegador só trazem um
- * "candidato" (transação e slug) e disparam a conferência. A mesma transação nunca quita duas
- * cobranças: UNIQUE(gateway, transacao_nsu), gravada só depois de confirmada.
+ * para PAGO). O aviso (webhook) e o retorno do navegador são dados da CLIENTE (o token do aviso
+ * aparece nas páginas da InfinitePay): só trazem um "candidato" (transação e slug) e disparam a
+ * conferência, que é quem dá a segurança (referência do nosso banco, valor e canário de amarração).
+ * A mesma transação nunca quita duas cobranças: UNIQUE(gateway, transacao_nsu), gravada só depois de
+ * confirmada.
  */
 
 type NomeGateway = "infinitepay" | "simulado";
@@ -189,8 +191,10 @@ export type ResultadoConfirmacao = "APROVADO" | "PENDENTE" | "DIVERGENTE" | "INV
 
 /**
  * De onde veio o candidato:
- * - "aviso": corpo do webhook, que só chega pela URL com o token desta cobrança;
- * - "gravado": o candidato guardado no banco (só o aviso grava), reconferido pela tela ou pelo retorno;
+ * - "aviso": corpo do webhook. A URL leva o token desta cobrança, mas ele só filtra terceiros (a
+ *   cliente o conhece), então o corpo é dado da cliente tanto quanto o retorno;
+ * - "gravado": o candidato guardado no banco (só o aviso grava, e só quando a conferência não decidiu),
+ *   reconferido pela tela ou pelo retorno;
  * - "retorno": a query do redirect_url, ou seja, dado da CLIENTE (já conferido que a sessão é a dona
  *   do pedido). Confirma como os outros: quem amarra a transação a esta cobrança é o payment_check,
  *   consultado com o order_nsu do NOSSO banco (nunca o da query). Transação de outro link responde
