@@ -57,7 +57,7 @@ import {
   type StatusEncomenda,
 } from "@/lib/encomendas-regras";
 import { situacaoDaEncomenda } from "@/components/lembrancinhas/situacao";
-import { alvoDaCobranca, classificarConferencia, lerConferencia, referenciaDaEncomenda } from "@/lib/infinitepay-regras";
+import { alvoDaCobranca, baldesDoAviso, classificarConferencia, lerConferencia, referenciaDaEncomenda } from "@/lib/infinitepay-regras";
 import { telefoneSchema } from "@/lib/validacao";
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
@@ -513,6 +513,41 @@ describe("referência da parcela e conferência do pagamento (InfinitePay)", () 
     assert.equal(classificarConferencia(conferencia, 6900, "enc-cm123-RESTANTE-1").tipo, "APROVADO");
     // Nem quita um pedido comum.
     assert.deepEqual(classificarConferencia(conferencia, 6900, "ped-cm123-1"), { tipo: "INVALIDO" });
+  });
+});
+
+describe("aviso da InfinitePay: baldes do limite por cobrança", () => {
+  // Mesma contagem de janela fixa de `dentroDoLimite` (server-only, fora do alcance dos testes).
+  const usar = () => {
+    const contagem = new Map<string, number>();
+    return (referencia: string, ip: string | null) =>
+      baldesDoAviso(referencia, ip).every((b) => {
+        const n = (contagem.get(b.chave) ?? 0) + 1;
+        contagem.set(b.chave, n);
+        return n <= b.max;
+      });
+  };
+  it("sem IP confiável: um balde por cobrança, 30 avisos (como antes)", () => {
+    assert.deepEqual(baldesDoAviso("enc-x-ENTRADA-1", null), [{ chave: "webhook-infinitepay-ref|enc-x-ENTRADA-1", max: 30 }]);
+    const aviso = usar();
+    for (let i = 0; i < 30; i++) assert.equal(aviso("r1", null), true);
+    assert.equal(aviso("r1", null), false);
+    assert.equal(aviso("r2", null), true, "outra cobrança não é afetada");
+  });
+  it("com IP confiável: o lixo da cliente esgota só o balde do IP dela; o aviso de verdade, de outro IP, passa", () => {
+    const aviso = usar();
+    for (let i = 0; i < 30; i++) assert.equal(aviso("r1", "198.51.100.7"), true);
+    assert.equal(aviso("r1", "198.51.100.7"), false, "31º da cliente é recusado");
+    assert.equal(aviso("r1", "203.0.113.9"), true, "a InfinitePay (outro IP) não é recusada por causa do lixo");
+    assert.equal(aviso("r1", "198.51.100.7"), false, "a cliente segue recusada");
+  });
+  it("um enxame de IPs esbarra no teto por cobrança, e a recusa por IP não gasta o teto", () => {
+    const aviso = usar();
+    let aceitos = 0;
+    for (let i = 0; i < 100; i++) if (aviso("r1", "198.51.100.7")) aceitos++; // 70 recusados: não contam no teto
+    assert.equal(aceitos, 30);
+    for (let i = 0; i < 400; i++) if (aviso("r1", `203.0.113.${i}`)) aceitos++;
+    assert.equal(aceitos, 300, "30 do primeiro IP + 270 de IPs distintos = o teto da cobrança");
   });
 });
 

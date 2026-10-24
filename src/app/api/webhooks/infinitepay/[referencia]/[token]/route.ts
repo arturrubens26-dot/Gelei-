@@ -1,7 +1,8 @@
 import { unstable_rethrow } from "next/navigation";
 import { comTratamento, lerJsonDoAviso, registrarErro } from "@/lib/api";
-import { dentroDoLimite, dentroDoLimitePorCliente } from "@/lib/auth/limitador";
+import { dentroDoLimite, dentroDoLimitePorCliente, ipConfiavel } from "@/lib/auth/limitador";
 import { infinitePayConfigurado } from "@/lib/infinitepay";
+import { JANELA_AVISOS_MS, baldesDoAviso } from "@/lib/infinitepay-regras";
 import { avisoAutentico, processarAvisoDaInfinitePay } from "@/lib/pagamentos";
 
 /** order_nsu dos links do ensaio: ensaio-AAAAMMDDhhmm (scripts/ensaio-infinitepay.ts). */
@@ -21,7 +22,8 @@ const FORMATO_ENSAIO = /^ensaio-\d{12}$/;
  * Respostas (`{ recebido, resultado }`):
  * - 429: mais de 120 avisos por minuto do mesmo IP (só com IP_HEADER_CONFIAVEL);
  * - 401: token errado (nada é lido nem gravado);
- * - 400 "limite": mais de 30 avisos em 10 min para a mesma cobrança; 400 "adiado": a cobrança foi
+ * - 400 "limite": mais de 30 avisos em 10 min para a mesma cobrança (e o mesmo IP, com IP confiável; 300
+ *   no total da cobrança); 400 "adiado": a cobrança foi
  *   conferida há menos de 3 s (nos dois, nada é gravado);
  * - 200: confirmado, já confirmado antes, divergente (a dona confere no app), recusado de vez ou
  *   ignorado (cobrança desconhecida, corpo sem transação);
@@ -53,8 +55,9 @@ export const POST = comTratamento(
     }
     // Por cobrança: o token é conhecido da cliente (aparece na página da InfinitePay), então um
     // laço de avisos não pode virar um laço de consultas. 400, para um aviso de verdade que passe do
-    // limite ser repetido pela InfinitePay depois.
-    if (!dentroDoLimite(`webhook-infinitepay-ref|${referencia}`, 30, 10 * 60_000)) {
+    // limite ser repetido pela InfinitePay depois. Com IP confiável o balde é por cobrança e IP: o lixo da
+    // cliente esgota só o dela e não o da InfinitePay (ver `baldesDoAviso`).
+    if (!baldesDoAviso(referencia, ipConfiavel(request)).every((b) => dentroDoLimite(b.chave, b.max, JANELA_AVISOS_MS))) {
       return Response.json({ recebido: false, resultado: "limite" }, { status: 400 });
     }
     // Daqui em diante, QUALQUER falha (banco fora, corpo grande demais, erro inesperado) responde 400:

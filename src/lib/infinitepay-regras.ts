@@ -97,6 +97,33 @@ export function conferirTokenDoAviso(segredo: string, referencia: string, token:
   return recebido.length === esperado.length && timingSafeEqual(recebido, esperado);
 }
 
+/** Janela dos limites de avisos por cobrança. */
+export const JANELA_AVISOS_MS = 10 * 60_000;
+/** Avisos aceitos por cobrança (e por IP, quando há IP confiável) na janela. */
+export const MAX_AVISOS_POR_COBRANCA = 30;
+/** Teto por cobrança com todos os IPs somados (só com IP confiável): memória e banco limitados a um enxame de IPs. */
+export const MAX_AVISOS_POR_COBRANCA_TOTAL = 300;
+
+/**
+ * Os baldes (chave e máximo na janela `JANELA_AVISOS_MS`) que um aviso de uma cobrança consome, na ordem
+ * em que são contados (o primeiro que estoura recusa e os seguintes não são contados).
+ *
+ * O token do aviso é conhecido da cliente, então ela pode mandar avisos de lixo para esgotar o limite da
+ * cobrança ANTES de pagar e fazer o aviso de verdade da InfinitePay ser recusado (400). Com IP confiável
+ * (IP_HEADER_CONFIAVEL) o balde é por cobrança E IP: o lixo da cliente só esgota o balde do IP dela, e o
+ * aviso de verdade chega de outro IP. Mesmo um enxame de IPs fica sob o teto por cobrança, e a consulta
+ * à InfinitePay segue limitada a uma por 3 s por cobrança (`consultadoEm`). Sem IP confiável não dá para
+ * separar quem manda o quê: vale só o balde por cobrança, como antes.
+ */
+export function baldesDoAviso(referencia: string, ip: string | null): { chave: string; max: number }[] {
+  const porCobranca = `webhook-infinitepay-ref|${referencia}`;
+  if (!ip) return [{ chave: porCobranca, max: MAX_AVISOS_POR_COBRANCA }];
+  return [
+    { chave: `${porCobranca}|ip|${ip}`, max: MAX_AVISOS_POR_COBRANCA },
+    { chave: porCobranca, max: MAX_AVISOS_POR_COBRANCA_TOTAL },
+  ];
+}
+
 /**
  * Data ISO 8601 com o fuso de Brasília explícito (UTC−3, sem horário de verão desde 2019), como o
  * `valid_until` pede: 2026-10-21T15:30:00.000-03:00.
