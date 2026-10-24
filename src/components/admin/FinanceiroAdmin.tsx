@@ -187,7 +187,7 @@ function Resumo({ dados }: { dados: FinanceiroDoMes }) {
         )}
         .
       </p>
-      <ul className="grid gap-4 sm:grid-cols-3">
+      <ul className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-4">
         <li className="cartao p-5">
           <p className="text-sm font-medium text-primaria/85">Entradas</p>
           <p className="mt-2 text-3xl font-bold tabular-nums">{formatarBRL(entradas)}</p>

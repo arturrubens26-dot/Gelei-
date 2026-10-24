@@ -196,14 +196,14 @@ export function MenuDoPainel({
         </div>
       </dialog>
 
-      {/* Telas largas: o espaço que a barra ocupa no layout (4,5 rem recolhida, 15 rem fixada); o trilho
+      {/* Telas largas: o espaço que a barra ocupa no layout (4,5 rem recolhida, 16 rem fixada); o trilho
           em si flutua dentro dele e, aberto sem estar fixado, passa por cima do conteúdo. */}
-      <aside className="hidden shrink-0 print:hidden lg:sticky lg:top-0 lg:block lg:h-dvh lg:w-18 lg:self-start lg:transition-[width] lg:duration-200 lg:fixado:w-60 motion-reduce:lg:transition-none">
+      <aside className="hidden shrink-0 print:hidden lg:sticky lg:top-0 lg:block lg:h-dvh lg:w-18 lg:self-start lg:transition-[width] lg:duration-200 lg:fixado:w-64 motion-reduce:lg:transition-none">
         <div
           {...eventosDoTrilho}
           data-aberto={aberto ? "true" : "false"}
           data-sobrepoe={sobrepoe ? "true" : "false"}
-          className="painel-menu absolute inset-y-0 left-0 z-40 flex w-18 flex-col overflow-hidden border-r border-accent2/60 bg-[#fffbf6] transition-[width,box-shadow] duration-200 fixado:w-60 aberto:w-60 data-[sobrepoe=true]:shadow-[8px_0_24px_-12px_rgb(107_29_42/0.45)] motion-reduce:transition-none"
+          className="painel-menu absolute inset-y-0 left-0 z-40 flex w-18 flex-col overflow-hidden border-r border-accent2/60 bg-[#fffbf6] transition-[width,box-shadow] duration-200 fixado:w-64 aberto:w-64 data-[sobrepoe=true]:shadow-[8px_0_24px_-12px_rgb(107_29_42/0.45)] motion-reduce:transition-none"
         >
           <Link href="/admin/dashboard" className="flex h-14 shrink-0 items-center gap-3 px-3 outline-offset-[-2px]" aria-label={`Painel ${marca.nome}: ir para o Dashboard`}>
             <span className="flex size-12 shrink-0 items-center justify-center">{marca36}</span>

@@ -9,7 +9,7 @@ import { diaComSemana } from "@/components/lembrancinhas/datas";
 import { SeloDaEncomenda } from "@/components/lembrancinhas/SeloDaEncomenda";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { DevolucaoDaEncomendaDTO, EncomendaAdminDetalheDTO, PagamentoDaEncomendaDTO } from "@/lib/encomendas-admin";
-import { ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, formatarPrazo, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
+import { HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, formatarPrazo, prazoDaEntrada, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
 import { enderecoDeRetirada } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 import { FORMAS_PAGAMENTO, ROTULO_FORMA_PAGAMENTO, type FormaPagamento } from "@/lib/vendas";
@@ -32,7 +32,7 @@ const MOTIVO_DEVOLUCAO: Record<DevolucaoDaEncomendaDTO["motivo"], string> = {
 };
 
 /** Ações que pedem um formulário antes (as outras são um clique, com confirmação quando pesa). */
-const COM_FORMULARIO: readonly AcaoAdmin[] = ["recusar", "registrar-restante", "cancelar", "devolucao-feita"];
+const COM_FORMULARIO: readonly AcaoAdmin[] = ["recusar", "registrar-entrada", "registrar-restante", "cancelar", "devolucao-feita"];
 
 const prazo = (iso: string | null) => (iso ? formatarPrazo(new Date(iso)) : "—");
 
@@ -142,7 +142,7 @@ export function FichaEncomenda({ id }: { id: string }) {
       return;
     }
     const perguntas: Partial<Record<AcaoAdmin, string>> = {
-      aprovar: `Aprovar a encomenda ${e.codigo}? A cliente terá 24 horas para pagar a entrada de ${formatarBRL(e.entrada)}.`,
+      aprovar: `Aprovar a encomenda ${e.codigo}? A cliente terá até ${formatarPrazo(prazoDaEntrada(new Date(), new Date(e.prazos.corteEm)))} para pagar a entrada de ${formatarBRL(e.entrada)}.`,
       "marcar-entregue": `Confirmar que a encomenda ${e.codigo} foi ${e.modoEntrega === "RETIRADA" ? "retirada" : "entregue"}?`,
       "iniciar-producao": a.aviso ? `${a.aviso} Iniciar a produção mesmo assim?` : undefined,
     };
@@ -179,6 +179,21 @@ export function FichaEncomenda({ id }: { id: string }) {
           {EXPLICACAO_ALERTA_ENCOMENDA[e.alerta]}
         </p>
       )}
+      {(e.entradaEmFolga || e.pagamentoEmConferencia.entrada || e.pagamentoEmConferencia.restante) && (
+        <p role="status" className="rounded-lg border border-accent2 bg-accent2/10 p-3 text-sm">
+          {e.entradaEmFolga && (
+            <span className="block">
+              O prazo da entrada passou, mas a encomenda ainda espera mais uns minutos (folga de 30 minutos): se a cliente pagar agora, ela confirma.
+            </span>
+          )}
+          {(e.pagamentoEmConferencia.entrada || e.pagamentoEmConferencia.restante) && (
+            <span className="block">
+              Há um pagamento {e.pagamentoEmConferencia.entrada ? "da entrada" : "do restante"} em conferência. Confira no app InfinitePay: se o dinheiro
+              entrou, aguarde a confirmação; as ações que dependem disso ficam bloqueadas até lá.
+            </span>
+          )}
+        </p>
+      )}
 
       <section aria-labelledby={`${uid}-acoes`} className="cartao flex flex-col gap-3 p-5 print:hidden">
         <h2 id={`${uid}-acoes`} className="text-xl font-bold">
@@ -211,9 +226,20 @@ export function FichaEncomenda({ id }: { id: string }) {
                   )}
                 </div>
                 {aberta === a.acao && a.acao === "recusar" && <FormRecusar ocupado={ocupado} aoEnviar={(motivo) => agir({ acao: "recusar", motivo }, "Encomenda recusada. Avise a cliente pelo WhatsApp.")} />}
+                {aberta === a.acao && a.acao === "registrar-entrada" && (
+                  <FormRecebidoFora
+                    parcela="entrada"
+                    valor={e.entrada}
+                    ocupado={ocupado}
+                    aoEnviar={(formaPagamento, observacao) =>
+                      agir({ acao: "registrar-entrada", formaPagamento, observacao: observacao || null }, "Entrada registrada: encomenda confirmada.")
+                    }
+                  />
+                )}
                 {aberta === a.acao && a.acao === "registrar-restante" && (
-                  <FormRestante
-                    restante={e.restante}
+                  <FormRecebidoFora
+                    parcela="restante"
+                    valor={e.restante}
                     ocupado={ocupado}
                     aoEnviar={(formaPagamento, observacao) =>
                       agir({ acao: "registrar-restante", formaPagamento, observacao: observacao || null }, "Restante registrado: encomenda quitada.")
@@ -236,9 +262,11 @@ export function FichaEncomenda({ id }: { id: string }) {
                 )}
                 {aberta === a.acao && a.acao === "devolucao-feita" && (
                   <FormDevolucao
-                    pendente={e.devolucao.pendente}
+                    pendentes={e.devolucoes.filter((d) => d.status === "PENDENTE")}
                     ocupado={ocupado}
-                    aoEnviar={(observacao) => agir({ acao: "devolucao-feita", observacao: observacao || null }, "Devolução marcada como feita.")}
+                    aoEnviar={(devolucaoIds, observacao) =>
+                      agir({ acao: "devolucao-feita", devolucaoIds, observacao: observacao || null }, "Devolução marcada como feita.")
+                    }
                   />
                 )}
               </li>
@@ -338,13 +366,20 @@ export function FichaEncomenda({ id }: { id: string }) {
             <Linha rotulo="Potinhos" valor={formatarBRL(e.subtotal)} />
             <Linha rotulo={e.modoEntrega === "RETIRADA" ? "Retirada" : "Entrega"} valor={e.frete > 0 ? formatarBRL(e.frete) : "Grátis"} />
             <Linha rotulo="Total" valor={formatarBRL(e.total)} forte />
-            <Linha rotulo={`Entrada${e.entradaPagaEm ? ` (paga em ${formatarDataHora(e.entradaPagaEm)})` : ""}`} valor={formatarBRL(e.entrada)} />
+            <Linha rotulo={`Entrada${e.entradaPagaEm ? ` (${e.entradaForaDoSite ? "recebida na loja" : "paga"} em ${formatarDataHora(e.entradaPagaEm)})` : ""}`} valor={formatarBRL(e.entrada)} />
             <Linha
               rotulo={`Restante${e.restantePagoEm ? ` (${e.restanteForaDoSite ? "recebido na loja" : "pago"} em ${formatarDataHora(e.restantePagoEm)})` : ""}`}
               valor={formatarBRL(e.restante)}
             />
             <Linha rotulo="Peso para o frete" valor={`${e.pesoTotalGramas} g`} />
           </dl>
+          {e.entradaForaDoSite && e.entradaForma && (
+            <p className="mt-2 text-xs text-primaria/85">
+              Entrada: {ROTULO_FORMA_PAGAMENTO[e.entradaForma]}
+              {e.entradaRegistradaPor ? `, registrada por ${e.entradaRegistradaPor}` : ""}
+              {e.entradaObservacao ? ` · ${e.entradaObservacao}` : ""}
+            </p>
+          )}
           {e.restanteForaDoSite && e.restanteForma && (
             <p className="mt-2 text-xs text-primaria/85">
               Restante: {ROTULO_FORMA_PAGAMENTO[e.restanteForma]}
@@ -363,7 +398,7 @@ export function FichaEncomenda({ id }: { id: string }) {
           <dt className="font-semibold">Responder até</dt>
           <dd>{prazo(e.prazos.responderAte)}</dd>
           <dt className="font-semibold">Entrada até</dt>
-          <dd>{e.prazos.entradaAte ? prazo(e.prazos.entradaAte) : "depois da aprovação (24 horas)"}</dd>
+          <dd>{e.prazos.entradaAte ? prazo(e.prazos.entradaAte) : `depois da aprovação (${HORAS_PARA_PAGAR_ENTRADA} horas, ou até o prazo de desistência, o que vier antes)`}</dd>
           <dt className="font-semibold">Desistência com devolução integral</dt>
           <dd>
             até {prazo(e.prazos.corteEm)}; depois, {e.politica.percentualRetido}% da entrada fica com a loja
@@ -487,7 +522,7 @@ export function FichaEncomenda({ id }: { id: string }) {
       <details className="cartao p-5">
         <summary className="min-h-11 cursor-pointer content-center font-titulos text-xl font-bold">Política aceita pela cliente</summary>
         <p className="mt-2 text-xs text-primaria/80">
-          Versão {e.politica.versao}, aceita em {formatarDataHora(e.politica.aceitaEm)}; {e.politica.percentualRetido}% da entrada retido depois do corte.
+          Versão {e.politica.versao}, aceita em {formatarDataHora(e.politica.aceitaEm)}; {e.politica.percentualAceito}% da entrada retido depois do corte (o texto abaixo).{e.politica.percentualAceito !== e.politica.percentualRetido ? ` Vale hoje ${e.politica.percentualRetido}%.` : ""}
         </p>
         <ol className="mt-2 flex list-decimal flex-col gap-1.5 pl-5 text-sm">
           {e.politica.textos.map((t, i) => (
@@ -534,7 +569,18 @@ function FormRecusar({ ocupado, aoEnviar }: { ocupado: boolean; aoEnviar: (motiv
   );
 }
 
-function FormRestante({ restante, ocupado, aoEnviar }: { restante: number; ocupado: boolean; aoEnviar: (forma: FormaPagamento, observacao: string) => Promise<boolean> }) {
+/** Entrada ou restante recebidos fora do site (dinheiro, PIX direto ou conferido no app InfinitePay). */
+function FormRecebidoFora({
+  parcela,
+  valor,
+  ocupado,
+  aoEnviar,
+}: {
+  parcela: "entrada" | "restante";
+  valor: number;
+  ocupado: boolean;
+  aoEnviar: (forma: FormaPagamento, observacao: string) => Promise<boolean>;
+}) {
   const id = useId();
   const [forma, setForma] = useState<FormaPagamento>("DINHEIRO");
   const [obs, setObs] = useState("");
@@ -547,7 +593,9 @@ function FormRestante({ restante, ocupado, aoEnviar }: { restante: number; ocupa
       className={painelForm}
     >
       <p className="text-sm">
-        Use só se a cliente pagou o restante de <strong>{formatarBRL(restante)}</strong> direto com você (fora do site).
+        Use só se a cliente pagou {parcela === "entrada" ? "a entrada" : "o restante"} de <strong>{formatarBRL(valor)}</strong> direto com você
+        (fora do site)
+        {parcela === "entrada" ? ", ou se você conferiu no app InfinitePay que o dinheiro entrou" : ""}.
       </p>
       <CampoForm id={`${id}-forma`} rotulo="Como ela pagou">
         <select id={`${id}-forma`} className="campo" value={forma} onChange={(e) => setForma(e.target.value as FormaPagamento)}>
@@ -563,7 +611,7 @@ function FormRestante({ restante, ocupado, aoEnviar }: { restante: number; ocupa
       </CampoForm>
       <div>
         <button type="submit" className="btn-primario" disabled={ocupado}>
-          {ocupado ? "Registrando…" : "Registrar o restante"}
+          {ocupado ? "Registrando…" : parcela === "entrada" ? "Registrar a entrada" : "Registrar o restante"}
         </button>
       </div>
     </form>
@@ -638,26 +686,50 @@ function FormCancelar({
   );
 }
 
-function FormDevolucao({ pendente, ocupado, aoEnviar }: { pendente: number; ocupado: boolean; aoEnviar: (observacao: string) => Promise<boolean> }) {
+/** Só as devoluções marcadas fecham: a dona escolhe quais já fez pelo app da InfinitePay (todas vêm marcadas). */
+function FormDevolucao({
+  pendentes,
+  ocupado,
+  aoEnviar,
+}: {
+  pendentes: DevolucaoDaEncomendaDTO[];
+  ocupado: boolean;
+  aoEnviar: (ids: string[], observacao: string) => Promise<boolean>;
+}) {
   const id = useId();
   const [obs, setObs] = useState("");
+  const [marcadas, setMarcadas] = useState<string[]>(() => pendentes.map((d) => d.id));
+  const total = pendentes.filter((d) => marcadas.includes(d.id)).reduce((soma, d) => soma + d.valor, 0);
   return (
     <form
       onSubmit={(ev) => {
         ev.preventDefault();
-        void aoEnviar(obs.trim());
+        if (marcadas.length > 0) void aoEnviar(marcadas, obs.trim());
       }}
       className={painelForm}
     >
-      <p className="text-sm">
-        Marque só depois de devolver <strong>{formatarBRL(pendente)}</strong> pelo app da InfinitePay.
-      </p>
+      <fieldset className="flex flex-col gap-1">
+        <legend className="mb-1 text-sm">Marque só as que você já devolveu pelo app da InfinitePay:</legend>
+        {pendentes.map((d) => (
+          <label key={d.id} className="flex min-h-11 items-center gap-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              className="size-4 accent-secundaria"
+              checked={marcadas.includes(d.id)}
+              onChange={(ev) => setMarcadas((m) => (ev.target.checked ? [...m, d.id] : m.filter((x) => x !== d.id)))}
+            />
+            <span>
+              {MOTIVO_DEVOLUCAO[d.motivo]}: {formatarBRL(d.valor)}
+            </span>
+          </label>
+        ))}
+      </fieldset>
       <CampoForm id={`${id}-obs`} rotulo="Observação (opcional)" dica="Ex.: devolvido pelo app em 23/10.">
         <input id={`${id}-obs`} className="campo" maxLength={TAMANHO_MAX_TEXTO} value={obs} onChange={(e) => setObs(e.target.value)} aria-describedby={`${id}-obs-dica`} />
       </CampoForm>
       <div>
-        <button type="submit" className="btn-primario" disabled={ocupado}>
-          {ocupado ? "Salvando…" : "Marquei como devolvida"}
+        <button type="submit" className="btn-primario aria-disabled:cursor-not-allowed aria-disabled:opacity-60" aria-disabled={marcadas.length === 0 || undefined} disabled={ocupado}>
+          {ocupado ? "Salvando…" : `Marquei como devolvida${marcadas.length > 0 ? ` (${formatarBRL(total)})` : ""}`}
         </button>
       </div>
     </form>
