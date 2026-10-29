@@ -71,7 +71,7 @@ type Props = {
   pagarAte: string | null;
   /** Frase sob o título: o que a parcela cobre e até quando (ex.: "Inclui a entrega. Até o dia da entrega (07/11)."). */
   descricao: string;
-  /** Horas que ela terá para pagar a entrada (`prazos.horasParaPagarEntrada`: 24 h, ou menos se o prazo de desistência vier antes). */
+  /** Horas que ela terá para pagar a entrada (`prazos.horasParaPagarEntrada`: 24 h, ou menos se o corte de produção vier antes). */
   horasParaPagar: number;
   /** O restante foi recebido pela Geleiô fora do site (dinheiro, PIX direto). */
   restanteForaDoSite: boolean;

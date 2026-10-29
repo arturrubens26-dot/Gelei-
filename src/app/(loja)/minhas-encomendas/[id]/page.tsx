@@ -16,7 +16,7 @@ import { dadosLoja } from "@/lib/dados-loja";
 import { formatarBRL } from "@/lib/dinheiro";
 import { buscarEncomendaDoUsuario, expirarVencidas } from "@/lib/encomendas";
 import { situacaoDaParcela } from "@/lib/encomendas-pagamentos";
-import { formatarPrazo, palavraDoModo, statusFinal } from "@/lib/encomendas-regras";
+import { DIAS_DESISTENCIA_APOS_RECEBER, formatarPrazo, palavraDoModo, retemEntradaNaDesistencia, statusFinal } from "@/lib/encomendas-regras";
 import { enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 
@@ -64,6 +64,8 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
   const palavra = palavraDoModo(e.modoEntrega);
   const Palavra = palavra[0].toUpperCase() + palavra.slice(1);
   const corte = formatarPrazo(new Date(e.prazos.corteEm));
+  // Política v2 (art. 49): nada é retido e não existe "prazo da devolução integral"; só a v1 (antiga) usa o corte.
+  const semRetencao = !retemEntradaNaDesistencia(e.politica.versao);
 
   return (
     <div className="flex flex-col gap-6">
@@ -180,7 +182,13 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
           <Item rotulo="WhatsApp">{formatarTelefone(e.telefone)}</Item>
           {e.observacao && <Item rotulo="Observação">{e.observacao}</Item>}
           <Item rotulo="Desistência">
-            Com devolução integral até {corte}.
+            {semRetencao
+              ? e.acoes.desistirAte
+                ? `Até ${formatarPrazo(new Date(e.acoes.desistirAte))} (${DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber), com devolução de tudo o que você pagou.`
+                : e.statusEfetivo === "ENTREGUE"
+                  ? `O prazo de ${DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber terminou; para desistir, fale com a Geleiô.`
+                  : `A qualquer momento antes de receber e até ${DIAS_DESISTENCIA_APOS_RECEBER} dias depois, com devolução de tudo o que você pagou.`
+              : `Com devolução integral até ${corte}.`}
           </Item>
         </dl>
       </section>
@@ -189,6 +197,8 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
         <DesistirDaEncomenda
           encomendaId={e.id}
           previaInicial={e.acoes.desistir}
+          semRetencao={semRetencao}
+          desistirAte={e.acoes.desistirAte ? formatarPrazo(new Date(e.acoes.desistirAte)) : null}
           corte={corte}
           depoisDoCorte={agora.getTime() >= new Date(e.prazos.corteEm).getTime()}
           temPagamento={!nadaPago}

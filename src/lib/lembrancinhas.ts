@@ -27,7 +27,7 @@ export type LembrancinhasDTO = {
   precoPotinhoCentavos: number;
   pesoPotinhoGramas: number;
   pesoEmbalagemGramas: number;
-  /** Quanto da entrada fica com a loja se a cliente desistir depois do corte: vai no texto da política. */
+  /** Sempre 0 (política v2: nada é retido; a coluna da configuração é ignorada). Vai no POST como aceite. */
   percentualRetido: number;
   /** Versão do texto da política que a cliente lê e aceita (volta no POST, com o percentual). */
   politicaVersao: string;
@@ -104,7 +104,7 @@ export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
     precoPotinhoCentavos,
     pesoPotinhoGramas: config?.pesoPotinhoGramas ?? 0,
     pesoEmbalagemGramas: config?.pesoEmbalagemGramas ?? 0,
-    percentualRetido: config?.percentualRetido ?? 100,
+    percentualRetido: 0,
     politicaVersao: POLITICA_VERSAO,
     minPotinhos: MIN_POTINHOS,
     maxPotinhos: MAX_POTINHOS,

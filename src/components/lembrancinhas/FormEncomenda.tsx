@@ -664,7 +664,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
           <li className="flex items-baseline justify-between gap-4 rounded-md border border-accent2/60 bg-white/70 p-3">
             <span>
               <strong className="font-semibold">Entrada (50% dos potinhos)</strong>
-              <span className="block text-primaria/80">Depois que a Geleiô aprovar, em até {HORAS_PARA_PAGAR_ENTRADA} horas (nunca depois do prazo de desistência), pelo site (PIX ou cartão).</span>
+              <span className="block text-primaria/80">Depois que a Geleiô aprovar, em até {HORAS_PARA_PAGAR_ENTRADA} horas, pelo site (PIX ou cartão).</span>
             </span>
             <span className="shrink-0 font-semibold tabular-nums">{contas ? brl(contas.entrada) : "—"}</span>
           </li>
@@ -698,7 +698,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
         {textos ? (
           <ol className="mt-2 flex list-decimal flex-col gap-2 pl-5 text-sm leading-relaxed">
             {textos.map((t, i) => (
-              // O 2º e o 3º itens limitam direitos (prazo e retenção da entrada): em destaque (Decreto 7.962, art. 4º, I).
+              // O 2º e o 3º itens dizem como e quando a cliente desiste e o que volta: em destaque (Decreto 7.962, art. 4º, I).
               <li key={i} className={i === 1 || i === 2 ? "font-semibold" : undefined}>
                 {t}
               </li>

@@ -239,8 +239,8 @@ async function semearLembrancinhas() {
   await db.configLembrancinhas.upsert({
     where: { id: "lembrancinhas" },
     update: ativar ? { ativo: true } : {},
-    // Valores provisórios (decisões D1, D4 e D10), os mesmos da migração.
-    create: { id: "lembrancinhas", ativo: ativar, precoPotinho: "6.00", pesoPotinhoGramas: 110, pesoEmbalagemGramas: 300, percentualRetido: 100 },
+    // Valores provisórios (decisões D1 e D10); percentualRetido 0: a política v2 não retém nada (a migração ainda cria com 100, o código ignora).
+    create: { id: "lembrancinhas", ativo: ativar, precoPotinho: "6.00", pesoPotinhoGramas: 110, pesoEmbalagemGramas: 300, percentualRetido: 0 },
   });
   if (ativar) {
     const { count } = await db.product.updateMany({ where: { id: { in: produtos.map((p) => p.id) } }, data: { disponivelEmMini: true } });

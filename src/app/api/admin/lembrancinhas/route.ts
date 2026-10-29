@@ -4,7 +4,7 @@ import { configAtivoSchema, configLembrancinhasSchema } from "@/lib/encomendas-r
 
 /**
  * GET /api/admin/lembrancinhas (admin) → 200 `{ config: ConfigLembrancinhasAdminDTO }` =
- * `{ ativo, precoPotinhoCentavos, pesoPotinhoGramas, pesoEmbalagemGramas, percentualRetido,
+ * `{ ativo, precoPotinhoCentavos, pesoPotinhoGramas, pesoEmbalagemGramas,
  * atualizadoEm, sabores, pendenciasLegais, avisos, avisoJuridico }`.
  */
 export const GET = comTratamento("api/admin/lembrancinhas GET", async () => {
@@ -15,9 +15,9 @@ export const GET = comTratamento("api/admin/lembrancinhas GET", async () => {
 
 /**
  * PATCH /api/admin/lembrancinhas (admin, JSON, CSRF) — edição completa `{ precoPotinhoCentavos,
- * pesoPotinhoGramas, pesoEmbalagemGramas, percentualRetido, ativo }` ou só `{ ativo }` →
+ * pesoPotinhoGramas, pesoEmbalagemGramas, ativo }` ou só `{ ativo }` →
  * 200 `{ config }`. 400 por campo; 409 `detalhes.pendenciasLegais` ao ativar sem CNPJ/CPF ou e-mail
- * da loja (D13). Encomendas já feitas não mudam (preço e percentual ficam congelados nelas).
+ * da loja (D13). Encomendas já feitas não mudam (preço e política ficam congelados nelas; um `percentualRetido` enviado é ignorado).
  */
 export const PATCH = comTratamento("api/admin/lembrancinhas PATCH", async (request: Request) => {
   const bloqueio = origemInvalida(request);

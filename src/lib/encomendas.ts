@@ -13,6 +13,7 @@ import {
   calcularValores,
   conferirPotinhos,
   FOLGA_DA_ENTRADA_MS,
+  desistenciaAposReceberAberta,
   devolucaoNaDesistencia,
   entradaEmFolgaAgora,
   horasParaPagarEntrada,
@@ -126,6 +127,11 @@ export type EncomendaDTO = {
     pagarRestante: boolean;
     /** Prévia da desistência AGORA; mande `devolucaoCentavos` no POST .../desistir. */
     desistir: { devolucao: number; retido: number; devolucaoCentavos: number; retidoCentavos: number } | null;
+    /**
+     * Política v2, encomenda já entregue/retirada: ISO do fim da desistência pelo site (7 dias depois de
+     * receber, art. 49). `null` antes de receber (pode desistir a qualquer momento) e na política v1.
+     */
+    desistirAte: string | null;
     /** Há pagamento em conferência: o POST de desistência responderia 409 "aguarde"; mostre o botão desabilitado. */
     desistirBloqueado: boolean;
   };
@@ -196,6 +202,8 @@ export function paraRegras(e: EncomendaCompleta, agora: Date = new Date()): Enco
     valorEntradaCentavos: centavos(e.valorEntrada),
     valorRestanteCentavos: centavos(e.valorRestante),
     percentualRetido: e.percentualRetido,
+    politicaVersao: e.politicaVersao,
+    entregueEm: e.entregueEm,
   };
 }
 
@@ -324,6 +332,7 @@ export function paraEncomendaDTO(e: EncomendaCompleta, agora: Date): EncomendaDT
             retidoCentavos: acoes.desistir.retido,
           }
         : null,
+      desistirAte: acoes.desistirAte?.toISOString() ?? null,
       desistirBloqueado: acoes.desistirBloqueado,
     },
     politica: {
@@ -540,11 +549,12 @@ export async function criarEncomenda(
     throw new ErroNegocio(400, potinhos.mensagem, { itens: [potinhos.mensagem] });
   }
 
-  // A cliente aceitou um texto com um percentual: se mudou desde a tela, ela precisa ler de novo.
-  if (entrada.politicaVersao !== POLITICA_VERSAO || entrada.percentualRetido !== config.percentualRetido) {
+  // A cliente aceitou uma versão do texto: se mudou desde a tela, ela precisa ler de novo. Na v2 nada é
+  // retido (o percentual é sempre 0, seja qual for o valor que ficou na coluna da configuração).
+  if (entrada.politicaVersao !== POLITICA_VERSAO || entrada.percentualRetido !== 0) {
     throw new ErroNegocio(409, "A política de desistência mudou. Leia de novo antes de enviar.", {
       politicaVersao: POLITICA_VERSAO,
-      percentualRetido: config.percentualRetido,
+      percentualRetido: 0,
     });
   }
 
@@ -635,8 +645,8 @@ export async function criarEncomenda(
           pesoTotalGramas,
           responderAte: prazos.responderAte,
           corteEm: prazos.corteEm,
-          percentualRetido: config.percentualRetido,
-          percentualAceito: entrada.percentualRetido,
+          percentualRetido: 0,
+          percentualAceito: 0,
           politicaVersao: POLITICA_VERSAO,
           politicaAceitaEm: agora,
           idempotencyKey: chave,
@@ -670,9 +680,10 @@ export async function criarEncomenda(
 // --- desistir -------------------------------------------------------------------------------------
 
 /**
- * A cliente desiste (CDC/Decreto 7.962, art. 5º: pela mesma ferramenta). A devolução segue a regra do
- * corte e do percentual congelado na encomenda; se o corte passou entre a tela e o clique (a prévia
- * mudou), responde 409 com a nova prévia e não desiste. Com pagamento em conferência, 409 (aguarde).
+ * A cliente desiste (CDC art. 49 e Decreto 7.962, art. 5º: pela mesma ferramenta). Na política v2 devolve
+ * TUDO o que foi pago, antes da entrega e até 7 dias depois de receber (ENTREGUE → CANCELADA); na v1
+ * (antiga) segue o corte e o percentual congelado na encomenda. Se a prévia mudou entre a tela e o
+ * clique, responde 409 com a nova prévia e não desiste. Com pagamento em conferência, 409 (aguarde).
  * Links abertos são encerrados no banco antes; um pago depois disso vira devolução pendente.
  */
 export async function desistirDaEncomenda(
@@ -687,8 +698,15 @@ export async function desistirDaEncomenda(
   if (!e) throw new ErroNegocio(404, "Encomenda não encontrada.");
 
   const desistivel: StatusEncomenda[] = ["SOLICITADA", "AGUARDANDO_ENTRADA", ...STATUS_CONFIRMADOS];
-  if (!desistivel.includes(e.status)) {
-    throw new ErroNegocio(409, "Esta encomenda já foi encerrada.", { statusAtual: e.status });
+  const podeDesistir = (x: EncomendaCompleta) => desistivel.includes(x.status) || desistenciaAposReceberAberta(x, agora);
+  if (!podeDesistir(e)) {
+    throw new ErroNegocio(
+      409,
+      e.status === "ENTREGUE"
+        ? "O prazo para desistir pelo site terminou. Fale com a Geleiô no Instagram @ge.leio."
+        : "Esta encomenda já foi encerrada.",
+      { statusAtual: e.status },
+    );
   }
   // Pagamento em conferência (aviso não conferido, retorno recente, divergência): o dinheiro pode ter
   // entrado e a prévia da devolução ainda não o conta. Espera a conferência.
@@ -702,7 +720,7 @@ export async function desistirDaEncomenda(
   if (e.pagamentos.some((p) => p.status === "PENDENTE")) {
     await encerrarCobrancasDaEncomenda(e.id);
     e = (await ler())!;
-    if (!desistivel.includes(e.status)) throw new ErroNegocio(409, "Esta encomenda já foi encerrada.", { statusAtual: e.status });
+    if (!podeDesistir(e)) throw new ErroNegocio(409, "Esta encomenda já foi encerrada.", { statusAtual: e.status });
   }
 
   const regras = paraRegras(e, agora);
@@ -713,6 +731,7 @@ export async function desistirDaEncomenda(
     restantePago: regras.restantePagoEm ? regras.valorRestanteCentavos : 0,
     quem: "CLIENTE",
     percentualRetido: e.percentualRetido,
+    politicaVersao: e.politicaVersao,
   });
   if (previa.devolucao !== devolucaoEsperadaCentavos) {
     throw new ErroNegocio(409, "O valor da devolução mudou. Confira antes de desistir.", {
@@ -736,7 +755,12 @@ export async function desistirDaEncomenda(
         restantePagoEm: lido.restantePagoEm,
         ...(lido.status === "SOLICITADA" ? { responderAte: { gt: agora } } : {}),
       },
-      data: { status: "CANCELADA", canceladaPor: "CLIENTE", motivoCancelamento: "Desistência da cliente pelo site.", encerradaEm: agora },
+      data: {
+        status: "CANCELADA",
+        canceladaPor: "CLIENTE",
+        motivoCancelamento: lido.status === "ENTREGUE" ? "Desistência da cliente pelo site, depois de receber (art. 49 do CDC)." : "Desistência da cliente pelo site.",
+        encerradaEm: agora,
+      },
     });
     if (count !== 1) return false;
     if (previa.devolucao > 0) {

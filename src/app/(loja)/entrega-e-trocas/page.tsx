@@ -18,7 +18,7 @@ export default async function PaginaEntregaETrocas() {
   const taxa = formatarBRL(centavos / 100);
 
   return (
-    <PaginaDePolitica titulo="Entrega, trocas e devoluções" atualizadaEm="21 de outubro de 2026">
+    <PaginaDePolitica titulo="Entrega, trocas e devoluções" atualizadaEm="29 de outubro de 2026">
       <p>
         Entregamos em Teresina {centavos > 0 ? <>por <strong>{taxa}</strong></> : <strong>sem custo</strong>} ou você retira na loja, também sem custo. Pode desistir da compra em até 7 dias
         depois de receber.
@@ -54,6 +54,24 @@ export default async function PaginaEntregaETrocas() {
         Código de Defesa do Consumidor). Avise a gente: devolvemos todo o valor pago, inclusive a taxa de entrega, pelo mesmo meio de
         pagamento. No cartão, o estorno aparece na fatura no prazo do seu banco.
       </p>
+
+      <h2>Mimos (encomendas para festas)</h2>
+      <p>
+        Os Mimos são encomendas de potinhos de 40 ml feitas pelo site. Como toda compra pela internet, valem as mesmas regras de
+        desistência: você pode desistir <strong>a qualquer momento antes de receber e até 7 dias depois de receber</strong> (art. 49
+        do Código de Defesa do Consumidor), em <Link href="/minhas-encomendas">Minhas encomendas</Link>.
+      </p>
+      <ul>
+        <li>
+          Devolvemos <strong>100% de tudo o que você pagou</strong> (entrada, restante e frete), de imediato, pelo mesmo meio de
+          pagamento, sem taxa e sem desconto.
+        </li>
+        <li>Antes de a Geleiô aprovar e de você pagar a entrada, nada é cobrado. Se não pudermos fazer a encomenda, devolvemos tudo.</li>
+        <li>
+          Depois de receber, os potinhos devem estar lacrados e sem uso. A devolução deles a gente combina com você, e o custo do
+          retorno é nosso.
+        </li>
+      </ul>
 
       <h2>Pote com problema</h2>
       <p>

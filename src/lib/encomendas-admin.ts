@@ -27,6 +27,8 @@ import {
   pagamentoDivergenteAberto,
   prazoDaEntrada,
   statusEfetivo,
+  desistenciaAposReceberAberta,
+  retemEntradaNaDesistencia,
   transicaoPermitida,
   valoresDoCancelamento,
   type AcaoAdminEntrada,
@@ -516,7 +518,13 @@ export async function executarAcaoAdmin(
   const efetivo = statusEfetivo(regras, agora);
   if (acao.statusEsperado !== efetivo) throw conflito(MENSAGEM_MUDOU, efetivo, "status-mudou");
 
-  const fatos = { agora, responderAte: e.responderAte, entradaAte: e.entradaAte, quitada: e.restantePagoEm !== null };
+  const fatos = {
+    agora,
+    responderAte: e.responderAte,
+    entradaAte: e.entradaAte,
+    quitada: e.restantePagoEm !== null,
+    desistenciaAposReceberAberta: desistenciaAposReceberAberta(e, agora),
+  };
   const exigirTransicao = (para: StatusEncomenda, ator: Ator = "LOJA") => {
     const t = transicaoPermitida(e.status, para, ator, fatos);
     if (!t.ok) {
@@ -556,10 +564,10 @@ export async function executarAcaoAdmin(
   switch (acao.acao) {
     case "aprovar": {
       exigirTransicao("AGUARDANDO_ENTRADA");
-      // O percentual que vale de fato nunca passa do que a cliente aceitou (`percentualAceito`, que NÃO muda):
-      // se o painel o baixou depois da solicitação, vale o menor (congelado aqui, na aprovação).
-      const config = await lerConfigLembrancinhas();
-      const percentualRetido = Math.min(e.percentualAceito, config?.percentualRetido ?? e.percentualAceito);
+      // Política v2: nada é retido (0). Só na v1 (antiga) o percentual que vale de fato nunca passa do que a
+      // cliente aceitou (`percentualAceito`, que NÃO muda): se o painel o baixou depois, vale o menor.
+      const config = retemEntradaNaDesistencia(e.politicaVersao) ? await lerConfigLembrancinhas() : null;
+      const percentualRetido = retemEntradaNaDesistencia(e.politicaVersao) ? Math.min(e.percentualAceito, config?.percentualRetido ?? e.percentualAceito) : 0;
       await atualizar(
         { status: "AGUARDANDO_ENTRADA", aprovadaEm: agora, entradaAte: prazoDaEntrada(agora, e.corteEm), percentualRetido },
         { responderAte: { gt: agora } },
@@ -729,7 +737,7 @@ export type ConfigLembrancinhasAdminDTO = {
   precoPotinhoCentavos: number;
   pesoPotinhoGramas: number;
   pesoEmbalagemGramas: number;
-  /** 0 a 100: quanto da entrada fica com a loja se a cliente desistir depois do corte (D4). */
+  /** Sempre 0: a política v2 (art. 49) não retém nada da entrada. Mantido na API só por compatibilidade. */
   percentualRetido: number;
   atualizadoEm: string | null;
   /** Sabores do catálogo e se estão à venda / marcados "disponível em mini" (a marcação é em Produtos). */
@@ -738,7 +746,7 @@ export type ConfigLembrancinhasAdminDTO = {
   pendenciasLegais: string[];
   /** Avisos que não bloqueiam (nenhum sabor mini, pagamento desligado). */
   avisos: string[];
-  /** Texto fixo do painel ao mexer no percentual. */
+  /** Texto fixo do painel sobre a política de desistência. */
   avisoJuridico: string;
 };
 
@@ -756,7 +764,7 @@ export async function obterConfigLembrancinhasAdmin(): Promise<ConfigLembrancinh
     precoPotinhoCentavos: config ? centavos(config.precoPotinho) : 600,
     pesoPotinhoGramas: config?.pesoPotinhoGramas ?? 110,
     pesoEmbalagemGramas: config?.pesoEmbalagemGramas ?? 300,
-    percentualRetido: config?.percentualRetido ?? 100,
+    percentualRetido: 0,
     atualizadoEm: config?.atualizadoEm.toISOString() ?? null,
     sabores,
     pendenciasLegais: pendenciasParaAbrir(),
@@ -768,7 +776,7 @@ export async function obterConfigLembrancinhasAdmin(): Promise<ConfigLembrancinh
 /**
  * PATCH /api/admin/lembrancinhas (os mimos): edição completa ou só `{ ativo }`. Ativar com CNPJ/CPF ou e-mail
  * pendentes em dados-loja.ts: 409 (D13). Expira o cache da página /mimos na hora. As
- * encomendas já feitas não mudam (preço e percentual ficam congelados nelas).
+ * encomendas já feitas não mudam (preço e política ficam congelados nelas).
  */
 export async function salvarConfigLembrancinhas(
   entrada: ConfigLembrancinhasEntrada | { ativo: boolean },
@@ -783,19 +791,19 @@ export async function salvarConfigLembrancinhas(
           precoPotinho: reaisDe(entrada.precoPotinhoCentavos),
           pesoPotinhoGramas: entrada.pesoPotinhoGramas,
           pesoEmbalagemGramas: entrada.pesoEmbalagemGramas,
-          percentualRetido: entrada.percentualRetido,
         }
       : {};
   await db.configLembrancinhas.upsert({
     where: { id: ID_CONFIG_LEMBRANCINHAS },
-    update: { ativo: entrada.ativo, ...valores },
+    // percentualRetido sempre 0: a coluna tem default 100 no banco, mas a política v2 não retém nada.
+    update: { ativo: entrada.ativo, percentualRetido: 0, ...valores },
     create: {
       id: ID_CONFIG_LEMBRANCINHAS,
       ativo: entrada.ativo,
       precoPotinho: reaisDe(600),
       pesoPotinhoGramas: 110,
       pesoEmbalagemGramas: 300,
-      percentualRetido: 100,
+      percentualRetido: 0,
       ...valores,
     },
   });

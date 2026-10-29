@@ -107,6 +107,8 @@ const aguardando = (extra: Partial<EncomendaParaRegras> = {}): EncomendaParaRegr
   valorEntradaCentavos: 6900,
   valorRestanteCentavos: 9900,
   percentualRetido: 100,
+  politicaVersao: "2026-11-v1",
+  entregueEm: null,
   ...extra,
 });
 

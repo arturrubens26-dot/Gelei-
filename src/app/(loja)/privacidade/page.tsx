@@ -41,7 +41,8 @@ export default function PaginaPrivacidade() {
         <li>
           <strong>Encomendas de mimos:</strong> a data da festa, a data e a forma de receber os potinhos, os sabores e as
           quantidades, e a observação que você escrever, para preparar a encomenda no prazo. Também guardamos qual versão da política
-          de desistência você aceitou e quando.
+          de desistência você aceitou e quando, e a data em que a encomenda foi entregue, para contar os 7 dias do direito de
+          arrependimento.
         </li>
         <li>
           <strong>Endereço:</strong> só quando você escolhe a entrega, para levar o pedido até você.

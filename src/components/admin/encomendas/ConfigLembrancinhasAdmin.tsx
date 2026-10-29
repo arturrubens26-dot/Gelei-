@@ -7,13 +7,12 @@ import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro"
 import type { ConfigLembrancinhasAdminDTO } from "@/lib/encomendas-admin";
 import { formatarDataHora } from "@/lib/formatacao";
 
-type Campos = { preco: string; pesoPotinho: string; pesoEmbalagem: string; percentual: string };
+type Campos = { preco: string; pesoPotinho: string; pesoEmbalagem: string };
 
 const camposDe = (c: ConfigLembrancinhasAdminDTO): Campos => ({
   preco: valorParaCampo(c.precoPotinhoCentavos / 100),
   pesoPotinho: String(c.pesoPotinhoGramas),
   pesoEmbalagem: String(c.pesoEmbalagemGramas),
-  percentual: String(c.percentualRetido),
 });
 
 /** Os erros do 400 vêm pelo nome do campo na API. */
@@ -21,14 +20,13 @@ const CAMPO_DA_API: Record<string, keyof Campos> = {
   precoPotinhoCentavos: "preco",
   pesoPotinhoGramas: "pesoPotinho",
   pesoEmbalagemGramas: "pesoEmbalagem",
-  percentualRetido: "percentual",
 };
 
 /**
  * Configuração dos mimos no painel (GET/PATCH /api/admin/lembrancinhas): abrir ou fechar as
  * encomendas (bloqueado enquanto faltar CNPJ/CPF ou e-mail da loja, D13), preço do potinho, pesos para
- * o frete e quanto da entrada fica com a loja na desistência depois do corte. As encomendas já feitas
- * não mudam: preço e percentual ficam congelados nelas.
+ * o frete. Não há mais percentual retido: a política v2 devolve tudo na desistência (art. 49 do CDC).
+ * As encomendas já feitas não mudam: preço e política ficam congelados nelas.
  */
 export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembrancinhasAdminDTO }) {
   const id = useId();
@@ -93,14 +91,12 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
     const inteiro = (t: string) => (/^\d+$/.test(t.trim()) ? Number(t.trim()) : NaN);
     const pesoPotinho = inteiro(campos.pesoPotinho);
     const pesoEmbalagem = inteiro(campos.pesoEmbalagem);
-    const percentual = inteiro(campos.percentual);
     if (!(pesoPotinho >= 1 && pesoPotinho <= 1000)) novos.pesoPotinho = "De 1 a 1000 g.";
     if (!(pesoEmbalagem >= 0 && pesoEmbalagem <= 5000)) novos.pesoEmbalagem = "De 0 a 5000 g.";
-    if (!(percentual >= 0 && percentual <= 100)) novos.percentual = "De 0 a 100.";
     setErros(novos);
     if (Object.keys(novos).length > 0) return;
     const nova = await enviar(
-      { ativo: config.ativo, precoPotinhoCentavos: preco, pesoPotinhoGramas: pesoPotinho, pesoEmbalagemGramas: pesoEmbalagem, percentualRetido: percentual },
+      { ativo: config.ativo, precoPotinhoCentavos: preco, pesoPotinhoGramas: pesoPotinho, pesoEmbalagemGramas: pesoEmbalagem },
       "valores",
     );
     if (nova) {
@@ -170,14 +166,11 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
 
       <details className="rounded-lg border border-accent2/60 bg-white/60 p-3 open:pb-4">
         <summary className="min-h-11 cursor-pointer content-center font-semibold">
-          Preço, pesos e política ({formatarBRL(config.precoPotinhoCentavos / 100)} o potinho · {config.percentualRetido}% da entrada retido)
+          Preço, pesos e política ({formatarBRL(config.precoPotinhoCentavos / 100)} o potinho · desistência com devolução integral)
         </summary>
         <form onSubmit={salvar} noValidate className="mt-3 grid gap-4 sm:grid-cols-2">
           <CampoForm id={campo("preco")} rotulo="Preço do potinho (R$)" erro={erros.preco} dica="Preço único, para todos os sabores.">
             <input className="campo" inputMode="decimal" maxLength={10} value={campos.preco} onChange={mudar("preco")} {...aria("preco")} />
-          </CampoForm>
-          <CampoForm id={campo("percentual")} rotulo="Entrada retida na desistência (%)" erro={erros.percentual} dica="Depois do corte (3 dias antes). 100 = a entrada toda.">
-            <input className="campo" inputMode="numeric" maxLength={3} value={campos.percentual} onChange={mudar("percentual")} {...aria("percentual")} />
           </CampoForm>
           <CampoForm id={campo("pesoPotinho")} rotulo="Peso do potinho cheio (g)" erro={erros.pesoPotinho} dica="Para o cálculo da entrega.">
             <input className="campo" inputMode="numeric" maxLength={4} value={campos.pesoPotinho} onChange={mudar("pesoPotinho")} {...aria("pesoPotinho")} />

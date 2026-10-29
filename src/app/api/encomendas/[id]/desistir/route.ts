@@ -5,11 +5,12 @@ import { desistenciaSchema } from "@/lib/encomendas-regras";
 
 /**
  * POST /api/encomendas/[id]/desistir  { devolucaoEsperadaCentavos } — a cliente desiste da encomenda
- * (Decreto 7.962, art. 5º: pela mesma ferramenta). `devolucaoEsperadaCentavos` é a prévia que a tela
+ * (CDC art. 49 e Decreto 7.962, art. 5º: pela mesma ferramenta), antes da entrega ou até 7 dias depois de
+ * receber (política v2: devolve tudo, `retido` sempre 0). `devolucaoEsperadaCentavos` é a prévia que a tela
  * mostrou (`encomenda.acoes.desistir.devolucaoCentavos`).
  *
  * Resposta: `{ encomenda: EncomendaDTO, devolucao: { valor, retido } }` (reais). Erros: 404; 409 status
- * final (`detalhes.statusAtual`); 409 a prévia mudou (o corte passou entre a tela e o clique):
+ * final (`detalhes.statusAtual`); 409 a prévia mudou entre a tela e o clique:
  * `detalhes: { statusAtual, devolucao, retido, devolucaoCentavos, retidoCentavos }`, e nada muda.
  */
 export const POST = comTratamento(

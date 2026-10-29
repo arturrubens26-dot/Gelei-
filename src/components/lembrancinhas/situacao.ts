@@ -2,7 +2,7 @@ import { diaComSemana } from "@/components/lembrancinhas/datas";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { EncomendaDTO } from "@/lib/encomendas";
 import { PRAZO_DEVOLUCAO_DIAS_UTEIS } from "@/lib/encomendas-politica";
-import { formatarPrazo, palavraDoModo, statusConfirmado } from "@/lib/encomendas-regras";
+import { DIAS_DESISTENCIA_APOS_RECEBER, formatarPrazo, palavraDoModo, retemEntradaNaDesistencia, statusConfirmado } from "@/lib/encomendas-regras";
 
 /** Só o que estas frases leem da encomenda (a lista e a página usam o mesmo DTO). */
 type Encomenda = Pick<
@@ -21,6 +21,8 @@ type Encomenda = Pick<
   | "motivoCancelamento"
   | "canceladaPor"
   | "devolucao"
+  | "politica"
+  | "acoes"
 >;
 
 const prazo = (iso: string) => formatarPrazo(new Date(iso));
@@ -32,9 +34,13 @@ const prazo = (iso: string) => formatarPrazo(new Date(iso));
 export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: string; acao: boolean } {
   const palavra = palavraDoModo(e.modoEntrega);
   const dia = diaComSemana(e.dataEntrega);
+  // v1 (antiga): devolução em até 2 dias úteis e entrada que podia ficar com a loja; v2: tudo volta, de imediato.
+  const v1 = retemEntradaNaDesistencia(e.politica.versao);
   const devolucao =
     e.devolucao.status === "PENDENTE"
-      ? ` Vamos devolver ${formatarBRL(e.devolucao.pendente)}, pelo mesmo meio do pagamento, em até ${PRAZO_DEVOLUCAO_DIAS_UTEIS} dias úteis.`
+      ? v1
+        ? ` Vamos devolver ${formatarBRL(e.devolucao.pendente)}, pelo mesmo meio do pagamento, em até ${PRAZO_DEVOLUCAO_DIAS_UTEIS} dias úteis.`
+        : ` Vamos devolver ${formatarBRL(e.devolucao.pendente)} de imediato, pelo mesmo meio do pagamento.`
       : e.devolucao.status === "FEITA"
         ? ` Devolvemos ${formatarBRL(e.devolucao.devolvido)}.`
         : "";
@@ -97,7 +103,11 @@ export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: stri
     case "ENTREGUE":
       return {
         titulo: e.modoEntrega === "RETIRADA" ? "Retirada na loja" : "Entregue",
-        texto: `Obrigada pela encomenda! Esperamos que a festa seja linda.${aMais}`,
+        texto: `Obrigada pela encomenda! Esperamos que a festa seja linda.${
+          e.acoes.desistirAte
+            ? ` Se mudar de ideia, você pode desistir aqui no site até ${prazo(e.acoes.desistirAte)} (${DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber): devolvemos tudo o que você pagou.`
+            : ""
+        }${aMais}`,
         acao: false,
       };
     case "RECUSADA":
@@ -124,7 +134,13 @@ export function situacaoDaEncomenda(e: Encomenda): { titulo: string; texto: stri
       };
     case "CANCELADA": {
       const pago = e.entradaPagaEm !== null || e.restantePagoEm !== null;
-      const dinheiro = devolucao || (pago ? " O valor pago ficou com a Geleiô, como diz a política de desistência." : " Nada foi cobrado.");
+      const dinheiro =
+        devolucao ||
+        (pago
+          ? v1
+            ? " O valor pago ficou com a Geleiô, como diz a política de desistência."
+            : " Fale com a Geleiô no Instagram @ge.leio sobre a devolução do que você pagou."
+          : " Nada foi cobrado.");
       const motivo = e.canceladaPor !== "CLIENTE" && e.motivoCancelamento ? e.motivoCancelamento : "";
       return {
         titulo: e.canceladaPor === "CLIENTE" ? "Você desistiu desta encomenda" : "A Geleiô cancelou esta encomenda",

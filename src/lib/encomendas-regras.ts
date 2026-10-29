@@ -75,10 +75,21 @@ export const ANTECEDENCIA_MIN_DIAS = 5;
 export const ANTECEDENCIA_MAX_DIAS = 90;
 /** A entrega ou retirada é de hoje+4 até a véspera da festa (D11). */
 export const DIAS_MIN_ATE_ENTREGA = 4;
-/** O corte da desistência é às 23h59 de 3 dias antes da entrega ou retirada (D4). */
+/**
+ * Corte OPERACIONAL: 23h59 de 3 dias antes da entrega ou retirada. Garante tempo de produção (a entrada
+ * se paga até aqui e a loja responde antes dele). NÃO é prazo de desistência: na política v2 a cliente
+ * desiste a qualquer momento (art. 49 do CDC); só na v1, antiga, ele marcava o fim da devolução integral.
+ */
 export const DIAS_CORTE_ANTES_DA_ENTREGA = 3;
 /** A cliente paga a entrada em até 24 h depois da aprovação, nunca depois do corte (D6). */
 export const HORAS_PARA_PAGAR_ENTRADA = 24;
+
+/** Art. 49 do CDC: a cliente desiste até 7 dias depois de RECEBER (contados do dia em que a loja marcou a entrega). */
+export const DIAS_DESISTENCIA_APOS_RECEBER = 7;
+
+/** Só a política v1 (antiga) retém parte da entrada na desistência; qualquer outra versão devolve tudo. */
+export const VERSAO_POLITICA_COM_RETENCAO = "2026-11-v1";
+export const retemEntradaNaDesistencia = (politicaVersao: string): boolean => politicaVersao === VERSAO_POLITICA_COM_RETENCAO;
 /**
  * Folga depois do prazo da entrada: o link do checkout vale só até `entradaAte` (o `valid_until`), mas a
  * encomenda só EXPIRA de fato 30 min depois. Quem paga no último minuto tem o aviso da InfinitePay (e a
@@ -198,7 +209,7 @@ export function validarDatas(entrada: {
   return Object.keys(erros).length > 0 ? { ok: false, erros } : { ok: true };
 }
 
-/** Corte da desistência: 23h59 de 3 dias antes da entrega (= 00:00 de 2 dias antes). */
+/** Corte operacional (v1: também o da devolução integral): 23h59 de 3 dias antes da entrega (= 00:00 de 2 dias antes). */
 export function corteDaEntrega(dataEntrega: string): Date {
   return inicioDoDia(somarDias(dataEntrega, -(DIAS_CORTE_ANTES_DA_ENTREGA - 1)));
 }
@@ -207,7 +218,7 @@ export function corteDaEntrega(dataEntrega: string): Date {
  * Prazos fixados na solicitação (S = dia da solicitação na loja, E = entrega ou retirada):
  * - a loja responde até o fim do dia seguinte (00:00 de S+2) ou até o meio-dia de E−3, o que vier
  *   primeiro (D5). Como E ≥ S+4, ela tem pelo menos até o meio-dia de S+1;
- * - o corte é às 23h59 de E−3 (`corteDaEntrega`). Ele vem sempre depois de `responderAte`.
+ * - o corte operacional é às 23h59 de E−3 (`corteDaEntrega`). Ele vem sempre depois de `responderAte`.
  */
 export function prazosDaEncomenda(criadaEm: Date, dataEntrega: string): { responderAte: Date; corteEm: Date } {
   const s = diaDaLoja(criadaEm);
@@ -216,7 +227,7 @@ export function prazosDaEncomenda(criadaEm: Date, dataEntrega: string): { respon
   return { responderAte: menor(fimDoDiaSeguinte, meioDiaAntesDoCorte), corteEm: corteDaEntrega(dataEntrega) };
 }
 
-/** Até quando a cliente paga a entrada: 24 h depois da aprovação, nunca depois do corte (D6). */
+/** Até quando a cliente paga a entrada: 24 h depois da aprovação, nunca depois do corte operacional (D6). */
 export function prazoDaEntrada(aprovadaEm: Date, corteEm: Date): Date {
   return menor(new Date(aprovadaEm.getTime() + HORAS_PARA_PAGAR_ENTRADA * 60 * 60_000), corteEm);
 }
@@ -354,10 +365,33 @@ export function calcularValores(entrada: { subtotalCentavos: number; freteCentav
 // --- desistência e devolução ----------------------------------------------------------------------
 
 /**
+ * Fim da desistência depois de receber: 23h59 do 7º dia (horário da loja) depois do dia em que a
+ * encomenda foi marcada como entregue/retirada.
+ */
+export function fimDaDesistenciaAposReceber(entregueEm: Date): Date {
+  return inicioDoDia(somarDias(diaDaLoja(entregueEm), DIAS_DESISTENCIA_APOS_RECEBER + 1));
+}
+
+/**
+ * Política v2 (art. 49): depois de ENTREGUE, a cliente ainda desiste pelo site até
+ * `fimDaDesistenciaAposReceber`. Na v1 (antiga) a entrega encerra a encomenda.
+ */
+export function desistenciaAposReceberAberta(e: { status: StatusEncomenda; politicaVersao: string; entregueEm: Date | null }, agora: Date): boolean {
+  return (
+    e.status === "ENTREGUE" &&
+    !retemEntradaNaDesistencia(e.politicaVersao) &&
+    e.entregueEm !== null &&
+    agora.getTime() < fimDaDesistenciaAposReceber(e.entregueEm).getTime()
+  );
+}
+
+/**
  * Quanto volta para a cliente se a encomenda for encerrada agora (centavos):
  * - a LOJA cancelou: devolve tudo o que foi pago;
- * - a CLIENTE desistiu antes do corte: tudo;
- * - a CLIENTE desistiu do corte em diante: `percentualRetido`% da entrada fica com a loja (arredondado
+ * - política v2 (e qualquer versão que não seja a v1): a CLIENTE desiste e recebe TUDO o que pagou,
+ *   a qualquer momento, sem retenção nem taxa (art. 49 do CDC);
+ * - v1, a CLIENTE desistiu antes do corte: tudo;
+ * - v1, a CLIENTE desistiu do corte em diante: `percentualRetido`% da entrada fica com a loja (arredondado
  *   para baixo, a favor da cliente) e o resto volta, inclusive o restante já pago.
  */
 export function devolucaoNaDesistencia(entrada: {
@@ -367,9 +401,11 @@ export function devolucaoNaDesistencia(entrada: {
   restantePago: number;
   quem: "CLIENTE" | "LOJA";
   percentualRetido: number;
+  politicaVersao: string;
 }): { devolucao: number; retido: number } {
   const { entradaPaga, restantePago } = entrada;
   const pago = entradaPaga + restantePago;
+  if (!retemEntradaNaDesistencia(entrada.politicaVersao)) return { devolucao: pago, retido: 0 };
   if (entrada.quem === "LOJA" || entrada.agora.getTime() < entrada.corteEm.getTime()) return { devolucao: pago, retido: 0 };
   const percentual = Math.min(100, Math.max(0, Math.trunc(entrada.percentualRetido)));
   const retido = Math.floor((entradaPaga * percentual) / 100);
@@ -389,6 +425,8 @@ export type FatosDaTransicao = {
   entradaAte: Date | null;
   /** Restante pago (pelo site ou registrado pela loja). */
   quitada: boolean;
+  /** Política v2 e dentro dos 7 dias depois de receber (`desistenciaAposReceberAberta`). */
+  desistenciaAposReceberAberta?: boolean;
 };
 
 export type MotivoTransicaoRecusada = "transicao-invalida" | "prazo-vencido" | "nao-quitada";
@@ -438,7 +476,9 @@ export const TRANSICOES_ENCOMENDA: Record<StatusEncomenda, readonly Transicao[]>
     { para: "ENTREGUE", atores: ["LOJA"], condicao: (f) => (f.quitada ? null : "nao-quitada") },
     { para: "CANCELADA", atores: ["CLIENTE", "LOJA"] },
   ],
-  ENTREGUE: [],
+  // Política v2 (art. 49): desistência pela cliente até 7 dias depois de receber (a janela e a versão
+  // são conferidas por `desistenciaAposReceberAberta`, em `acoesDaCliente` e em `desistirDaEncomenda`).
+  ENTREGUE: [{ para: "CANCELADA", atores: ["CLIENTE"], condicao: (f) => (f.desistenciaAposReceberAberta ? null : "prazo-vencido") }],
   RECUSADA: [],
   EXPIRADA: [],
   CANCELADA: [],
@@ -479,6 +519,10 @@ export type EncomendaParaRegras = {
   valorEntradaCentavos: number;
   valorRestanteCentavos: number;
   percentualRetido: number;
+  /** Versão da política que a cliente aceitou (define se algo é retido: só na v1). */
+  politicaVersao: string;
+  /** Quando a loja marcou como entregue/retirada (a mais próxima de "recebeu" que o sistema tem). */
+  entregueEm: Date | null;
 };
 
 /**
@@ -562,6 +606,8 @@ export type AcoesDaCliente = {
   pagarRestante: boolean;
   /** Prévia da desistência agora (centavos), ou `null` se não dá para desistir. */
   desistir: { devolucao: number; retido: number } | null;
+  /** v2, já recebida: até quando a desistência pelo site vale (7 dias depois de receber); senão `null`. */
+  desistirAte: Date | null;
   /**
    * Há pagamento em conferência (entrada ou restante): o POST de desistência responderia 409 "aguarde".
    * `desistir` ainda traz a prévia, para a tela mostrar o botão desabilitado com o motivo.
@@ -572,6 +618,7 @@ export type AcoesDaCliente = {
 export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCliente {
   const status = statusEfetivo(enc, agora);
   const aberta = (STATUS_ABERTOS as readonly StatusEncomenda[]).includes(status);
+  const aposReceber = desistenciaAposReceberAberta({ status, politicaVersao: enc.politicaVersao, entregueEm: enc.entregueEm }, agora);
   return {
     // Só quando o POST abriria o link: com menos de 5 min até o prazo da entrada (validadeDoLink), ou com
     // pagamento em conferência, o POST responde 409 e o botão não aparece.
@@ -581,10 +628,12 @@ export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCl
       validadeDoLink(agora, enc.entradaAte) !== null &&
       !enc.entradaEmConfirmacao,
     pagarRestante: statusConfirmado(status) && enc.restantePagoEm === null && !enc.restanteEmConfirmacao,
-    desistir: aberta
-      ? devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pagoEmCentavos(enc), quem: "CLIENTE", percentualRetido: enc.percentualRetido })
-      : null,
-    desistirBloqueado: aberta && Boolean(enc.entradaEmConfirmacao || enc.restanteEmConfirmacao),
+    desistir:
+      aberta || aposReceber
+        ? devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pagoEmCentavos(enc), quem: "CLIENTE", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao })
+        : null,
+    desistirAte: aposReceber && enc.entregueEm ? fimDaDesistenciaAposReceber(enc.entregueEm) : null,
+    desistirBloqueado: (aberta || aposReceber) && Boolean(enc.entradaEmConfirmacao || enc.restanteEmConfirmacao),
   };
 }
 
@@ -742,8 +791,8 @@ export function valoresDoCancelamento(enc: EncomendaParaRegras, agora: Date) {
   const totalPago = pago.entradaPaga + pago.restantePago;
   return {
     totalPago,
-    pelaLoja: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "LOJA", percentualRetido: enc.percentualRetido }),
-    aPedidoDaCliente: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "CLIENTE", percentualRetido: enc.percentualRetido }),
+    pelaLoja: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "LOJA", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao }),
+    aPedidoDaCliente: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "CLIENTE", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao }),
   };
 }
 
@@ -768,7 +817,7 @@ export type AcaoDaLoja = {
   /** false: o botão aparece desabilitado, com o `motivo`. */
   permitida: boolean;
   motivo: string | null;
-  /** Aviso que não bloqueia (ex.: produção antes do corte). */
+  /** Aviso que não bloqueia (ex.: iniciar a produção). */
   aviso: string | null;
 };
 
@@ -837,9 +886,11 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
     case "CONFIRMADA":
       lista.push(
         acao("iniciar-producao", "Iniciar produção", {
-          aviso: antesDoCorte
-            ? `A cliente ainda pode desistir com devolução integral até ${formatarPrazo(enc.corteEm)}.`
-            : null,
+          aviso: retemEntradaNaDesistencia(enc.politicaVersao)
+            ? antesDoCorte
+              ? `A cliente ainda pode desistir com devolução integral até ${formatarPrazo(enc.corteEm)}.`
+              : null
+            : "Lembre: pelo art. 49 do CDC a cliente pode desistir a qualquer momento, até 7 dias depois de receber, e você devolve tudo o que ela pagou.",
         }),
         acao("marcar-pronta", "Marcar como pronta"),
         ...restante(),
@@ -1079,9 +1130,7 @@ export const configLembrancinhasSchema = z.object({
   pesoEmbalagemGramas: numeroDoCampo(
     z.number("Informe o peso da embalagem.").int("Peso em gramas inteiros.").min(0, "O peso não pode ser negativo.").max(5000, "Peso máximo: 5000 g."),
   ),
-  percentualRetido: numeroDoCampo(
-    z.number("Informe o percentual retido.").int("Use um número inteiro.").min(0, "Mínimo: 0%.").max(100, "Máximo: 100%."),
-  ),
+  // Sem `percentualRetido`: a política v2 não retém nada (o campo, se vier, é ignorado e o servidor grava 0).
   ativo: z.boolean("Diga se os mimos estão abertos."),
 });
 
@@ -1258,7 +1307,7 @@ export function mensagemWhatsApp(status: StatusEncomenda, d: DadosDaMensagem): s
     case "EXPIRADA":
       return `${ola} ${qual} expirou sem confirmação, e nada foi cobrado. Se ainda quiser, é só fazer uma nova solicitação.${veja}`;
     case "CANCELADA":
-      return `${ola} ${qual} foi cancelada.${d.devolucaoCentavos > 0 ? ` Vamos devolver ${brl(d.devolucaoCentavos)}, pelo mesmo meio do pagamento, em até 2 dias úteis.` : ""}${veja}`;
+      return `${ola} ${qual} foi cancelada.${d.devolucaoCentavos > 0 ? ` Vamos devolver ${brl(d.devolucaoCentavos)} de imediato, pelo mesmo meio do pagamento.` : ""}${veja}`;
   }
 }
 

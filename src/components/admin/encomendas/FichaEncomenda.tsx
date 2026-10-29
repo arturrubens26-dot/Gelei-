@@ -9,7 +9,7 @@ import { diaComSemana } from "@/components/lembrancinhas/datas";
 import { SeloDaEncomenda } from "@/components/lembrancinhas/SeloDaEncomenda";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { DevolucaoDaEncomendaDTO, EncomendaAdminDetalheDTO, PagamentoDaEncomendaDTO } from "@/lib/encomendas-admin";
-import { HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, formatarPrazo, marcadasQueSeguemPendentes, prazoDaEntrada, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
+import { DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, fimDaDesistenciaAposReceber, formatarPrazo, marcadasQueSeguemPendentes, prazoDaEntrada, retemEntradaNaDesistencia, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
 import { enderecoDeRetirada } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 import { FORMAS_PAGAMENTO, ROTULO_FORMA_PAGAMENTO, type FormaPagamento } from "@/lib/vendas";
@@ -398,11 +398,23 @@ export function FichaEncomenda({ id }: { id: string }) {
           <dt className="font-semibold">Responder até</dt>
           <dd>{prazo(e.prazos.responderAte)}</dd>
           <dt className="font-semibold">Entrada até</dt>
-          <dd>{e.prazos.entradaAte ? prazo(e.prazos.entradaAte) : `depois da aprovação (${HORAS_PARA_PAGAR_ENTRADA} horas, ou até o prazo de desistência, o que vier antes)`}</dd>
-          <dt className="font-semibold">Desistência com devolução integral</dt>
-          <dd>
-            até {prazo(e.prazos.corteEm)}; depois, {e.politica.percentualRetido}% da entrada fica com a loja
-          </dd>
+          <dd>{e.prazos.entradaAte ? prazo(e.prazos.entradaAte) : `depois da aprovação (${HORAS_PARA_PAGAR_ENTRADA} horas, ou até o corte de produção, 3 dias antes da entrega, o que vier antes)`}</dd>
+          {retemEntradaNaDesistencia(e.politica.versao) ? (
+            <>
+              <dt className="font-semibold">Desistência com devolução integral</dt>
+              <dd>
+                até {prazo(e.prazos.corteEm)}; depois, {e.politica.percentualRetido}% da entrada fica com a loja
+              </dd>
+            </>
+          ) : (
+            <>
+              <dt className="font-semibold">Desistência (art. 49)</dt>
+              <dd>
+                a qualquer momento antes da entrega e até {DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber
+                {e.entregueEm ? ` (até ${prazo(fimDaDesistenciaAposReceber(new Date(e.entregueEm)).toISOString())})` : ""}; devolve tudo o que ela pagou, sem taxa
+              </dd>
+            </>
+          )}
         </dl>
       </section>
 
@@ -522,7 +534,9 @@ export function FichaEncomenda({ id }: { id: string }) {
       <details className="cartao p-5">
         <summary className="min-h-11 cursor-pointer content-center font-titulos text-xl font-bold">Política aceita pela cliente</summary>
         <p className="mt-2 text-xs text-primaria/80">
-          Versão {e.politica.versao}, aceita em {formatarDataHora(e.politica.aceitaEm)}; {e.politica.percentualAceito}% da entrada retido depois do corte (o texto abaixo).{e.politica.percentualAceito !== e.politica.percentualRetido ? ` Vale hoje ${e.politica.percentualRetido}%.` : ""}
+          Versão {e.politica.versao}, aceita em {formatarDataHora(e.politica.aceitaEm)}; {retemEntradaNaDesistencia(e.politica.versao)
+            ? `${e.politica.percentualAceito}% da entrada retido depois do corte (o texto abaixo).${e.politica.percentualAceito !== e.politica.percentualRetido ? ` Vale hoje ${e.politica.percentualRetido}%.` : ""}`
+            : "devolução integral, sem retenção (o texto abaixo)."}
         </p>
         <ol className="mt-2 flex list-decimal flex-col gap-1.5 pl-5 text-sm">
           {e.politica.textos.map((t, i) => (
