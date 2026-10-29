@@ -822,7 +822,8 @@ async function main() {
     const finAntes = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
     const despAntes = (await admin.req("GET", `/api/admin/expenses?mes=${mesAgora}`)).json;
     // Cria a encomenda direto no banco (o POST do site fica fechado sem CNPJ/CPF e e-mail da loja). `o`:
-    // usuario (padrão: a conta "a"), entradaAte, corteEm, percentualAceito, percentualRetido e restantePagoEm.
+    // usuario (padrão: a conta "a"), entradaAte, corteEm, percentualAceito, percentualRetido, restantePagoEm,
+    // politica (padrão "2026-11-v1", a antiga que retém; "2026-11-v2" = art. 49, sem retenção, percentuais 0) e entregueEm.
     // CONFIRMADA em diante já nasce com a entrada paga (a CHECK exige).
     // As colunas de data são TIMESTAMP sem fuso: o pg manda um Date na hora LOCAL deste computador (−03:00) e o banco
     // guardaria 3 h a menos que o instante pedido. Por isso as datas vão como ISO em UTC (utc()).
@@ -832,13 +833,14 @@ async function main() {
       encomendas.push(id);
       const aprovada = status !== "SOLICITADA";
       const confirmada = ["CONFIRMADA", "EM_PRODUCAO", "PRONTA", "ENTREGUE"].includes(status);
-      const aceito = o.percentualAceito ?? 100;
+      const politica = o.politica ?? "2026-11-v1";
+      const aceito = o.percentualAceito ?? (politica === "2026-11-v1" ? 100 : 0);
       await sql(
         `insert into encomendas (id, user_id, status, data_festa, data_entrega, modo_entrega, telefone, potinhos, subtotal, frete, total,
            valor_entrada, valor_restante, peso_total_gramas, responder_ate, corte_em, entrada_ate, percentual_aceito, percentual_retido,
-           politica_versao, politica_aceita_em, idempotency_key, aprovada_em, entrada_paga_em, restante_pago_em, restante_forma)
+           politica_versao, politica_aceita_em, idempotency_key, aprovada_em, entrada_paga_em, restante_pago_em, restante_forma, entregue_em)
          values ($1, $2, $3, current_date + 12, current_date + 10, 'RETIRADA', '86999991234', 15, 90, 0, 90,
-           45, 45, 1950, now() + interval '1 day', $7, $4, $8, $9, '2026-11-v1', now(), $5, $6, $10, $11, $12)`,
+           45, 45, 1950, now() + interval '1 day', $7, $4, $8, $9, $13, now(), $5, $6, $10, $11, $12, $14)`,
         [
           id,
           o.usuario ?? contas[0],
@@ -852,6 +854,8 @@ async function main() {
           confirmada ? utc(new Date()) : null,
           utc(o.restantePagoEm),
           o.restantePagoEm ? "PIX" : null,
+          politica,
+          utc(o.entregueEm),
         ],
       );
       await sql("insert into encomenda_itens (id, encomenda_id, product_id, quantidade, preco_unitario) values ($1, $2, $3, 15, 6)", [`${id}i`, id, produto]);
@@ -1037,8 +1041,8 @@ async function main() {
           modoEntrega: "RETIRADA",
           telefone: "(86) 99999-1234",
           aceitePolitica: true,
-          politicaVersao: "2026-11-v1",
-          percentualRetido: cfgAntes.percentualRetido,
+          politicaVersao: "2026-11-v2",
+          percentualRetido: 0,
           totalEsperadoCentavos: 15 * cfgAntes.precoPotinhoCentavos,
         };
         const chave = `e2e-${marca}-criar`;
@@ -1420,8 +1424,8 @@ async function main() {
       modoEntrega: "RETIRADA",
       telefone: "(86) 99999-1234",
       aceitePolitica: true,
-      politicaVersao: "2026-11-v1",
-      percentualRetido: cfg30.percentualRetido,
+      politicaVersao: "2026-11-v2",
+      percentualRetido: 0,
       totalEsperadoCentavos: 15 * cfg30.precoPotinhoCentavos,
     });
     const [{ festa: festa30, entrega: entrega30 }] = await sql(
@@ -1491,36 +1495,26 @@ async function main() {
         await sql("update products set disponivel_em_mini = $2 where id = $1", [produto, miniAntes30]);
       }
     }
-    // Percentual aceito x efetivo: a aprovação baixa o efetivo, o aceito (e o texto da política) ficam.
-    const encP = await novaEncomenda("p30", "SOLICITADA", { usuario: uid30, percentualAceito: 100 });
+    // Política v2 (art. 49): o painel não tem mais percentual; um percentualRetido enviado no PATCH é ignorado.
     const corpoCfg = (p) => ({ ativo: cfg30.ativo, precoPotinhoCentavos: cfg30.precoPotinhoCentavos, pesoPotinhoGramas: cfg30.pesoPotinhoGramas, pesoEmbalagemGramas: cfg30.pesoEmbalagemGramas, percentualRetido: p });
-    try {
-      const baixa = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: corpoCfg(50) });
-      confere(baixa.status === 200 && baixa.json?.config?.percentualRetido === 50, "painel baixa o percentual para 50%", baixa.json?.config?.percentualRetido);
-      await acaoEnc(encP, { acao: "aprovar", statusEsperado: "SOLICITADA" });
-      const linhaP = await linhaEnc(encP);
-      confere(linhaP.percentual_aceito === 100 && linhaP.percentual_retido === 50, "aprovar baixa o percentual efetivo (50) e guarda o aceito (100)", [linhaP.percentual_aceito, linhaP.percentual_retido]);
-      const dtoP = await dtoEnc(conta30, encP);
-      confere(
-        dtoP?.politica.percentualAceito === 100 && dtoP.politica.percentualRetido === 50 && /fica com a Geleiô para cobrir/.test(dtoP.politica.textos[2] ?? "") && !/50%/.test(dtoP.politica.textos[2] ?? ""),
-        "o texto da política mostra o que a cliente aceitou (100%), não o efetivo",
-        dtoP?.politica,
-      );
-      const fichaP = await fichaEnc(encP);
-      confere(fichaP?.politica.percentualAceito === 100 && fichaP.politica.percentualRetido === 50, "a ficha mostra o aceito e o efetivo", fichaP?.politica);
-      // O efetivo não passa do aceito (CHECK no banco) e a prévia da desistência depois do corte usa o efetivo.
-      try {
-        await sql("update encomendas set percentual_retido = 100, percentual_aceito = 80 where id = $1", [encP]);
-        confere(false, "CHECK recusa percentual efetivo acima do aceito");
-      } catch (e) {
-        confere(e.code === "23514", "CHECK recusa percentual efetivo acima do aceito", e.message);
-      }
-      const encPC = await novaEncomenda("pc30", "CONFIRMADA", { usuario: uid30, percentualAceito: 100, percentualRetido: 50, corteEm: new Date(Date.now() - 3_600_000) });
-      const dtoPC = await dtoEnc(conta30, encPC);
-      confere(dtoPC?.acoes.desistir?.devolucaoCentavos === 2250 && dtoPC.acoes.desistir.retidoCentavos === 2250, "depois do corte, a desistência retém o percentual efetivo (50% de 45 = 22,50)", dtoPC?.acoes.desistir);
-    } finally {
-      await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: corpoCfg(cfg30.percentualRetido) });
-    }
+    const patchPct = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: corpoCfg(50) });
+    const [{ p: pctBanco }] = await sql("select percentual_retido p from config_lembrancinhas limit 1");
+    confere(patchPct.status === 200 && patchPct.json?.config?.percentualRetido === 0 && Number(pctBanco) === 0, "PATCH com percentualRetido=50 é ignorado: a config segue em 0", [patchPct.status, patchPct.json?.config?.percentualRetido, pctBanco]);
+    // Uma solicitação v2 aprovada fica com percentuais 0 e o texto da política não fala em retenção.
+    const encP = await novaEncomenda("p30", "SOLICITADA", { usuario: uid30, politica: "2026-11-v2" });
+    await acaoEnc(encP, { acao: "aprovar", statusEsperado: "SOLICITADA" });
+    const linhaP = await linhaEnc(encP);
+    confere(linhaP.percentual_aceito === 0 && linhaP.percentual_retido === 0, "aprovar uma encomenda v2 mantém os percentuais em 0", [linhaP.percentual_aceito, linhaP.percentual_retido]);
+    const dtoP = await dtoEnc(conta30, encP);
+    const textoP = (dtoP?.politica.textos ?? []).join(" ");
+    confere(dtoP?.politica.versao === "2026-11-v2" && /art\. 49/.test(textoP) && /100%/.test(textoP) && !/fica com a Geleiô|retém|retemos/i.test(textoP), "o texto da política v2 cita o art. 49, devolve 100% e não fala em retenção", dtoP?.politica);
+    // Depois do corte a v2 continua devolvendo tudo (o corte é só operacional); a v1 antiga segue retendo.
+    const encPC = await novaEncomenda("pc30", "CONFIRMADA", { usuario: uid30, politica: "2026-11-v2", corteEm: new Date(Date.now() - 3_600_000) });
+    const dtoPC = await dtoEnc(conta30, encPC);
+    confere(dtoPC?.acoes.desistir?.devolucaoCentavos === 4500 && dtoPC.acoes.desistir.retidoCentavos === 0, "v2, depois do corte: a desistência ainda devolve os 45 pagos", dtoPC?.acoes.desistir);
+    const encPV1 = await novaEncomenda("pv30", "CONFIRMADA", { usuario: uid30, percentualAceito: 100, percentualRetido: 50, corteEm: new Date(Date.now() - 3_600_000) });
+    const dtoPV1 = await dtoEnc(conta30, encPV1);
+    confere(dtoPV1?.acoes.desistir?.devolucaoCentavos === 2250 && dtoPV1.acoes.desistir.retidoCentavos === 2250, "v1 (antiga), depois do corte: segue retendo o percentual efetivo (50% de 45 = 22,50)", dtoPV1?.acoes.desistir);
 
     console.log("31. Segurança do PATCH da ficha: cliente, sem sessão e requisição de outro site");
     const enc31 = await novaEncomenda("s31", "SOLICITADA");
@@ -1620,6 +1614,27 @@ async function main() {
     const e33e = await novaEncomenda("e33", "CONFIRMADA", { usuario: uid33, corteEm: new Date(Date.now() - 3_600_000), restantePagoEm: new Date() });
     const d33e = await dtoEnc(conta33, e33e);
     confere(d33e?.acoes.desistir?.devolucaoCentavos === 4500 && d33e.acoes.desistir.retidoCentavos === 4500, "depois do corte com o restante pago: volta o restante (45), a entrada (45) fica", d33e?.acoes.desistir);
+
+    // f) Política v2 (art. 49): depois de ENTREGUE, desiste até 7 dias depois de receber; fora da janela, é recusado.
+    const dia = 86_400_000;
+    const e33f = await novaEncomenda("f33", "ENTREGUE", { usuario: uid33, politica: "2026-11-v2", restantePagoEm: new Date(Date.now() - 2 * dia), entregueEm: new Date(Date.now() - 3 * dia) });
+    const d33f = await dtoEnc(conta33, e33f);
+    confere(d33f?.acoes.desistir?.devolucaoCentavos === 9000 && d33f.acoes.desistir.retidoCentavos === 0 && typeof d33f.acoes.desistirAte === "string", "v2 entregue há 3 dias: a prévia devolve os 90 pagos e informa até quando", d33f?.acoes);
+    const ok33f = await desistir(conta33, e33f, 9000);
+    const [dev33f] = await devolucoesEnc(e33f);
+    confere(
+      ok33f.status === 200 && ok33f.json?.encomenda?.statusEfetivo === "CANCELADA" && dev33f?.motivo === "DESISTENCIA" && dev33f.valor === "90.00" && dev33f.status === "PENDENTE",
+      "v2: desistir depois de ENTREGUE (dentro dos 7 dias) → CANCELADA com devolução pendente de 90",
+      [ok33f.status, ok33f.json, dev33f],
+    );
+    const e33g = await novaEncomenda("g33", "ENTREGUE", { usuario: uid33, politica: "2026-11-v2", restantePagoEm: new Date(Date.now() - 10 * dia), entregueEm: new Date(Date.now() - 9 * dia) });
+    const d33g = await dtoEnc(conta33, e33g);
+    confere(d33g?.acoes.desistir === null && d33g.acoes.desistirAte === null, "v2 entregue há 9 dias: sem opção de desistir na tela", d33g?.acoes);
+    const no33g = await desistir(conta33, e33g, 9000);
+    confere(no33g.status === 409 && (await linhaEnc(e33g)).status === "ENTREGUE" && (await devolucoesEnc(e33g)).length === 0, "v2: desistir fora dos 7 dias → 409, nada muda", [no33g.status, no33g.json]);
+    const e33h = await novaEncomenda("h33", "ENTREGUE", { usuario: uid33, restantePagoEm: new Date(Date.now() - 2 * dia), entregueEm: new Date(Date.now() - 3 * dia) });
+    const no33h = await desistir(conta33, e33h, 9000);
+    confere(no33h.status === 409 && (await linhaEnc(e33h)).status === "ENTREGUE", "v1 (antiga): depois de ENTREGUE não há desistência", [no33h.status, no33h.json]);
 
     console.log("13. Meus pedidos e o teto de pendentes");
     const meus = await sql("select count(*)::int n from orders where user_id = $1 and status = 'PENDENTE' and created_at > now() - interval '48 hours'", [contas[0]]);
