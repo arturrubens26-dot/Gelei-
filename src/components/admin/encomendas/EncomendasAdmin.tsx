@@ -26,7 +26,7 @@ const botaoAba =
   "inline-flex min-h-11 items-center gap-1.5 rounded-full border-2 px-4 text-sm font-semibold transition-colors";
 
 /**
- * Encomendas de lembrancinhas no painel, por aba (GET /api/admin/encomendas): responder (com o prazo
+ * Encomendas de mimos no painel, por aba (GET /api/admin/encomendas): responder (com o prazo
  * correndo e "Aprovar" direto), agenda de produção por dia e sabor, aguardando a entrada, devoluções
  * pendentes e histórico. A aba fica no endereço (?visao=), para voltar da ficha no mesmo lugar.
  */

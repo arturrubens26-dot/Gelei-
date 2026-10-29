@@ -89,8 +89,8 @@ export function avisosDeAlegacao(texto: string): string[] {
   const normal = semAcento(texto);
   return PADROES_DE_ALEGACAO.filter((p) => p.padrao.test(normal)).map((p) => p.termo);
 }
-/** Rótulo da caixinha das lembrancinhas (e citado nos avisos da configuração). */
-export const ROTULO_DISPONIVEL_EM_MINI = "Disponível em mini (lembrancinhas)";
+/** Rótulo da caixinha dos mimos (e citado nos avisos da configuração). */
+export const ROTULO_DISPONIVEL_EM_MINI = "Disponível em mini (mimos)";
 
 /** "true"/"on"/true → true; "false"/false → false; ausente → undefined (fica como estava). */
 const caixinhaOpcional = z.preprocess(
@@ -220,7 +220,7 @@ export const produtoSchema = z.object({
   /** Verso da foto: "Por que você vai gostar" (até 3 linhas de 70). Ausente: não mexe; "": esvazia. */
   destaques: listaDoVerso({ nome: TITULO_DESTAQUES, maxItens: MAX_DESTAQUES, maxCaracteres: MAX_CARACTERES_DESTAQUE }),
   /**
-   * "Disponível em mini (lembrancinhas)". Sem o campo (formulário de antes desta versão), `undefined`:
+   * "Disponível em mini (mimos)". Sem o campo (formulário de antes desta versão), `undefined`:
    * ao editar, fica como estava; ao criar, nasce desmarcado (default do banco).
    */
   disponivelEmMini: caixinhaOpcional,

@@ -29,6 +29,6 @@ export const PATCH = comTratamento("api/admin/lembrancinhas PATCH", async (reque
   const lido = soAtivo ? configAtivoSchema.safeParse(json) : configLembrancinhasSchema.safeParse(json);
   if (!lido.success) return erroDeValidacao(lido.error);
   const config = await salvarConfigLembrancinhas(lido.data);
-  console.info(`[admin] ${auth.usuario.id} mudou a configuração das lembrancinhas (ativo=${config.ativo})`);
+  console.info(`[admin] ${auth.usuario.id} mudou a configuração dos mimos (ativo=${config.ativo})`);
   return Response.json({ config });
 });

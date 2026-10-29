@@ -5,7 +5,7 @@ import { FUSO_LOJA, hojeNaLoja } from "@/lib/despesas";
 import { codigoPedido } from "@/lib/formatacao";
 
 /**
- * Dinheiro das encomendas de lembrancinhas no Financeiro e nas Despesas, por CAIXA (decisão 3.8 do
+ * Dinheiro das encomendas de mimos no Financeiro e nas Despesas, por CAIXA (decisão 3.8 do
  * plano, coerente com o README):
  * - entra cada parcela paga pelo site na data em que foi aprovada (`pagamentos.aprovado_em`, com o
  *   valor da parcela: os juros do parcelado ficam com a InfinitePay), e a entrada ou o restante
@@ -117,8 +117,8 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
       tipo: "entrada" as const,
       id: p.id,
       dia: hojeNaLoja(p.aprovadoEm!),
-      descricao: `Lembrancinhas ${codigoPedido(p.encomenda!.id)} · ${p.parcela === "ENTRADA" ? "entrada" : "restante"} · ${p.encomenda!.user.nome}`,
-      detalhe: "Lembrancinhas (site)",
+      descricao: `Mimos ${codigoPedido(p.encomenda!.id)} · ${p.parcela === "ENTRADA" ? "entrada" : "restante"} · ${p.encomenda!.user.nome}`,
+      detalhe: "Mimos (site)",
       valor: p.valor.toNumber(),
       ordem: p.aprovadoEm!.getTime(),
     })),
@@ -126,8 +126,8 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
       tipo: "entrada" as const,
       id: `${e.id}-entrada`,
       dia: hojeNaLoja(e.entradaPagaEm!),
-      descricao: `Lembrancinhas ${codigoPedido(e.id)} · entrada · ${e.user.nome}`,
-      detalhe: "Lembrancinhas (fora do site)",
+      descricao: `Mimos ${codigoPedido(e.id)} · entrada · ${e.user.nome}`,
+      detalhe: "Mimos (fora do site)",
       valor: e.valorEntrada.toNumber(),
       ordem: e.entradaPagaEm!.getTime(),
     })),
@@ -135,8 +135,8 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
       tipo: "entrada" as const,
       id: `${e.id}-restante`,
       dia: hojeNaLoja(e.restantePagoEm!),
-      descricao: `Lembrancinhas ${codigoPedido(e.id)} · restante · ${e.user.nome}`,
-      detalhe: "Lembrancinhas (fora do site)",
+      descricao: `Mimos ${codigoPedido(e.id)} · restante · ${e.user.nome}`,
+      detalhe: "Mimos (fora do site)",
       valor: e.valorRestante.toNumber(),
       ordem: e.restantePagoEm!.getTime(),
     })),
@@ -144,8 +144,8 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
       tipo: "devolucao" as const,
       id: d.id,
       dia: hojeNaLoja(d.feitaEm!),
-      descricao: `Devolução · lembrancinhas ${codigoPedido(d.encomenda.id)} · ${d.encomenda.user.nome}`,
-      detalhe: "Lembrancinhas",
+      descricao: `Devolução · mimos ${codigoPedido(d.encomenda.id)} · ${d.encomenda.user.nome}`,
+      detalhe: "Mimos",
       valor: d.valor.toNumber(),
       ordem: d.feitaEm!.getTime(),
     })),
@@ -172,7 +172,7 @@ export async function liquidoLembrancinhasDoMes(inicio: Date, fim: Date): Promis
   return [...porMes.values()].reduce((s, v) => s + v, 0);
 }
 
-/** Líquido das lembrancinhas por mês da loja ("AAAA-MM") entre dois instantes (gráfico de evolução). */
+/** Líquido dos mimos por mês da loja ("AAAA-MM") entre dois instantes (gráfico de evolução). */
 export async function liquidoLembrancinhasPorMes(inicio: Date, fim: Date): Promise<Map<string, number>> {
   const mes = (coluna: Prisma.Sql) => Prisma.sql`to_char(date_trunc('month', (${coluna} AT TIME ZONE 'UTC') AT TIME ZONE ${FUSO_LOJA}), 'YYYY-MM')`;
   const linhas = await db.$queryRaw<{ mes: string; liquido: unknown }[]>`

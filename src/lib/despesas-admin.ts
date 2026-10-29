@@ -129,7 +129,7 @@ export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
     db.expense.aggregate({ where: doMes, _sum: { valorTotal: true }, _count: { _all: true } }),
     db.expense.groupBy({ by: ["categoria"], where: doMes, _sum: { valorTotal: true }, _count: { _all: true } }),
     db.order.aggregate({ where: vendasDoMes, _sum: { total: true }, _count: { _all: true } }),
-    // O mesmo líquido das lembrancinhas do Financeiro (parcelas pagas − devoluções feitas no mês).
+    // O mesmo líquido dos mimos do Financeiro (parcelas pagas − devoluções feitas no mês).
     liquidoLembrancinhasDoMes(limites.inicio, limites.fim),
   ]);
 

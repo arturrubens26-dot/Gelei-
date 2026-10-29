@@ -68,7 +68,7 @@ function Informar({ etapa, pedidoStatus, pagarAte, cobranca }: SituacaoPagamento
 
 /**
  * Pagamento do pedido (página de confirmação), por etapa: o miolo é o `PagamentoPorEtapa` (o mesmo
- * da encomenda de lembrancinhas); aqui ficam as rotas, os textos e o selo do pedido.
+ * da encomenda de mimos); aqui ficam as rotas, os textos e o selo do pedido.
  */
 export function StatusPagamento({ pedidoId, situacaoInicial }: { pedidoId: string; situacaoInicial: SituacaoPagamentoDTO }) {
   const base = `/api/orders/${encodeURIComponent(pedidoId)}`;

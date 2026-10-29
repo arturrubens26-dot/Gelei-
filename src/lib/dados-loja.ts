@@ -27,7 +27,7 @@ export type DadosLegais = {
 /**
  * CNPJ/CPF e e-mail de contato: o Decreto 7.962/2013 (art. 2º) pede os dois no site de quem vende pela
  * internet. PENDENTES: preencha aqui quando a dona informar. Enquanto faltarem, o painel avisa e NÃO
- * deixa abrir as encomendas de lembrancinhas (decisão D13).
+ * deixa abrir as encomendas de mimos (decisão D13).
  */
 export const dadosLegais: DadosLegais = {
   documento: "077.739.053-12",

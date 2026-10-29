@@ -59,7 +59,7 @@ type Props = {
 };
 
 /**
- * Solicitação de lembrancinhas (minis de 40 ml), pensada primeiro para o celular. Na ordem: data da
+ * Solicitação de mimos (minis de 40 ml), pensada primeiro para o celular. Na ordem: data da
  * festa, sabores (15 a 50 potinhos), entrega ou retirada e o dia, WhatsApp e observação, e o resumo
  * com a política de desistência (as datas e valores desta encomenda) e o aceite.
  *

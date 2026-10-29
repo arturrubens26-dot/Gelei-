@@ -201,14 +201,14 @@ export async function resumoDashboard() {
       status: p.status,
       total: p.total.toNumber(),
     })),
-    /** Lembrancinhas: a responder (e o prazo mais próximo), entregas de hoje e devoluções pendentes. */
+    /** Mimos: a responder (e o prazo mais próximo), entregas de hoje e devoluções pendentes. */
     encomendas,
   };
 }
 
 /**
- * Uma linha de "Movimentações do mês": venda paga ou parcela de lembrancinhas (entrada), despesa
- * (saída) ou devolução de lembrancinhas feita (sai da receita; `valor` positivo).
+ * Uma linha de "Movimentações do mês": venda paga ou parcela de mimos (entrada), despesa
+ * (saída) ou devolução de mimos feita (sai da receita; `valor` positivo).
  */
 export type MovimentacaoDTO = {
   tipo: "entrada" | "saida" | "devolucao";
@@ -248,7 +248,7 @@ export type FinanceiroDoMes = {
      */
     kits: { caixas: number; valor: number; desconto: number };
     /**
-     * Encomendas de lembrancinhas, por caixa: parcelas pela data do pagamento, devoluções pela data em
+     * Encomendas de mimos, por caixa: parcelas pela data do pagamento, devoluções pela data em
      * que foram feitas. O `liquido` entra em `resumo.entradas` e na receita do gráfico; vendas e
      * ticket médio continuam só com os pedidos.
      */
@@ -373,7 +373,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
   const site = porCanal.find((l) => l.canal === "ONLINE");
   const presencial = porCanal.find((l) => l.canal === "PRESENCIAL");
   const entradas = porCanal.reduce((s, l) => s.add(l._sum.total ?? 0), zero);
-  // O resumo soma o líquido das lembrancinhas; o ticket médio continua só com os pedidos.
+  // O resumo soma o líquido dos mimos; o ticket médio continua só com os pedidos.
   const entradasComLembrancinhas = entradas.add(lembrancinhas.resumo.liquido);
   const vendas = porCanal.reduce((s, l) => s + l._count._all, 0);
   const saidas = somaDespesas._sum.valorTotal ?? zero;
@@ -452,7 +452,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       const linha = receitaPorMes.get(m);
       return {
         mes: m,
-        // Arredonda no centavo: a soma de float do líquido das lembrancinhas não deixa resto.
+        // Arredonda no centavo: a soma de float do líquido dos mimos não deixa resto.
         receita: Math.round(((linha ? Number(String(linha.receita)) : 0) + (lembrancinhasMensais.get(m) ?? 0)) * 100) / 100,
         pedidos: linha ? Number(linha.pedidos) : 0,
         despesas: despesaPorMes.get(m) ?? 0,

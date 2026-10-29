@@ -1,7 +1,7 @@
 /**
  * Os itens do menu do painel, agrupados por função. Cada item é uma página ou uma parte de uma página
  * (`?secao=` rola até ela; `?aba=` escolhe a aba): quem está em Encomendas não fica procurando onde
- * abrir ou fechar as lembrancinhas, nem em Produtos onde está a taxa de entrega.
+ * abrir ou fechar os mimos, nem em Produtos onde está a taxa de entrega.
  */
 
 export type NomeDoIcone =
@@ -58,7 +58,7 @@ export const GRUPOS_DO_MENU: readonly GrupoDoMenu[] = [
     titulo: "Ajustes da loja",
     itens: [
       { rotulo: "Taxa de entrega", href: "/admin/products?secao=entrega", icone: "entrega" },
-      { rotulo: "Lembrancinhas", href: "/admin/encomendas?secao=configuracao", icone: "ajustes" },
+      { rotulo: "Mimos", href: "/admin/encomendas?secao=configuracao", icone: "ajustes" },
     ],
   },
 ];

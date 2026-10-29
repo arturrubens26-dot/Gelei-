@@ -155,7 +155,7 @@ export function FichaEncomenda({ id }: { id: string }) {
     <article className="flex flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-secundaria">Ficha da encomenda de lembrancinhas</p>
+          <p className="text-sm font-semibold text-secundaria">Ficha da encomenda de mimos</p>
           <h1 className="font-titulos text-3xl font-bold">Encomenda {e.codigo}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-primaria/85">
             <span>Solicitada em {formatarDataHora(e.criadaEm)}</span>

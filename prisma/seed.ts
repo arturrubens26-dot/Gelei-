@@ -228,10 +228,10 @@ async function semearKit() {
 }
 
 /**
- * Lembrancinhas (potinhos mini). A migração 20261023120000_lembrancinhas já cria a configuração
+ * Mimos (potinhos mini). A migração 20261023120000_lembrancinhas já cria a configuração
  * DESATIVADA, e nenhum sabor nasce "disponível em mini": rodar o seed não muda nada disso. Só com
  * SEED_LEMBRANCINHAS_ATIVAS=1, e só no banco LOCAL, ele marca os sabores do catálogo como mini e
- * ativa o recurso, para testar /lembrancinhas num banco novo. Isso pula de propósito a trava do painel
+ * ativa o recurso, para testar /mimos num banco novo. Isso pula de propósito a trava do painel
  * (que só ativa com CNPJ/CPF e e-mail de contato em src/lib/dados-loja.ts): é ambiente de teste.
  */
 async function semearLembrancinhas() {
@@ -244,9 +244,9 @@ async function semearLembrancinhas() {
   });
   if (ativar) {
     const { count } = await db.product.updateMany({ where: { id: { in: produtos.map((p) => p.id) } }, data: { disponivelEmMini: true } });
-    console.log(`✔ lembrancinhas ATIVAS (SEED_LEMBRANCINHAS_ATIVAS=1): ${count} sabores marcados como mini`);
+    console.log(`✔ mimos ATIVOS (SEED_LEMBRANCINHAS_ATIVAS=1): ${count} sabores marcados como mini`);
   } else {
-    console.log("✔ lembrancinhas (configuração conferida; ative e marque os sabores mini no painel)");
+    console.log("✔ mimos (configuração conferida; ative e marque os sabores mini no painel)");
   }
 }
 

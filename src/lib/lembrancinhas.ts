@@ -13,9 +13,9 @@ import { separarNome } from "@/lib/produtos-regras";
 /** Id da linha única de configuração (criada DESATIVADA pela migração 20261023120000_lembrancinhas). */
 export const ID_CONFIG_LEMBRANCINHAS = "lembrancinhas";
 
-/** O que a página /lembrancinhas precisa (valores em reais e em centavos, para a conta da tela). */
+/** O que a página /mimos precisa (valores em reais e em centavos, para a conta da tela). */
 export type LembrancinhasDTO = {
-  /** A dona abriu as encomendas no painel (o link "Lembrancinhas" do cabeçalho aparece). */
+  /** A dona abriu as encomendas no painel (o link "Mimos" do cabeçalho aparece). */
   ativo: boolean;
   /**
    * Dá para solicitar agora: aberto, com pagamento pelo site e com algum sabor mini. Sem isso a
@@ -38,7 +38,7 @@ export type LembrancinhasDTO = {
 };
 
 /**
- * O que falta em src/lib/dados-loja.ts para as lembrancinhas poderem abrir (D13). Lista vazia = pode.
+ * O que falta em src/lib/dados-loja.ts para os mimos poderem abrir (D13). Lista vazia = pode.
  *
  * Só para o teste ponta a ponta local: com E2E_DADOS_LEGAIS=1, a InfinitePay FALSA configurada
  * (INFINITEPAY_API_URL em 127.0.0.1/localhost, que o código recusa em outro host) E a APP_URL em
@@ -64,7 +64,7 @@ export function motivoLembrancinhasFechadas(entrada: {
   pagamentoDisponivel: boolean;
   sabores: number;
 }): string | null {
-  if (!entrada.ativo || entrada.dadosLegaisPendentes) return "As encomendas de lembrancinhas voltam em breve.";
+  if (!entrada.ativo || entrada.dadosLegaisPendentes) return "As encomendas de mimos voltam em breve.";
   if (!entrada.pagamentoDisponivel) return "As encomendas pelo site ainda não estão abertas. Em breve você poderá encomendar por aqui.";
   if (entrada.sabores === 0) return "Nenhum sabor está disponível em mini no momento. Volte em breve.";
   return null;

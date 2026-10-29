@@ -27,7 +27,7 @@ export function referenciaDoPedido(pedidoId: string, tentativa: number): string 
   return ref;
 }
 
-/** order_nsu de uma parcela de encomenda (lembrancinhas, rodada seguinte): enc-<id>-<parcela>-<n>. */
+/** order_nsu de uma parcela de encomenda (mimos, rodada seguinte): enc-<id>-<parcela>-<n>. */
 export function referenciaDaEncomenda(encomendaId: string, parcela: "ENTRADA" | "RESTANTE", tentativa: number): string {
   const ref = `enc-${encomendaId}-${parcela}-${tentativa}`;
   if (!FORMATO_REFERENCIA_ENCOMENDA.test(ref)) throw new Error("referência de encomenda inválida");
@@ -47,7 +47,7 @@ export function lerReferencia(ref: string): ReferenciaLida | null {
   return null;
 }
 
-/** A quem a cobrança paga: um pedido, ou uma parcela de encomenda de lembrancinhas. */
+/** A quem a cobrança paga: um pedido, ou uma parcela de encomenda de mimos. */
 export type AlvoCobranca =
   | { tipo: "pedido"; orderId: string }
   | { tipo: "encomenda"; encomendaId: string; parcela: "ENTRADA" | "RESTANTE" };
@@ -278,11 +278,11 @@ export function itensDoLink(entrada: {
 }
 
 /**
- * Item único do link de uma parcela de encomenda: "Lembrancinhas #9F3K2XQP: entrada" (ou "restante"),
+ * Item único do link de uma parcela de encomenda: "Mimos #9F3K2XQP: entrada" (ou "restante"),
  * com o valor da parcela em centavos.
  */
 export function itensDaParcela(entrada: { codigo: string; parcela: "ENTRADA" | "RESTANTE"; valorCentavos: number }): ItemDoLink[] {
-  const nome = `Lembrancinhas ${entrada.codigo}: ${entrada.parcela === "ENTRADA" ? "entrada" : "restante"}`;
+  const nome = `Mimos ${entrada.codigo}: ${entrada.parcela === "ENTRADA" ? "entrada" : "restante"}`;
   return [{ description: nome.slice(0, 80), quantity: 1, price: entrada.valorCentavos }];
 }
 

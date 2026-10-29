@@ -161,7 +161,7 @@ export function ProdutosAdmin({ produtos }: { produtos: ProdutoAdminDTO[] }) {
                       </span>
                     </p>
                     <p className="mt-1 text-xs text-primaria/80">{p.permitidoEmKit ? "Entra no Kit Presente" : "Fora do Kit Presente"}</p>
-                    <p className="text-xs text-primaria/80">{p.disponivelEmMini ? "Disponível em mini (lembrancinhas)" : "Fora das lembrancinhas"}</p>
+                    <p className="text-xs text-primaria/80">{p.disponivelEmMini ? "Disponível em mini (mimos)" : "Fora dos mimos"}</p>
                     <p className="text-xs text-primaria/80">
                       {p.harmonizacoes.length + p.destaques.length > 0 ? "Foto com verso" : "Foto sem verso"}
                     </p>
@@ -518,7 +518,7 @@ function FormularioProduto({
                 aria-describedby={`${id}-disponivelEmMini-dica`}
                 className="size-4"
               />
-              Disponível em mini (lembrancinhas)
+              Disponível em mini (mimos)
             </label>
             <p id={`${id}-disponivelEmMini-dica`} className="mt-1 pl-6 text-xs text-primaria/75">
               Aparece entre os sabores dos potinhos de 40 ml. Só vale com o sabor à venda (ocultar o sabor também tira o mini).

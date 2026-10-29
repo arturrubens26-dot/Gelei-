@@ -194,7 +194,7 @@ function Resumo({ dados }: { dados: FinanceiroDoMes }) {
           <p className="mt-1 text-xs text-primaria/80">
             {vendas} {vendas === 1 ? "venda paga" : "vendas pagas"} (site, feira e balcão)
             {dados.entradas.lembrancinhas.liquido !== 0
-              ? `, mais ${formatarBRL(dados.entradas.lembrancinhas.liquido)} de lembrancinhas`
+              ? `, mais ${formatarBRL(dados.entradas.lembrancinhas.liquido)} de mimos`
               : ""}
           </p>
         </li>
@@ -230,7 +230,7 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
         <Linha rotulo="Vendas na feira e no balcão" valor={presencial.total} detalhe={`${presencial.vendas} ${presencial.vendas === 1 ? "venda" : "vendas"}`} />
         {(lembrancinhas.liquido !== 0 || lembrancinhas.encomendas > 0) && (
           <Linha
-            rotulo="Lembrancinhas (encomendas)"
+            rotulo="Mimos (encomendas)"
             valor={lembrancinhas.liquido}
             detalhe={`${lembrancinhas.encomendas} ${lembrancinhas.encomendas === 1 ? "encomenda" : "encomendas"} · entradas, restantes e devoluções do mês`}
           />
@@ -290,13 +290,13 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
 }
 
 /**
- * Lembrancinhas no mês, por caixa: entradas e restantes na data do pagamento, devoluções na data em que
+ * Mimos no mês, por caixa: entradas e restantes na data do pagamento, devoluções na data em que
  * foram feitas. O líquido já está nas entradas do mês; vendas e valor médio continuam só com os pedidos.
  */
 function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembrancinhas"] }) {
   return (
     <div>
-      <h3 className="mb-1 font-semibold">Lembrancinhas</h3>
+      <h3 className="mb-1 font-semibold">Mimos</h3>
       <p className="mb-2 text-xs text-primaria/75">Pelo dia em que o dinheiro entrou ou saiu. Não contam nas vendas nem no valor médio.</p>
       <dl className="flex flex-col divide-y divide-accent1/70 text-sm">
         <Linha rotulo="Entradas (50%) pelo site" valor={l.sinais} detalhe="parcela que confirma a encomenda" discreto />
@@ -304,7 +304,7 @@ function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembr
         {l.sinaisForaDoSite > 0 && <Linha rotulo="Entradas recebidas na loja" valor={l.sinaisForaDoSite} detalhe="dinheiro ou PIX direto, ou conferida no app" discreto />}
         {l.restantesForaDoSite > 0 && <Linha rotulo="Restantes recebidos na loja" valor={l.restantesForaDoSite} detalhe="dinheiro ou PIX direto" discreto />}
         {l.devolucoes > 0 && <Linha rotulo="Devoluções feitas" valor={-l.devolucoes} detalhe="desistências e cancelamentos" discreto />}
-        <Linha rotulo="Líquido das lembrancinhas" valor={l.liquido} detalhe="já somado às entradas do mês" />
+        <Linha rotulo="Líquido dos mimos" valor={l.liquido} detalhe="já somado às entradas do mês" />
       </dl>
       {l.potinhosEntregues.length > 0 && (
         <table className="mt-3 w-full text-left text-sm">

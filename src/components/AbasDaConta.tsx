@@ -5,7 +5,7 @@ import { obterLembrancinhas } from "@/lib/lembrancinhas";
 
 const ABAS = [
   { href: "/meus-pedidos", rotulo: "Pedidos" },
-  { href: "/minhas-encomendas", rotulo: "Lembrancinhas" },
+  { href: "/minhas-encomendas", rotulo: "Mimos" },
 ] as const;
 
 type Aba = (typeof ABAS)[number]["href"];
@@ -37,7 +37,7 @@ export function AbasDaConta({ atual }: { atual: Aba }) {
 }
 
 /**
- * As abas só quando fazem sentido: com as lembrancinhas abertas, ou para quem já encomendou (mesmo
+ * As abas só quando fazem sentido: com os mimos abertos, ou para quem já encomendou (mesmo
  * com o recurso fechado, a cliente precisa achar a encomenda dela). Lê a sessão: fica em <Suspense>.
  */
 export async function AbasSeHouverEncomendas({ atual }: { atual: Aba }) {

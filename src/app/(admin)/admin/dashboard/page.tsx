@@ -33,7 +33,7 @@ async function Resumo() {
       href: "/admin/encomendas?visao=responder",
       urgente: enc.aguardandoResposta > 0,
     },
-    { rotulo: "Lembrancinhas para hoje", valor: String(enc.entregasHoje), dica: "entregas ou retiradas", href: "/admin/encomendas?visao=agenda", urgente: false },
+    { rotulo: "Mimos para hoje", valor: String(enc.entregasHoje), dica: "entregas ou retiradas", href: "/admin/encomendas?visao=agenda", urgente: false },
     {
       rotulo: "Devoluções pendentes",
       valor: String(enc.devolucoesPendentes),
@@ -78,7 +78,7 @@ async function Resumo() {
       {mostrarEncomendas && (
         <section aria-labelledby="titulo-lembrancinhas" className="flex flex-col gap-3">
           <h2 id="titulo-lembrancinhas" className="text-2xl font-bold">
-            Lembrancinhas
+            Mimos
           </h2>
           <ul className="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-4">
             {cartoesEncomendas.map((c) => (

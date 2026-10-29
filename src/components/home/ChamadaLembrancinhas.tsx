@@ -4,7 +4,7 @@ import { formatarBRL } from "@/lib/dinheiro";
 import type { LembrancinhasDTO } from "@/lib/lembrancinhas";
 
 /**
- * Chamada da home para as lembrancinhas (só com as encomendas abertas): o que é, quanto custa, os
+ * Chamada da home para os mimos (só com as encomendas abertas): o que é, quanto custa, os
  * sabores em mini e o caminho para encomendar.
  */
 export function ChamadaLembrancinhas({ config }: { config: LembrancinhasDTO }) {
@@ -14,14 +14,14 @@ export function ChamadaLembrancinhas({ config }: { config: LembrancinhasDTO }) {
       <div className="flex flex-col gap-6 rounded-2xl border-2 border-accent2/70 bg-white/70 p-6 sm:p-8 md:flex-row md:items-center md:justify-between">
         <div className="max-w-xl">
           <h2 id="titulo-chamada-lembrancinhas" className="font-titulos text-3xl font-semibold text-primaria sm:text-4xl">
-            Lembrancinhas para a sua festa
+            Mimos para a sua festa
           </h2>
           <p className="mt-3 text-primaria/85">
             Potinhos de geleia de 40 ml para os convidados levarem para casa: de {config.minPotinhos} a {config.maxPotinhos} potinhos, nos
             sabores que você escolher, a {formatarBRL(config.precoPotinho)} cada. Encomende com pelo menos 5 dias de antecedência.
           </p>
-          <Link href="/lembrancinhas" className="btn-primario mt-5">
-            Encomendar lembrancinhas
+          <Link href="/mimos" className="btn-primario mt-5">
+            Encomendar mimos
           </Link>
         </div>
         {fotos.length > 0 && (

@@ -7,7 +7,7 @@ import { MAX_ENCOMENDAS_POR_HORA } from "@/lib/limites";
 const FORMATO_CHAVE = /^[A-Za-z0-9_-]{8,100}$/;
 
 /**
- * GET /api/encomendas — as encomendas de lembrancinhas da cliente logada (até 50, da mais nova para a
+ * GET /api/encomendas — as encomendas de mimos da cliente logada (até 50, da mais nova para a
  * mais antiga). Resposta: `{ encomendas: EncomendaDTO[] }`. Grava antes os prazos vencidos dela.
  */
 export const GET = comTratamento("api/encomendas GET", async () => {
@@ -19,7 +19,7 @@ export const GET = comTratamento("api/encomendas GET", async () => {
 });
 
 /**
- * POST /api/encomendas — solicita uma encomenda de lembrancinhas (status SOLICITADA; nada é cobrado
+ * POST /api/encomendas — solicita uma encomenda de mimos (status SOLICITADA; nada é cobrado
  * até a loja aprovar). Cabeçalho `Idempotency-Key` OBRIGATÓRIO (8 a 100 letras, números, _ ou -).
  *
  * Entrada: { itens: [{ productId, quantidade }], dataFesta: "AAAA-MM-DD", dataEntrega: "AAAA-MM-DD",

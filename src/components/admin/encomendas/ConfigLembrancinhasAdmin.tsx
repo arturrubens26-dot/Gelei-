@@ -25,7 +25,7 @@ const CAMPO_DA_API: Record<string, keyof Campos> = {
 };
 
 /**
- * Configuração das lembrancinhas no painel (GET/PATCH /api/admin/lembrancinhas): abrir ou fechar as
+ * Configuração dos mimos no painel (GET/PATCH /api/admin/lembrancinhas): abrir ou fechar as
  * encomendas (bloqueado enquanto faltar CNPJ/CPF ou e-mail da loja, D13), preço do potinho, pesos para
  * o frete e quanto da entrada fica com a loja na desistência depois do corte. As encomendas já feitas
  * não mudam: preço e percentual ficam congelados nelas.
@@ -82,7 +82,7 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
       return;
     }
     const nova = await enviar({ ativo: !config.ativo }, "ativo");
-    if (nova) setMensagem(nova.ativo ? "Pronto: as encomendas de lembrancinhas estão abertas." : "Pronto: as encomendas estão fechadas. As que já existem continuam.");
+    if (nova) setMensagem(nova.ativo ? "Pronto: as encomendas de mimos estão abertas." : "Pronto: as encomendas estão fechadas. As que já existem continuam.");
   }
 
   async function salvar(e: FormEvent) {
@@ -122,12 +122,12 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id={`${id}-titulo`} className="text-2xl font-bold">
-            Lembrancinhas na loja:{" "}
-            <span className={config.ativo ? "text-primaria" : "text-secundaria"}>{config.ativo ? "abertas" : "fechadas"}</span>
+            Mimos na loja:{" "}
+            <span className={config.ativo ? "text-primaria" : "text-secundaria"}>{config.ativo ? "abertos" : "fechados"}</span>
           </h2>
           <p className="mt-1 text-sm text-primaria/80">
             {config.ativo
-              ? "A página /lembrancinhas aceita solicitações novas."
+              ? "A página /mimos aceita solicitações novas."
               : "A página mostra “encomendas fechadas”. As encomendas que já existem continuam (pagamentos e ações)."}
             {config.atualizadoEm ? ` Última mudança: ${formatarDataHora(config.atualizadoEm)}.` : ""}
           </p>

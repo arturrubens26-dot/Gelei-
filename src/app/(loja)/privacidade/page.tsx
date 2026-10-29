@@ -39,7 +39,7 @@ export default function PaginaPrivacidade() {
           pagamento e entrega). Não usamos o número para propaganda.
         </li>
         <li>
-          <strong>Encomendas de lembrancinhas:</strong> a data da festa, a data e a forma de receber os potinhos, os sabores e as
+          <strong>Encomendas de mimos:</strong> a data da festa, a data e a forma de receber os potinhos, os sabores e as
           quantidades, e a observação que você escrever, para preparar a encomenda no prazo. Também guardamos qual versão da política
           de desistência você aceitou e quando.
         </li>

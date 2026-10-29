@@ -1,4 +1,4 @@
-// Testes das regras puras das encomendas de lembrancinhas (datas no fuso da loja, prazos, potinhos,
+// Testes das regras puras das encomendas de mimos (datas no fuso da loja, prazos, potinhos,
 // valores, devolução, transições, schemas, agenda, WhatsApp e política). Rode com: npm run test:unit
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";

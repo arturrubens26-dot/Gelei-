@@ -20,7 +20,7 @@ import { formatarPrazo, palavraDoModo, statusFinal } from "@/lib/encomendas-regr
 import { enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 
-export const metadata: Metadata = { title: "Encomenda de lembrancinhas" };
+export const metadata: Metadata = { title: "Encomenda de mimos" };
 
 type Props = PageProps<"/minhas-encomendas/[id]">;
 
@@ -87,7 +87,7 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
           <SeloDaEncomenda status={e.statusEfetivo} />
         </div>
         <p className="mt-2 text-primaria/85">
-          Lembrancinhas · {e.potinhos} potinhos · solicitada em {formatarDataHora(e.criadaEm)}
+          Mimos · {e.potinhos} potinhos · solicitada em {formatarDataHora(e.criadaEm)}
         </p>
       </header>
 

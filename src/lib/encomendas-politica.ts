@@ -1,5 +1,5 @@
 /**
- * Política de desistência das encomendas de lembrancinhas (texto puro, servidor e navegador). A
+ * Política de desistência das encomendas de mimos (texto puro, servidor e navegador). A
  * cliente aceita uma VERSÃO deste texto ao solicitar (`politicaVersao`, gravada na encomenda), com os
  * valores e o percentual retido daquela encomenda. Mudou o texto: crie outra versão e mantenha a
  * antiga aqui, para o comprovante das encomendas antigas continuar mostrando o que foi aceito.

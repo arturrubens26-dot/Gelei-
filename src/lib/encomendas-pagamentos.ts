@@ -35,7 +35,7 @@ import {
 import { retornoRecente, type EtapaPagamento } from "@/lib/pagamentos-regras";
 
 /**
- * Cobranças das encomendas de lembrancinhas: a ENTRADA e o RESTANTE, cada uma com os seus links do
+ * Cobranças das encomendas de mimos: a ENTRADA e o RESTANTE, cada uma com os seus links do
  * checkout da InfinitePay (PIX ou cartão até 12x), na MESMA tabela `pagamentos` dos pedidos, com
  * `encomenda_id` e `parcela` (plano 2026-10-21, seção 2.8).
  *

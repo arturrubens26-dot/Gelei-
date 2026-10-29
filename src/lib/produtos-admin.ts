@@ -32,10 +32,10 @@ export type ProdutoAdminDTO = {
   /** Verso da foto: "Harmoniza com" e "Por que você vai gostar" (listas vazias: foto sem verso). */
   harmonizacoes: string[];
   destaques: string[];
-  /** "Disponível em mini (lembrancinhas)": o sabor aparece no formulário das lembrancinhas (nasce fora). */
+  /** "Disponível em mini (mimos)": o sabor aparece no formulário dos mimos (nasce fora). */
   disponivelEmMini: boolean;
   /**
-   * Vendas (itens avulsos de pedido + caixas de kit com este sabor + encomendas de lembrancinhas com
+   * Vendas (itens avulsos de pedido + caixas de kit com este sabor + encomendas de mimos com
    * ele) e produções que apontam para o produto: com alguma, ele só pode ser ocultado.
    */
   vendas: number;
@@ -77,7 +77,7 @@ function paraDTO(p: ProdutoComContagens): ProdutoAdminDTO {
 /**
  * A loja (páginas e /api/products) lê o catálogo em cache: depois de mudar, expira na hora. Expira
  * também os kits (os sabores do montador e a economia dependem de preço, visibilidade e "Pode entrar
- * no Kit Presente") e as lembrancinhas (os sabores mini dependem de visibilidade e "Disponível em mini").
+ * no Kit Presente") e os mimos (os sabores mini dependem de visibilidade e "Disponível em mini").
  */
 function atualizarLoja(): void {
   revalidateTag("produtos", { expire: 0 });

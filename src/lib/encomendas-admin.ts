@@ -63,7 +63,7 @@ import { separarNome } from "@/lib/produtos-regras";
 import { somarDias, type FormaPagamento } from "@/lib/vendas";
 
 /**
- * Encomendas de lembrancinhas no painel (admin): listas por aba, agenda de produção, ficha com as
+ * Encomendas de mimos no painel (admin): listas por aba, agenda de produção, ficha com as
  * ações da dona, e a configuração (preço, pesos, percentual retido, abrir/fechar). Toda ação usa
  * `statusEsperado` e UPDATE condicional: se a encomenda mudou desde a tela (pagamento, expiração,
  * desistência), responde 409 com o status atual e nada muda.
@@ -766,8 +766,8 @@ export async function obterConfigLembrancinhasAdmin(): Promise<ConfigLembrancinh
 }
 
 /**
- * PATCH /api/admin/lembrancinhas: edição completa ou só `{ ativo }`. Ativar com CNPJ/CPF ou e-mail
- * pendentes em dados-loja.ts: 409 (D13). Expira o cache da página /lembrancinhas na hora. As
+ * PATCH /api/admin/lembrancinhas (os mimos): edição completa ou só `{ ativo }`. Ativar com CNPJ/CPF ou e-mail
+ * pendentes em dados-loja.ts: 409 (D13). Expira o cache da página /mimos na hora. As
  * encomendas já feitas não mudam (preço e percentual ficam congelados nelas).
  */
 export async function salvarConfigLembrancinhas(
@@ -775,7 +775,7 @@ export async function salvarConfigLembrancinhas(
 ): Promise<ConfigLembrancinhasAdminDTO> {
   const pendencias = pendenciasParaAbrir();
   if (entrada.ativo && pendencias.length > 0) {
-    throw new ErroNegocio(409, `Para abrir as lembrancinhas, falta preencher ${pendencias.join(" e ")} da loja.`, { pendenciasLegais: pendencias });
+    throw new ErroNegocio(409, `Para abrir os mimos, falta preencher ${pendencias.join(" e ")} da loja.`, { pendenciasLegais: pendencias });
   }
   const valores =
     "precoPotinhoCentavos" in entrada

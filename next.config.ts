@@ -46,6 +46,11 @@ const nextConfig: NextConfig = {
   // terminal, nem processamento do log. Reavaliar ao atualizar o Next (o dev server aponta a 16.4.2).
   logging: { browserToTerminal: false },
   experimental: { mcpServer: false },
+  // O módulo se chamava "Lembrancinhas"; o nome público agora é "Mimos" (a rota de API e o banco
+  // mantêm o nome antigo). Redirecionamento permanente para links e favoritos antigos.
+  async redirects() {
+    return [{ source: "/lembrancinhas/:path*", destination: "/mimos/:path*", permanent: true }];
+  },
   async headers() {
     return [{ source: "/:path*", headers: cabecalhosDeSeguranca }];
   },

@@ -18,7 +18,7 @@ import { obterLembrancinhas } from "@/lib/lembrancinhas";
 export const metadata: Metadata = { title: "Minhas encomendas" };
 
 /**
- * As encomendas de lembrancinhas da conta, da mais recente para a mais antiga: status em texto, o que
+ * As encomendas de mimos da conta, da mais recente para a mais antiga: status em texto, o que
  * vem agora e o caminho para pagar a entrada ou o restante (na página de cada encomenda).
  */
 export default function PaginaMinhasEncomendas() {
@@ -53,14 +53,14 @@ async function ListaDeEncomendas() {
   if (encomendas.length === 0) {
     return (
       <div className="cartao flex flex-col items-center gap-4 p-8 text-center">
-        <p className="font-titulos text-2xl">Você ainda não fez encomendas de lembrancinhas.</p>
+        <p className="font-titulos text-2xl">Você ainda não fez encomendas de mimos.</p>
         <p className="max-w-md text-primaria/80">
           {config.ativo
             ? "Potinhos de geleia de 40 ml para os convidados da sua festa, de 15 a 50, nos sabores que você escolher."
-            : "As encomendas de lembrancinhas voltam em breve."}
+            : "As encomendas de mimos voltam em breve."}
         </p>
-        <Link href={config.ativo ? "/lembrancinhas" : "/products"} className="btn-primario px-8">
-          {config.ativo ? "Encomendar lembrancinhas" : "Ver as geleias"}
+        <Link href={config.ativo ? "/mimos" : "/products"} className="btn-primario px-8">
+          {config.ativo ? "Encomendar mimos" : "Ver as geleias"}
         </Link>
       </div>
     );

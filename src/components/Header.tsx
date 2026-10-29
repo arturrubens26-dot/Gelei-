@@ -13,7 +13,7 @@ const estiloLink =
 
 /**
  * Cabeçalho da loja: logo oficial (pote + framboesas + Geleiô), navegação, conta e carrinho.
- * O link "Kits" só aparece com um kit à venda, e "Lembrancinhas" só com as encomendas abertas no
+ * O link "Kits" só aparece com um kit à venda, e "Mimos" só com as encomendas abertas no
  * painel (as duas consultas em cache, expiradas pelo painel ao mudar).
  */
 export async function Header() {
@@ -42,7 +42,7 @@ async function lembrancinhasAbertas() {
     return (await obterLembrancinhas()).ativo;
   } catch (erro) {
     unstable_rethrow(erro);
-    console.error("Cabeçalho: não foi possível consultar as lembrancinhas; o link fica oculto.", erro);
+    console.error("Cabeçalho: não foi possível consultar os mimos; o link fica oculto.", erro);
     return false;
   }
 }
@@ -63,7 +63,7 @@ function CabecalhoDaLoja({ temKit, temLembrancinhas }: { temKit: boolean; temLem
           />
         </Link>
 
-        {/* Com os três links ("Nossas geleias", "Kits" e "Lembrancinhas") a navegação não cabe ao lado da conta
+        {/* Com os três links ("Nossas geleias", "Kits" e "Mimos") a navegação não cabe ao lado da conta
             e do carrinho no celular: até 1024 px ela ganha uma linha própria. Com menos links, fica na linha
             do logo, como sempre. No computador fica sempre na mesma linha, antes da conta. */}
         <nav
@@ -89,8 +89,8 @@ function CabecalhoDaLoja({ temKit, temLembrancinhas }: { temKit: boolean; temLem
             )}
             {temLembrancinhas && (
               <li>
-                <Link href="/lembrancinhas" className={estiloLink}>
-                  Lembrancinhas
+                <Link href="/mimos" className={estiloLink}>
+                  Mimos
                 </Link>
               </li>
             )}

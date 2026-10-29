@@ -40,7 +40,7 @@ import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { separarNome } from "@/lib/produtos-regras";
 
 /**
- * Encomendas de lembrancinhas, lado da cliente: solicitar, listar, ver, desistir, e a expiração
+ * Encomendas de mimos, lado da cliente: solicitar, listar, ver, desistir, e a expiração
  * "preguiçosa" (sem rotina agendada: os prazos vencidos são gravados com UPDATE condicional na
  * próxima leitura ou ação). Regras puras em src/lib/encomendas-regras.ts; cobranças em
  * src/lib/encomendas-pagamentos.ts; painel em src/lib/encomendas-admin.ts.
@@ -357,7 +357,7 @@ export async function listarEncomendasDoUsuario(userId: string, agora: Date): Pr
 }
 
 /**
- * A cliente já fez alguma encomenda de lembrancinhas (de qualquer status)? Consulta barata (índice
+ * A cliente já fez alguma encomenda de mimos (de qualquer status)? Consulta barata (índice
  * user_id + criada_em), para o menu mostrar "Minhas encomendas" mesmo com o recurso fechado.
  */
 export async function temEncomendas(userId: string): Promise<boolean> {
@@ -517,10 +517,10 @@ export async function criarEncomenda(
 
   // Desativar só bloqueia solicitações NOVAS: as abertas seguem (pagamento e ações).
   const config = await lerConfigLembrancinhas();
-  if (!config?.ativo) throw new ErroNegocio(503, "As encomendas de lembrancinhas não estão abertas no momento. Volte em breve.");
+  if (!config?.ativo) throw new ErroNegocio(503, "As encomendas de mimos não estão abertas no momento. Volte em breve.");
   // D13: sem CNPJ/CPF e e-mail de contato no site (Decreto 7.962/2013, art. 2º), nada de encomenda nova.
   if (pendenciasParaAbrir().length > 0) {
-    throw new ErroNegocio(503, "As encomendas de lembrancinhas não estão abertas no momento. Volte em breve.");
+    throw new ErroNegocio(503, "As encomendas de mimos não estão abertas no momento. Volte em breve.");
   }
   if (!pagamentoOnlineDisponivel()) {
     throw new ErroNegocio(503, "As encomendas pelo site ainda não estão abertas. Em breve você poderá encomendar por aqui.");

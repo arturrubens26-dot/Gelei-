@@ -16,12 +16,12 @@ import { obterLembrancinhas, type LembrancinhasDTO } from "@/lib/lembrancinhas";
 import { telefoneDoCliente } from "@/lib/pedidos";
 
 export const metadata: Metadata = {
-  title: "Lembrancinhas",
-  description: "Potinhos de geleia de 40 ml para a lembrancinha da sua festa: de 15 a 50 potinhos, nos sabores que você escolher.",
+  title: "Mimos",
+  description: "Potinhos de geleia de 40 ml para o mimo da sua festa: de 15 a 50 potinhos, nos sabores que você escolher.",
 };
 
 /**
- * Encomenda de lembrancinhas. A configuração e os sabores vêm do cache (`use cache`, tags
+ * Encomenda de mimos. A configuração e os sabores vêm do cache (`use cache`, tags
  * "lembrancinhas" e "produtos"): as regras são estáticas e visíveis para todo mundo. Só o formulário
  * depende da sessão e do relógio, e chega por streaming dentro do Suspense.
  */
@@ -60,7 +60,7 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
   const fotos = config.sabores.slice(0, 5);
   return (
     <header>
-      <h1 className="text-center font-titulos text-4xl font-semibold text-primaria sm:text-5xl">Lembrancinhas para a sua festa</h1>
+      <h1 className="text-center font-titulos text-4xl font-semibold text-primaria sm:text-5xl">Mimos para a sua festa</h1>
       <Ornamento className="mt-4" />
       <p className="mx-auto mt-4 max-w-prose text-center text-primaria/85">
         Potinhos de geleia de 40 ml para seus convidados levarem para casa. Você escolhe os sabores e a quantidade; a gente prepara tudo
@@ -145,7 +145,7 @@ async function Formulario({ config }: { config: LembrancinhasDTO }) {
         <p className="mx-auto mb-6 max-w-md text-center text-primaria/80">
           É com a conta que você acompanha a resposta da Geleiô, paga a entrada e vê a sua encomenda.
         </p>
-        <AuthForm destino="/lembrancinhas" modoInicial="criar" />
+        <AuthForm destino="/mimos" modoInicial="criar" />
       </section>
     );
   }

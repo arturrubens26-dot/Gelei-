@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 /**
- * Peças do formulário de compra usadas no checkout e na encomenda de lembrancinhas: a seção numerada
+ * Peças do formulário de compra usadas no checkout e na encomenda de mimos: a seção numerada
  * (os passos são uma sequência de verdade), a opção de entrega/retirada e o campo com rótulo e erro.
  */
 

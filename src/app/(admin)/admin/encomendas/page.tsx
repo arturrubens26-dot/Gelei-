@@ -28,7 +28,7 @@ async function Conteudo({ searchParams }: Pick<Props, "searchParams">) {
   return (
     <div className="flex flex-col gap-6">
       <header className="print:hidden">
-        <h1 className="font-titulos text-3xl font-bold">Encomendas de lembrancinhas</h1>
+        <h1 className="font-titulos text-3xl font-bold">Encomendas de mimos</h1>
         <p className="mt-1 text-sm text-primaria/80">Responda as solicitações, acompanhe os pagamentos e planeje a produção dos potinhos.</p>
       </header>
       <RolarParaSecao />

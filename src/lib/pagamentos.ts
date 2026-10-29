@@ -61,7 +61,7 @@ export type { CobrancaDTO, SituacaoPagamentoDTO } from "@/lib/pagamentos-regras"
  * confirmada.
  *
  * Cada cobrança tem um ALVO (`alvoDaCobranca`): um pedido, ou uma parcela (ENTRADA ou RESTANTE) de
- * encomenda de lembrancinhas (src/lib/encomendas-pagamentos.ts abre os links delas). A conferência é
+ * encomenda de mimos (src/lib/encomendas-pagamentos.ts abre os links delas). A conferência é
  * a mesma; só o efeito da aprovação muda, no `switch` de `aplicarAprovacao`.
  */
 

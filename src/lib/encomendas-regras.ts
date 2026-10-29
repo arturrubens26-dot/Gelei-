@@ -1,5 +1,5 @@
 /**
- * Regras puras das encomendas de lembrancinhas (potinhos mini de 40 ml), usadas no servidor e no
+ * Regras puras das encomendas de mimos (potinhos mini de 40 ml), usadas no servidor e no
  * navegador e testadas em testes/encomendas.test.ts. Sem Prisma e sem relógio escondido: toda função
  * que depende de "agora" ou de "hoje" recebe esse valor (o servidor nunca confia no do cliente).
  *
@@ -1082,13 +1082,13 @@ export const configLembrancinhasSchema = z.object({
   percentualRetido: numeroDoCampo(
     z.number("Informe o percentual retido.").int("Use um número inteiro.").min(0, "Mínimo: 0%.").max(100, "Máximo: 100%."),
   ),
-  ativo: z.boolean("Diga se as lembrancinhas estão abertas."),
+  ativo: z.boolean("Diga se os mimos estão abertos."),
 });
 
 export type ConfigLembrancinhasEntrada = z.output<typeof configLembrancinhasSchema>;
 
 /** Só abrir/fechar (o mesmo PATCH, com o corpo `{ ativo }`). */
-export const configAtivoSchema = z.object({ ativo: z.boolean("Diga se as lembrancinhas estão abertas.") });
+export const configAtivoSchema = z.object({ ativo: z.boolean("Diga se os mimos estão abertos.") });
 
 // --- agenda, linha do tempo e WhatsApp ------------------------------------------------------------
 

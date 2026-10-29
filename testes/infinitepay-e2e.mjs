@@ -9,7 +9,7 @@
 //    Outras portas: E2E_BASE=http://localhost:3200 e E2E_PORTA_FALSA=4020 (com INFINITEPAY_API_URL e
 //    APP_URL do site iguais a elas).
 //
-// Com E2E_DADOS_LEGAIS=1 no site E neste script, os casos 23 e 30 abrem as lembrancinhas por instantes e criam
+// Com E2E_DADOS_LEGAIS=1 no site E neste script, os casos 23 e 30 abrem os mimos por instantes e criam
 // encomendas pelo POST /api/encomendas (a trava D13 só cede com a InfinitePay falsa configurada, a APP_URL em
 // http://localhost e sem NETLIFY nem APP_ENV de produção); sem isso, conferem o 409/503 do D13 e pulam a criação.
 // Rode as duas vezes antes de publicar.
@@ -815,7 +815,7 @@ async function main() {
       console.log("  (pulado: rode com INFINITEPAY_WEBHOOK_SECRET diferente do SESSION_SECRET)");
     }
 
-    console.log("22. Encomenda de lembrancinhas: CHECKs, aprovação no painel, entrada e restante pelo checkout, devolução");
+    console.log("22. Encomenda de mimos: CHECKs, aprovação no painel, entrada e restante pelo checkout, devolução");
     // A encomenda nasce direto no banco como SOLICITADA (a solicitação pelo site fica fechada sem
     // CNPJ/CPF e e-mail da loja, D13); o resto passa pelo painel e pelo checkout falso.
     const mesAgora = (await sql("select to_char(now() at time zone 'America/Fortaleza', 'YYYY-MM') m"))[0].m;
@@ -1024,7 +1024,7 @@ async function main() {
       const [{ disponivel_em_mini: miniAntes }] = await sql("select disponivel_em_mini from products where id = $1", [produto]);
       try {
         const abre = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: true } });
-        confere(abre.status === 200 && abre.json?.config?.ativo === true, "painel abre as lembrancinhas", abre.json);
+        confere(abre.status === 200 && abre.json?.config?.ativo === true, "painel abre os mimos", abre.json);
         await sql("update products set disponivel_em_mini = true where id = $1", [produto]);
         const [{ festa, entrega }] = await sql(
           `select to_char((now() at time zone 'America/Fortaleza')::date + 12, 'YYYY-MM-DD') festa,
@@ -1441,7 +1441,7 @@ async function main() {
       const taxa30 = (await admin.req("GET", "/api/admin/entrega")).json?.taxaEntregaCentavos ?? 1500;
       try {
         const abre30 = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: true } });
-        confere(abre30.status === 200, "painel abre as lembrancinhas", abre30.json);
+        confere(abre30.status === 200, "painel abre os mimos", abre30.json);
         await sql("update products set disponivel_em_mini = true where id = $1", [produto]);
         // Observação: outro conteúdo com a mesma chave é outra solicitação.
         const primeira = await postar({ ...corpoBase30(festa30, entrega30), observacao: "Tag azul" });
@@ -1573,7 +1573,7 @@ async function main() {
       [finOut0, finOut1],
     );
     const despSet = (await admin.req("GET", "/api/admin/expenses?mes=2025-09")).json;
-    confere(typeof despSet?.lembrancinhas === "number", "Despesas também traz o líquido das lembrancinhas do mês", despSet?.lembrancinhas);
+    confere(typeof despSet?.lembrancinhas === "number", "Despesas também traz o líquido dos mimos do mês", despSet?.lembrancinhas);
 
     console.log("33. Desistência: antes e depois do corte, prévia que mudou entre a tela e o clique, link aberto");
     const conta33 = await novaConta("enc-i");

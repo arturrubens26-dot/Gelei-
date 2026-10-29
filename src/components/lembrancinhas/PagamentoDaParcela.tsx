@@ -127,7 +127,7 @@ export function PagamentoDaParcela({ encomendaId, parcela, valor, situacaoInicia
         return parcela === "ENTRADA" ? (
           <div className="flex flex-col items-start gap-3">
             <p>O prazo para pagar a entrada terminou e nada foi cobrado. Se ainda quiser, faça uma nova solicitação.</p>
-            <Link href="/lembrancinhas" className="btn-secundario">
+            <Link href="/mimos" className="btn-secundario">
               Nova solicitação
             </Link>
           </div>

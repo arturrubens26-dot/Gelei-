@@ -31,7 +31,7 @@ export const MAX_LINHAS_DE_KIT = 20;
 export const MAX_POTES_POR_KIT = 6;
 
 /**
- * Encomendas de lembrancinhas "abertas" (ainda não entregues nem encerradas) por conta (D12). As
+ * Encomendas de mimos "abertas" (ainda não entregues nem encerradas) por conta (D12). As
  * regras de potinhos e prazos ficam em src/lib/encomendas-regras.ts.
  */
 export const MAX_ENCOMENDAS_ABERTAS = 3;
