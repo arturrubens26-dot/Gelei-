@@ -23,6 +23,7 @@
     "test": "npm run test:unit",
     "test:unit": "tsx --test testes/*.test.ts",
     "test:pagamento": "node testes/infinitepay-e2e.mjs",
+    "test:planilha": "node testes/planilha-e2e.mjs",
     "ensaio:infinitepay": "tsx scripts/ensaio-infinitepay.ts"
   },
   "dependencies": {
