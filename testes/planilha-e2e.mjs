@@ -236,7 +236,6 @@ async function main() {
     confere(sobrou === 0, "a saída saiu da tabela de despesas", sobrou);
     const volta = await admin.req("PATCH", `/api/admin/planilha/entradas/${trocada.id}`, { corpo: { versao: trocada.versao, campos: { tipo: "SAIDA", categoriaId: "saida-embalagens" } } });
     confere(volta.status === 200 && volta.json.linha.tipo === "SAIDA" && volta.json.linha.categoriaNome === "Potes e embalagens", "e volta para saída com a categoria escolhida", volta.json);
-    const saidaAtual = volta.json.linha;
 
     console.log("6. Compra ligada ao estoque");
     const insumoId = `e2e-${marca}-acucar`;
