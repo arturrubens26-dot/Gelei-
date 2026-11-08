@@ -15,6 +15,7 @@ export type NomeDoIcone =
   | "producoes"
   | "estoque"
   | "financeiro"
+  | "planilha"
   | "despesas"
   | "entrega"
   | "ajustes";
@@ -51,6 +52,7 @@ export const GRUPOS_DO_MENU: readonly GrupoDoMenu[] = [
     titulo: "Financeiro",
     itens: [
       { rotulo: "Financeiro", href: "/admin/financial", icone: "financeiro" },
+      { rotulo: "Planilha", href: "/admin/planilha", icone: "planilha" },
       { rotulo: "Despesas", href: "/admin/expenses", icone: "despesas" },
     ],
   },

@@ -68,6 +68,13 @@ const TRACOS: Record<NomeDoIcone | "pino" | "loja" | "menu" | "fechar", ReactNod
     </>
   ),
   financeiro: <path d="M4 4v16h16M8 16v-4M12.5 16V8M17 16v-6" />,
+  // Folha de planilha: moldura, linha do cabeçalho e as divisões das células.
+  planilha: (
+    <>
+      <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
+      <path d="M3.5 9h17M3.5 14.5h17M9 4v16M14.8 9v11" />
+    </>
+  ),
   despesas: (
     <>
       <path d="M6 3.5h12V21l-2.2-1.5L13.6 21l-2.2-1.5L9.2 21 7 19.5 6 20.2V3.5Z" />
