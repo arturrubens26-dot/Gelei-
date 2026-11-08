@@ -563,9 +563,16 @@ export class FilaDeGravacao {
         break;
       case "manter-a-minha":
         if (p.tipo === "versao") {
+          // Só o que ELA mudou vai por cima; o que o outro admin mudou nos outros campos fica.
           const base = camposDoServidor(p.atual);
           this.trocar(k, (x) =>
-            this.recalcular({ ...x, servidor: p.atual, sujos: (Object.keys(x.campos) as CampoId[]).filter((c) => !igual(x.campos[c], base[c])), pergunta: null }),
+            this.recalcular({
+              ...x,
+              servidor: p.atual,
+              campos: { ...base, ...escolher(x.campos, x.sujos) },
+              sujos: x.sujos.filter((c) => !igual(x.campos[c], base[c])),
+              pergunta: null,
+            }),
           );
           if (p.acao === "excluir") this.enviarExclusao(k);
           else {

@@ -48,7 +48,9 @@ export type PropsGrade = {
 
 type PropsEditorCriar = (tipo: TipoLancamento, nome: string) => Promise<{ ok: true; categoria: CategoriaDTO } | { ok: false; erro: string }>;
 
-const ORDENAVEIS: readonly string[] = ["data", "tipo", "categoriaId", "descricao", "valorCentavos"];
+const FIM = "__fim__";
+
+const ORDENAVEIS: readonly string[] =["data", "tipo", "categoriaId", "descricao", "valorCentavos"];
 
 /**
  * A grade de lançamentos (computador e tablet): uma tabela com o padrão ARIA "grid". Só uma célula
@@ -68,7 +70,8 @@ export function GradeLancamentos(p: PropsGrade) {
   const tamanho = { linhas: p.itens.length, colunas: nColunas };
 
   // Posição da célula ativa (pela chave: a linha pode mudar de lugar ao salvar ou filtrar).
-  const indiceAtivo = ativa ? p.itens.findIndex((i) => i.k === ativa.k) : -1;
+  // FIM = a última linha (a vazia, que pode ter acabado de aparecer embaixo da que foi preenchida).
+  const indiceAtivo = ativa ? (ativa.k === FIM ? p.itens.length - 1 : p.itens.findIndex((i) => i.k === ativa.k)) : -1;
   const pos = indiceAtivo >= 0 && ativa ? { linha: indiceAtivo, coluna: Math.min(ativa.coluna, nColunas - 1) } : { linha: 0, coluna: 0 };
   const kAtivo = p.itens[pos.linha]?.k ?? null;
 
@@ -126,11 +129,12 @@ export function GradeLancamentos(p: PropsGrade) {
     focar.current = true;
     if (depois) {
       const linha = p.itens.findIndex((i) => i.k === e.k);
+      // Preencher a linha vazia do fim faz outra aparecer embaixo: Enter desce para ela.
+      const naUltima = linha === p.itens.length - 1 && depois === "baixo";
       const destino = destinoDepoisDeConfirmar({ linha, coluna: e.coluna }, tamanho, depois);
-      // Enter na última linha (a vazia) fica nela; ao preencher, outra linha vazia aparece embaixo.
       const item = p.itens[destino.linha];
-      if (item && item.k !== e.k) p.fila.sairDaLinha(e.k);
-      setAtiva({ k: item?.k ?? e.k, coluna: destino.coluna });
+      if (naUltima || (item && item.k !== e.k)) p.fila.sairDaLinha(e.k);
+      setAtiva({ k: naUltima ? FIM : (item?.k ?? e.k), coluna: destino.coluna });
     } else setAtiva({ k: e.k, coluna: e.coluna });
   }
 

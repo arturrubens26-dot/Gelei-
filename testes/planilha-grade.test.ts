@@ -222,10 +222,11 @@ describe("fila de gravação", () => {
     assert.equal(fila.achar(k)?.estado, "pergunta");
     assert.equal(fila.achar(k)?.pergunta?.tipo, "versao");
     fila.responder(k, "manter-a-minha");
+    assert.equal(fila.achar(k)?.campos.descricao, "Açúcar cristal", "a mudança do outro admin fica");
     await passarTempo();
     const reenvio = enviados[1][0];
     assert.equal(reenvio.op === "alterar" && reenvio.versao, 3);
-    assert.deepEqual(reenvio.op === "alterar" && reenvio.campos, { valorCentavos: 2000, descricao: "Açúcar" });
+    assert.deepEqual(reenvio.op === "alterar" && reenvio.campos, { valorCentavos: 2000 }, "só o campo que ela mudou");
     assert.equal(fila.achar(k)?.estado, "salva");
   });
 
