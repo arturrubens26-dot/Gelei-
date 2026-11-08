@@ -43,6 +43,7 @@ import {
   type StatusEncomenda,
 } from "@/lib/encomendas-regras";
 import {
+  adicionaisDe,
   enderecoDe,
   expirarVencidas,
   incluirEncomenda,
@@ -53,6 +54,7 @@ import {
   textosDaPoliticaDe,
   type DevolucaoResumoDTO,
   type EncomendaCompleta,
+  type EncomendaDTO,
   type EnderecoDTO,
 } from "@/lib/encomendas";
 import { ErroNegocio } from "@/lib/erros";
@@ -162,7 +164,12 @@ export type EncomendaAdminDetalheDTO = Omit<EncomendaAdminDTO, "cliente"> & {
   endereco: EnderecoDTO | null;
   retirada: (typeof dadosLoja)["endereco"] | null;
   itens: { productId: string; sabor: string; quantidade: number; precoUnitario: number; subtotal: number; imagemUrl: string }[];
+  /** Só os potinhos (sem adicionais e sem frete). */
   subtotal: number;
+  /** Itens adicionais a preparar (valem para todos os potinhos; nome e preço congelados na solicitação). */
+  adicionais: EncomendaDTO["adicionais"];
+  /** Valor de todos os itens adicionais (preço por potinho × potinhos), em reais. */
+  adicionaisTotal: number;
   frete: number;
   pesoTotalGramas: number;
   aprovadaEm: string | null;
@@ -299,6 +306,8 @@ async function paraDetalheDTO(e: EncomendaAdminCompleta, agora: Date): Promise<E
     retirada: e.modoEntrega === "RETIRADA" ? dadosLoja.endereco : null,
     itens: itensDe(e),
     subtotal: e.subtotal.toNumber(),
+    adicionais: adicionaisDe(e),
+    adicionaisTotal: e.adicionais.toNumber(),
     frete: e.frete.toNumber(),
     pesoTotalGramas: e.pesoTotalGramas,
     aprovadaEm: e.aprovadaEm?.toISOString() ?? null,
@@ -395,7 +404,13 @@ const ABERTAS_PARA_AGENDA: StatusEncomenda[] = ["AGUARDANDO_ENTRADA", ...STATUS_
 async function agendaEntre(de: string, ate: string): Promise<DiaDaAgenda[]> {
   const lista = await db.encomenda.findMany({
     where: { status: { in: ABERTAS_PARA_AGENDA }, dataEntrega: { gte: dateDoDia(de), lte: dateDoDia(ate) } },
-    select: { id: true, status: true, dataEntrega: true, itens: { select: { productId: true, quantidade: true, product: { select: { nome: true } } } } },
+    select: {
+      id: true,
+      status: true,
+      dataEntrega: true,
+      itens: { select: { productId: true, quantidade: true, product: { select: { nome: true } } } },
+      adicionaisItens: { select: { adicionalId: true, nome: true } },
+    },
     orderBy: [{ dataEntrega: "asc" }, { id: "asc" }],
     take: 500,
   });
@@ -405,6 +420,7 @@ async function agendaEntre(de: string, ate: string): Promise<DiaDaAgenda[]> {
       status: e.status,
       dataEntrega: diaDe(e.dataEntrega),
       itens: e.itens.map((i) => ({ productId: i.productId, sabor: separarNome(i.product.nome).sabor, quantidade: i.quantidade })),
+      adicionais: e.adicionaisItens,
     })),
   );
 }

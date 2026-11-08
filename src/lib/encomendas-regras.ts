@@ -9,6 +9,7 @@
  * Datas: dias "AAAA-MM-DD" no fuso da loja (Teresina, −03:00 sem horário de verão; ver FUSO_LOJA).
  */
 import { z } from "zod";
+import { idsDeAdicionaisSchema } from "@/lib/adicionais-regras";
 import { FUSO_LOJA, formatarDia, hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
 import type { ModoEntrega } from "@/lib/entrega-regras";
@@ -353,20 +354,30 @@ export function pesoDaEncomenda(potinhos: number, pesoPotinhoGramas: number, pes
   return potinhos * pesoPotinhoGramas + pesoEmbalagemGramas;
 }
 
-export type ValoresDaEncomenda = { subtotal: number; frete: number; total: number; entrada: number; restante: number };
+export type ValoresDaEncomenda = { subtotal: number; adicionais: number; frete: number; total: number; entrada: number; restante: number };
 
 /**
- * Em centavos. A entrada é metade do valor dos POTINHOS (sem o frete, D7), arredondada para cima no
- * centavo; o restante é o total menos a entrada, com o frete. Assim entrada + restante = total sempre.
+ * Em centavos. A entrada é metade do valor dos POTINHOS e dos ITENS ADICIONAIS (sem o frete, D7), arredondada
+ * para cima no centavo; o restante é o total menos a entrada, com o frete. Assim entrada + restante = total
+ * sempre. `adicionaisCentavos` (preço por potinho dos itens × potinhos; veja `totalDosAdicionais`) é 0 sem itens.
  */
-export function calcularValores(entrada: { subtotalCentavos: number; freteCentavos: number }): ValoresDaEncomenda {
+export function calcularValores(entrada: { subtotalCentavos: number; adicionaisCentavos?: number; freteCentavos: number }): ValoresDaEncomenda {
   const { subtotalCentavos: subtotal, freteCentavos: frete } = entrada;
-  if (!Number.isInteger(subtotal) || subtotal <= 0 || !Number.isInteger(frete) || frete < 0) {
+  const adicionais = entrada.adicionaisCentavos ?? 0;
+  if (
+    !Number.isInteger(subtotal) ||
+    subtotal <= 0 ||
+    !Number.isInteger(adicionais) ||
+    adicionais < 0 ||
+    !Number.isInteger(frete) ||
+    frete < 0
+  ) {
     throw new RangeError("Valores da encomenda inválidos.");
   }
-  const total = subtotal + frete;
-  const valorEntrada = Math.ceil(subtotal / 2);
-  return { subtotal, frete, total, entrada: valorEntrada, restante: total - valorEntrada };
+  const base = subtotal + adicionais;
+  const total = base + frete;
+  const valorEntrada = Math.ceil(base / 2);
+  return { subtotal, adicionais, frete, total, entrada: valorEntrada, restante: total - valorEntrada };
 }
 
 // --- desistência e devolução ----------------------------------------------------------------------
@@ -953,6 +964,14 @@ export type ConteudoDaEncomenda = {
   addressId?: string | null;
   /** Entrega: os campos do endereço (de um endereço novo, ou os gravados na encomenda). */
   endereco?: CamposDoEndereco | null;
+  /** Ids dos itens adicionais escolhidos (sem ordem). Sem o campo = nenhum. */
+  adicionais?: readonly string[];
+};
+
+const mesmosAdicionais = (a: ConteudoDaEncomenda, b: ConteudoDaEncomenda) => {
+  const x = new Set(a.adicionais ?? []);
+  const y = new Set(b.adicionais ?? []);
+  return x.size === y.size && [...x].every((id) => y.has(id));
 };
 
 const mesmosCampos = (a: CamposDoEndereco, b: CamposDoEndereco) =>
@@ -974,8 +993,8 @@ function mesmoEndereco(a: ConteudoDaEncomenda, b: ConteudoDaEncomenda): boolean 
 
 /**
  * Idempotência: a solicitação reenviada com a mesma Idempotency-Key é a MESMA encomenda? Mesmos
- * potinhos por sabor (em qualquer ordem, linhas repetidas somadas), mesmas datas, modo, telefone,
- * observação e endereço. Qualquer diferença (a cliente corrigiu o endereço e reenviou com a mesma chave,
+ * potinhos por sabor (em qualquer ordem, linhas repetidas somadas), mesmos itens adicionais, mesmas datas,
+ * modo, telefone, observação e endereço. Qualquer diferença (a cliente corrigiu o endereço e reenviou com a mesma chave,
  * por exemplo) é outra solicitação: 422, nunca a encomenda antiga devolvida em silêncio.
  */
 export function mesmaEncomenda(a: ConteudoDaEncomenda, b: ConteudoDaEncomenda): boolean {
@@ -990,6 +1009,7 @@ export function mesmaEncomenda(a: ConteudoDaEncomenda, b: ConteudoDaEncomenda): 
     a.modoEntrega === b.modoEntrega &&
     a.telefone === b.telefone &&
     (a.observacao ?? null) === (b.observacao ?? null) &&
+    mesmosAdicionais(a, b) &&
     mesmoEndereco(a, b)
   );
 }
@@ -1044,6 +1064,8 @@ export const encomendaSchema = z
     endereco: enderecoSchema.optional(),
     telefone: telefoneSchema,
     observacao: textoOpcional(TAMANHO_MAX_TEXTO),
+    /** Ids dos itens adicionais marcados (vale para todos os potinhos). O preço e o nome são os do servidor. */
+    adicionais: idsDeAdicionaisSchema,
     aceitePolitica: z.literal(true, "Leia e aceite a política de desistência para enviar."),
     politicaVersao: z.string("Política não informada.").min(1).max(20),
     percentualRetido: z.number("Política não informada.").int().min(0).max(100),
@@ -1153,6 +1175,8 @@ export type EncomendaNaAgenda = {
   dataEntrega: string;
   status: StatusEncomenda;
   itens: readonly { productId: string; sabor: string; quantidade: number }[];
+  /** Itens adicionais da encomenda (valem para todos os potinhos dela). */
+  adicionais?: readonly { adicionalId: string; nome: string }[];
 };
 
 export type DiaDaAgenda = {
@@ -1162,6 +1186,11 @@ export type DiaDaAgenda = {
   potinhos: number;
   /** Potinhos a produzir por sabor, do que tem mais para o que tem menos. */
   porSabor: { productId: string; sabor: string; potinhos: number }[];
+  /**
+   * Itens adicionais a preparar (das encomendas confirmadas): em quantas encomendas e quantas unidades (cada
+   * item vale para todos os potinhos da encomenda, então unidades = potinhos dessas encomendas). Por nome.
+   */
+  porAdicional: { adicionalId: string; nome: string; encomendas: number; unidades: number }[];
   /** Aprovadas que ainda esperam a entrada (podem não se confirmar): à parte. */
   aguardandoEntrada: number;
   potinhosAguardando: number;
@@ -1170,14 +1199,31 @@ export type DiaDaAgenda = {
 
 /** Agenda por dia de entrega ou retirada: potinhos por sabor para planejar a produção. */
 export function agendaPorDia(encomendas: readonly EncomendaNaAgenda[]): DiaDaAgenda[] {
-  const dias = new Map<string, DiaDaAgenda & { sabores: Map<string, { productId: string; sabor: string; potinhos: number }> }>();
+  const dias = new Map<
+    string,
+    DiaDaAgenda & {
+      sabores: Map<string, { productId: string; sabor: string; potinhos: number }>;
+      extras: Map<string, { adicionalId: string; nome: string; encomendas: number; unidades: number }>;
+    }
+  >();
   for (const e of encomendas) {
     const confirmada = statusConfirmado(e.status) || e.status === "ENTREGUE";
     const aguardando = e.status === "AGUARDANDO_ENTRADA";
     if (!confirmada && !aguardando) continue;
     let dia = dias.get(e.dataEntrega);
     if (!dia) {
-      dia = { dia: e.dataEntrega, encomendas: 0, potinhos: 0, porSabor: [], aguardandoEntrada: 0, potinhosAguardando: 0, ids: [], sabores: new Map() };
+      dia = {
+        dia: e.dataEntrega,
+        encomendas: 0,
+        potinhos: 0,
+        porSabor: [],
+        porAdicional: [],
+        aguardandoEntrada: 0,
+        potinhosAguardando: 0,
+        ids: [],
+        sabores: new Map(),
+        extras: new Map(),
+      };
       dias.set(e.dataEntrega, dia);
     }
     dia.ids.push(e.id);
@@ -1194,12 +1240,19 @@ export function agendaPorDia(encomendas: readonly EncomendaNaAgenda[]): DiaDaAge
       s.potinhos += i.quantidade;
       dia.sabores.set(i.productId, s);
     }
+    for (const a of e.adicionais ?? []) {
+      const x = dia.extras.get(a.adicionalId) ?? { adicionalId: a.adicionalId, nome: a.nome, encomendas: 0, unidades: 0 };
+      x.encomendas += 1;
+      x.unidades += potinhos;
+      dia.extras.set(a.adicionalId, x);
+    }
   }
   return [...dias.values()]
     .sort((a, b) => (a.dia < b.dia ? -1 : a.dia > b.dia ? 1 : 0))
-    .map(({ sabores, ...dia }) => ({
+    .map(({ sabores, extras, ...dia }) => ({
       ...dia,
       porSabor: [...sabores.values()].sort((a, b) => b.potinhos - a.potinhos || a.sabor.localeCompare(b.sabor, "pt-BR")),
+      porAdicional: [...extras.values()].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
     }));
 }
 

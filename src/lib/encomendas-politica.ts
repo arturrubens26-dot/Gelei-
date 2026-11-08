@@ -66,7 +66,7 @@ function textosDaPoliticaV2(d: DadosDaPolitica): string[] {
   const palavra = palavraDoModo(d.modo);
   const total = d.entradaCentavos + d.restanteCentavos;
   return [
-    "Sua solicitação só vira encomenda quando a Geleiô aprova e você paga a entrada (50% do valor dos potinhos). Antes disso nada é cobrado e você pode desistir quando quiser.",
+    "Sua solicitação só vira encomenda quando a Geleiô aprova e você paga a entrada (50% do valor dos potinhos e dos itens adicionais, se você escolher algum). Antes disso nada é cobrado e você pode desistir quando quiser.",
     `Como você compra pelo site, vale o direito de arrependimento (art. 49 do Código de Defesa do Consumidor): você pode desistir aqui no site, em Minhas encomendas, a qualquer momento antes da ${palavra} e até ${DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber os potinhos.`,
     `Se desistir, devolvemos 100% de tudo o que você pagou (a entrada de ${brl(d.entradaCentavos)}, o restante de ${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? " e o frete" : ""}: ${brl(total)} no total), de imediato, pelo mesmo meio do pagamento e com correção monetária quando for o caso. Sem taxa e sem desconto.`,
     "Depois de receber, os potinhos devem estar lacrados e sem uso. A devolução deles a gente combina com você, e o custo do retorno é da Geleiô.",

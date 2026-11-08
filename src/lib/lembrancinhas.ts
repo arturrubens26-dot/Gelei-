@@ -7,6 +7,7 @@ import { origemDaApiDeTeste } from "@/lib/infinitepay";
 import { db } from "@/lib/db";
 import { POLITICA_VERSAO } from "@/lib/encomendas-politica";
 import { MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
+import { paraAdicionalPublico, type AdicionalPublicoDTO } from "@/lib/mimos-adicionais";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { separarNome } from "@/lib/produtos-regras";
 
@@ -35,6 +36,8 @@ export type LembrancinhasDTO = {
   maxPotinhos: number;
   /** Sabores à venda E marcados "disponível em mini", em ordem alfabética. */
   sabores: { productId: string; sabor: string; imagemUrl: string }[];
+  /** Itens adicionais ATIVOS (florzinhas, paninho, caixinha, colherzinha), na ordem do painel. Preço por potinho. */
+  adicionais: AdicionalPublicoDTO[];
 };
 
 /**
@@ -72,7 +75,7 @@ export function motivoLembrancinhasFechadas(entrada: {
 
 /**
  * Configuração pública e sabores mini, em cache (`use cache`) como o catálogo. O painel expira na hora
- * com a tag "lembrancinhas" (configuração) e "produtos" (preço, visibilidade e "Disponível em mini").
+ * com a tag "lembrancinhas" (configuração e itens adicionais) e "produtos" (preço, visibilidade e "Disponível em mini").
  * Objetos simples: Decimal vira number para poder ir para o cache.
  */
 export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
@@ -80,12 +83,17 @@ export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
   cacheLife("minutes");
   cacheTag("lembrancinhas", "produtos");
 
-  const [config, produtos] = await Promise.all([
+  const [config, produtos, adicionais] = await Promise.all([
     lerConfigLembrancinhas(),
     db.product.findMany({
       where: { ativo: true, disponivelEmMini: true },
       orderBy: [{ nome: "asc" }, { id: "asc" }],
       select: { id: true, nome: true, imagemUrl: true },
+    }),
+    db.mimoAdicional.findMany({
+      where: { ativo: true },
+      orderBy: [{ ordem: "asc" }, { nome: "asc" }, { id: "asc" }],
+      select: { id: true, nome: true, descricao: true, precoPorPotinho: true, imagemUrl: true },
     }),
   ]);
   const ativo = config?.ativo ?? false;
@@ -109,5 +117,6 @@ export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
     minPotinhos: MIN_POTINHOS,
     maxPotinhos: MAX_POTINHOS,
     sabores,
+    adicionais: adicionais.map(paraAdicionalPublico),
   };
 }

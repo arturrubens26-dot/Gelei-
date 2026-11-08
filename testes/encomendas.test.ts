@@ -278,6 +278,7 @@ describe("valores (centavos)", () => {
   it("23 × R$ 6,00 + frete R$ 30,00: total 16800, entrada 6900, restante 9900", () => {
     assert.deepEqual(calcularValores({ subtotalCentavos: 23 * 600, freteCentavos: 3000 }), {
       subtotal: 13800,
+      adicionais: 0,
       frete: 3000,
       total: 16800,
       entrada: 6900,
@@ -310,6 +311,8 @@ describe("valores (centavos)", () => {
     assert.throws(() => calcularValores({ subtotalCentavos: 10.5, freteCentavos: 0 }), RangeError);
     assert.throws(() => calcularValores({ subtotalCentavos: 0, freteCentavos: 0 }), RangeError);
     assert.throws(() => calcularValores({ subtotalCentavos: 100, freteCentavos: -1 }), RangeError);
+    assert.throws(() => calcularValores({ subtotalCentavos: 100, adicionaisCentavos: -1, freteCentavos: 0 }), RangeError);
+    assert.throws(() => calcularValores({ subtotalCentavos: 100, adicionaisCentavos: 0.5, freteCentavos: 0 }), RangeError);
   });
 });
 
@@ -856,6 +859,30 @@ describe("idempotência, agenda, linha do tempo e WhatsApp", () => {
     assert.equal(mesmaEncomenda(conteudo, { ...conteudo, modoEntrega: "ENTREGA" }), false);
     assert.equal(mesmaEncomenda(conteudo, { ...conteudo, itens: [{ productId: "a", quantidade: 11 }, { productId: "b", quantidade: 5 }] }), false);
     assert.equal(mesmaEncomenda(conteudo, { ...conteudo, telefone: "86999990000" }), false);
+  });
+
+  it("mesmaEncomenda compara os itens adicionais como conjunto (sem ordem; ausente = nenhum)", () => {
+    assert.equal(mesmaEncomenda({ ...conteudo, adicionais: ["florzinhas", "caixinha"] }, { ...conteudo, adicionais: ["caixinha", "florzinhas"] }), true);
+    assert.equal(mesmaEncomenda({ ...conteudo, adicionais: [] }, conteudo), true);
+    assert.equal(mesmaEncomenda({ ...conteudo, adicionais: ["florzinhas"] }, conteudo), false);
+    assert.equal(mesmaEncomenda({ ...conteudo, adicionais: ["florzinhas"] }, { ...conteudo, adicionais: ["caixinha"] }), false);
+    assert.equal(mesmaEncomenda({ ...conteudo, adicionais: ["florzinhas"] }, { ...conteudo, adicionais: ["florzinhas", "caixinha"] }), false);
+  });
+
+  it("agendaPorDia lista os itens adicionais a preparar (só das confirmadas): encomendas e unidades = potinhos", () => {
+    const item = (productId: string, sabor: string, quantidade: number) => ({ productId, sabor, quantidade });
+    const extra = (adicionalId: string, nome: string) => ({ adicionalId, nome });
+    const agenda = agendaPorDia([
+      { id: "1", dataEntrega: "2026-11-14", status: "CONFIRMADA", itens: [item("m", "Morango", 20)], adicionais: [extra("f", "Florzinhas"), extra("c", "Caixinha")] },
+      { id: "2", dataEntrega: "2026-11-14", status: "PRONTA", itens: [item("p", "Pimenta", 25)], adicionais: [extra("f", "Florzinhas")] },
+      { id: "3", dataEntrega: "2026-11-14", status: "AGUARDANDO_ENTRADA", itens: [item("m", "Morango", 30)], adicionais: [extra("f", "Florzinhas")] },
+      { id: "4", dataEntrega: "2026-11-14", status: "CONFIRMADA", itens: [item("m", "Morango", 20)] },
+    ]);
+    assert.equal(agenda.length, 1);
+    assert.deepEqual(agenda[0].porAdicional, [
+      { adicionalId: "c", nome: "Caixinha", encomendas: 1, unidades: 20 },
+      { adicionalId: "f", nome: "Florzinhas", encomendas: 2, unidades: 45 },
+    ]);
   });
 
   it("agendaPorDia soma por dia e por sabor; aguardando entrada fica à parte; encerradas não entram", () => {

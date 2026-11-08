@@ -11,7 +11,9 @@ import { codigoPedido } from "@/lib/formatacao";
  *   valor da parcela: os juros do parcelado ficam com a InfinitePay), e a entrada ou o restante
  *   recebidos fora do site na data do registro (`encomendas.entrada_paga_em` / `restante_pago_em`);
  * - a devolução FEITA sai da receita no mês em que foi feita (`encomenda_devolucoes.feita_em`);
- * - os potinhos por sabor contam as encomendas ENTREGUES no mês (`entregue_em`), num bloco à parte.
+ * - os potinhos por sabor e os itens adicionais (unidades e valor) contam as encomendas ENTREGUES no mês
+ *   (`entregue_em`), num bloco à parte. O dinheiro dos adicionais já está nas parcelas pagas (o total da
+ *   encomenda os inclui); o bloco só mostra de onde ele veio.
  * Vendas e ticket médio continuam só com os pedidos.
  */
 
@@ -32,6 +34,11 @@ export type LembrancinhasDoMesDTO = {
   encomendas: number;
   /** Potinhos entregues no mês, por sabor, com o valor dos potinhos (sem o frete). */
   potinhosEntregues: { productId: string; nome: string; potinhos: number; valor: number }[];
+  /**
+   * Itens adicionais das encomendas entregues no mês: em quantas encomendas, quantas unidades (cada item vale para
+   * todos os potinhos da encomenda) e o valor (preço por potinho congelado × potinhos).
+   */
+  adicionaisEntregues: { adicionalId: string; nome: string; encomendas: number; unidades: number; valor: number }[];
 };
 
 /** Uma linha das movimentações do Financeiro (mesmo formato de MovimentacaoDTO, em admin.ts). */
@@ -55,7 +62,7 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
   const entradaForaDoSite = { entradaForaDoSite: true, entradaPagaEm: { gte: inicio, lt: fim } } satisfies Prisma.EncomendaWhereInput;
   const feitas = { status: "FEITA", feitaEm: { gte: inicio, lt: fim } } satisfies Prisma.EncomendaDevolucaoWhereInput;
 
-  const [porParcela, somaFora, somaSinaisFora, somaDevolucoes, idsPagas, idsFora, idsSinaisFora, idsDevolucoes, potinhos, linhasPagas, linhasFora, linhasSinaisFora, linhasDevolucoes] =
+  const [porParcela, somaFora, somaSinaisFora, somaDevolucoes, idsPagas, idsFora, idsSinaisFora, idsDevolucoes, potinhos, adicionais, linhasPagas, linhasFora, linhasSinaisFora, linhasDevolucoes] =
     await Promise.all([
       db.pagamento.groupBy({ by: ["parcela"], where: pagas, _sum: { valor: true } }),
       db.encomenda.aggregate({ where: foraDoSite, _sum: { valorRestante: true } }),
@@ -73,6 +80,14 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
         WHERE e.status = 'ENTREGUE' AND e.entregue_em >= ${inicio} AND e.entregue_em < ${fim}
         GROUP BY ei.product_id, p.nome
         ORDER BY potinhos DESC, p.nome`,
+      db.$queryRaw<{ adicionalId: string; nome: string; encomendas: number; unidades: number; valor: unknown }[]>`
+        SELECT ea.adicional_id AS "adicionalId", ea.nome, COUNT(*)::int AS encomendas, SUM(e.potinhos)::int AS unidades,
+               SUM(ea.preco_por_potinho * e.potinhos) AS valor
+        FROM encomenda_adicionais ea
+        JOIN encomendas e ON e.id = ea.encomenda_id
+        WHERE e.status = 'ENTREGUE' AND e.entregue_em >= ${inicio} AND e.entregue_em < ${fim}
+        GROUP BY ea.adicional_id, ea.nome
+        ORDER BY ea.nome`,
       db.pagamento.findMany({
         where: pagas,
         orderBy: [{ aprovadoEm: "desc" }, { id: "desc" }],
@@ -161,6 +176,13 @@ export async function lembrancinhasDoMes(inicio: Date, fim: Date): Promise<{ res
       liquido: sinais.add(sinaisFora).add(restantes).add(fora).sub(devolucoes).toNumber(),
       encomendas: encomendas.size,
       potinhosEntregues: potinhos.map((l) => ({ productId: l.productId, nome: l.nome, potinhos: Number(l.potinhos), valor: SOMA(l.valor) })),
+      adicionaisEntregues: adicionais.map((l) => ({
+        adicionalId: l.adicionalId,
+        nome: l.nome,
+        encomendas: Number(l.encomendas),
+        unidades: Number(l.unidades),
+        valor: SOMA(l.valor),
+      })),
     },
     movimentacoes,
   };

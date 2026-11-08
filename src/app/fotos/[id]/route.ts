@@ -1,17 +1,20 @@
 import { comTratamento } from "@/lib/api";
+import { lerFotoDoAdicional } from "@/lib/mimos-adicionais";
 import { lerFoto } from "@/lib/produtos-admin";
 
 const PARA_SEMPRE = "public, max-age=31536000, immutable";
 
 /**
- * GET /fotos/[id] — foto de produto enviada pelo painel. Cada foto nova tem outro id, então a
+ * GET /fotos/[id] — foto de produto ou de item adicional dos mimos, enviada pelo painel. Cada foto nova tem outro id, então a
  * resposta pode ficar em cache (navegador e CDN) para sempre.
  */
 export const GET = comTratamento(
   "fotos GET",
   async (_request: Request, ctx: RouteContext<"/fotos/[id]">) => {
     const { id } = await ctx.params;
-    const foto = /^[a-f0-9]{32}$/.test(id) ? await lerFoto(id) : null;
+    // Primeiro as fotos de produto (o caminho de sempre); se não for uma, a de um item adicional dos mimos. Os ids
+    // são UUIDs sorteados, então uma foto nunca existe nas duas tabelas.
+    const foto = /^[a-f0-9]{32}$/.test(id) ? ((await lerFoto(id)) ?? (await lerFotoDoAdicional(id))) : null;
     if (!foto) {
       return new Response("Foto não encontrada.", { status: 404, headers: { "Cache-Control": "public, max-age=60" } });
     }

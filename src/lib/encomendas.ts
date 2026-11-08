@@ -1,6 +1,7 @@
 import "server-only";
 import { unstable_rethrow } from "next/navigation";
 import { Prisma } from "@/generated/prisma/client";
+import { conferirAdicionais, totalDosAdicionais } from "@/lib/adicionais-regras";
 import { validarEnderecoComCep } from "@/lib/cep";
 import { dadosLoja } from "@/lib/dados-loja";
 import { db } from "@/lib/db";
@@ -37,6 +38,7 @@ import { ErroNegocio } from "@/lib/erros";
 import { codigoPedido } from "@/lib/formatacao";
 import { lerConfigLembrancinhas, pendenciasParaAbrir } from "@/lib/lembrancinhas";
 import { MAX_ENCOMENDAS_ABERTAS } from "@/lib/limites";
+import { listarAdicionaisAtivos } from "@/lib/mimos-adicionais";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { separarNome } from "@/lib/produtos-regras";
 
@@ -88,7 +90,12 @@ export type EncomendaDTO = {
   observacao: string | null;
   itens: { productId: string; sabor: string; quantidade: number; precoUnitario: number; subtotal: number; imagemUrl: string }[];
   potinhos: number;
+  /** Só os potinhos (sem adicionais e sem frete), em reais. */
   subtotal: number;
+  /** Itens adicionais escolhidos (nome e preço por potinho congelados na solicitação); valem para todos os potinhos. */
+  adicionais: { adicionalId: string; nome: string; precoPorPotinho: number; total: number }[];
+  /** Valor de todos os itens adicionais (preço por potinho × potinhos), em reais; 0 sem itens. */
+  adicionaisTotal: number;
   frete: number;
   total: number;
   entrada: number;
@@ -154,6 +161,8 @@ const dateDoDia = (dia: string) => new Date(`${dia}T00:00:00Z`);
 export const incluirEncomenda = {
   address: { select: CAMPOS_ENDERECO },
   itens: { orderBy: { productId: "asc" }, include: { product: { select: { nome: true, imagemUrl: true } } } },
+  // Os adicionais com o nome e o preço congelados na solicitação (a ordem é só para a tela ficar estável).
+  adicionaisItens: { orderBy: [{ nome: "asc" }, { adicionalId: "asc" }] },
   // Só o que as regras e o painel usam (o link de pagamento a tela lê pela rota própria).
   pagamentos: {
     orderBy: [{ criadoEm: "asc" }, { id: "asc" }],
@@ -280,6 +289,15 @@ export function itensDe(e: Pick<EncomendaCompleta, "itens">): EncomendaDTO["iten
   }));
 }
 
+export function adicionaisDe(e: Pick<EncomendaCompleta, "adicionaisItens" | "potinhos">): EncomendaDTO["adicionais"] {
+  return e.adicionaisItens.map((a) => ({
+    adicionalId: a.adicionalId,
+    nome: a.nome,
+    precoPorPotinho: a.precoPorPotinho.toNumber(),
+    total: a.precoPorPotinho.mul(e.potinhos).toNumber(),
+  }));
+}
+
 export function paraEncomendaDTO(e: EncomendaCompleta, agora: Date): EncomendaDTO {
   const regras = paraRegras(e, agora);
   const efetivo = statusEfetivo(regras, agora);
@@ -301,6 +319,8 @@ export function paraEncomendaDTO(e: EncomendaCompleta, agora: Date): EncomendaDT
     itens: itensDe(e),
     potinhos: e.potinhos,
     subtotal: e.subtotal.toNumber(),
+    adicionais: adicionaisDe(e),
+    adicionaisTotal: e.adicionais.toNumber(),
     frete: e.frete.toNumber(),
     total: e.total.toNumber(),
     entrada: e.valorEntrada.toNumber(),
@@ -465,6 +485,7 @@ function repeticao(existente: EncomendaCompleta, entrada: EncomendaEntrada, agor
       modoEntrega: existente.modoEntrega,
       telefone: existente.telefone,
       observacao: existente.observacao,
+      adicionais: existente.adicionaisItens.map((a) => a.adicionalId),
       addressId: existente.addressId,
       endereco: existente.address
         ? {
@@ -485,6 +506,7 @@ function repeticao(existente: EncomendaCompleta, entrada: EncomendaEntrada, agor
       modoEntrega: entrada.modoEntrega,
       telefone: entrada.telefone,
       observacao: entrada.observacao,
+      adicionais: entrada.adicionais,
       addressId: entrada.addressId ?? null,
       endereco: entrada.endereco ?? null,
     },
@@ -505,7 +527,8 @@ const whereAbertas = (userId: string, agora: Date): Prisma.EncomendaWhereInput =
  * - 503 recurso desativado, CNPJ/CPF ou e-mail da loja pendentes (D13) ou pagamento pelo site
  *   indisponível (nada é gravado);
  * - 400 datas (por campo, contra o "hoje" da loja no SERVIDOR); 422 sabor indisponível em mini;
- *   400 potinhos fora de 20–50 (em `itens`);
+ *   400 potinhos fora de 20–50 (em `itens`); 400 itens adicionais repetidos (em `adicionais`, no schema);
+ *   422 item adicional desconhecido ou desativado (`detalhes.adicionaisIndisponiveis`);
  * - 409 política mudou (`politicaVersao`/`percentualRetido` diferentes dos atuais);
  * - 404 endereço salvo de outra pessoa; 422 CEP inválido ou que não bate com a cidade (`endereco.cep`);
  * - 422 entrega fora de Teresina (`detalhes.foraDaArea`, mensagem MENSAGEM_FORA_DA_AREA);
@@ -513,7 +536,8 @@ const whereAbertas = (userId: string, agora: Date): Prisma.EncomendaWhereInput =
  * - 429 mais de 3 encomendas abertas (conferido dentro da transação, com trava por conta; DEPOIS de
  *   conferir a chave de novo, dentro da trava: dois envios simultâneos da mesma solicitação, com 2 já
  *   abertas, devolvem a do primeiro (200), não 429).
- * A repetição só vale com o MESMO conteúdo: potinhos, datas, modo, telefone, observação e endereço.
+ * A repetição só vale com o MESMO conteúdo: potinhos, itens adicionais, datas, modo, telefone, observação e endereço.
+ * O preço e o nome dos itens adicionais vêm do BANCO (catálogo ativo) e ficam congelados na encomenda.
  */
 export async function criarEncomenda(
   userId: string,
@@ -548,6 +572,17 @@ export async function criarEncomenda(
     }
     throw new ErroNegocio(400, potinhos.mensagem, { itens: [potinhos.mensagem] });
   }
+
+  // Itens adicionais: ids conhecidos e ativos, sem repetidos (o schema já barrou os repetidos). Nome e preço
+  // por potinho são os do servidor; o que a tela mostrou só serve para o 409 de "o total mudou".
+  const catalogoAdicionais = await listarAdicionaisAtivos();
+  const adicionaisConferidos = conferirAdicionais(entrada.adicionais, catalogoAdicionais);
+  if (!adicionaisConferidos.ok) {
+    throw adicionaisConferidos.motivo === "duplicado"
+      ? new ErroNegocio(400, adicionaisConferidos.mensagem, { adicionais: [adicionaisConferidos.mensagem] })
+      : new ErroNegocio(422, adicionaisConferidos.mensagem, { adicionaisIndisponiveis: adicionaisConferidos.ids });
+  }
+  const adicionaisCentavos = totalDosAdicionais(adicionaisConferidos.itens, potinhos.total);
 
   // A cliente aceitou uma versão do texto: se mudou desde a tela, ela precisa ler de novo. Na v2 nada é
   // retido (o percentual é sempre 0, seja qual for o valor que ficou na coluna da configuração).
@@ -592,10 +627,12 @@ export async function criarEncomenda(
       : new ErroNegocio(400, frete.mensagem, { endereco: [frete.mensagem] });
   }
   const freteCentavos = frete.freteCentavos;
-  const valores = calcularValores({ subtotalCentavos: potinhos.total * precoPotinhoCentavos, freteCentavos });
+  const valores = calcularValores({ subtotalCentavos: potinhos.total * precoPotinhoCentavos, adicionaisCentavos, freteCentavos });
   if (entrada.totalEsperadoCentavos !== valores.total) {
     throw new ErroNegocio(409, "O preço ou o frete mudaram. Confira o novo total antes de enviar.", {
       precoPotinho: precoPotinhoCentavos / 100,
+      adicionais: valores.adicionais / 100,
+      adicionaisPorPotinho: adicionaisConferidos.itens.map((a) => ({ id: a.id, nome: a.nome, precoCentavos: a.precoCentavos })),
       frete: valores.frete / 100,
       total: valores.total / 100,
       entrada: valores.entrada / 100,
@@ -638,6 +675,7 @@ export async function criarEncomenda(
           observacao: entrada.observacao,
           potinhos: potinhos.total,
           subtotal: reaisDe(valores.subtotal),
+          adicionais: reaisDe(valores.adicionais),
           frete: reaisDe(valores.frete),
           total: reaisDe(valores.total),
           valorEntrada: reaisDe(valores.entrada),
@@ -653,6 +691,10 @@ export async function criarEncomenda(
           criadaEm: agora,
           itens: {
             create: potinhos.itens.map((i) => ({ productId: i.productId, quantidade: i.quantidade, precoUnitario: reaisDe(precoPotinhoCentavos) })),
+          },
+          // Nome e preço por potinho congelados: mudar o cadastro depois não altera esta encomenda.
+          adicionaisItens: {
+            create: adicionaisConferidos.itens.map((a) => ({ adicionalId: a.id, nome: a.nome, precoPorPotinho: reaisDe(a.precoCentavos) })),
           },
         },
         include: incluirEncomenda,

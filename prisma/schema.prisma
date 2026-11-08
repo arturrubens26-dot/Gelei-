@@ -640,6 +640,9 @@ model Encomenda {
   /// Valores congelados na solicitação, em reais. entrada = ⌈subtotal/2⌉; restante = total − entrada.
   subtotal                Decimal              @db.Decimal(10, 2)
   frete                   Decimal              @db.Decimal(10, 2)
+  /// Itens adicionais: soma dos preços por potinho × potinhos (0 sem adicionais). Entra no total e é
+  /// rateado como o resto: a entrada é metade de (subtotal + adicionais), o restante leva o frete.
+  adicionais              Decimal              @default(0) @db.Decimal(10, 2)
   total                   Decimal              @db.Decimal(10, 2)
   valorEntrada            Decimal              @map("valor_entrada") @db.Decimal(10, 2)
   valorRestante           Decimal              @map("valor_restante") @db.Decimal(10, 2)
@@ -691,6 +694,8 @@ model Encomenda {
   restanteRegistradoPor   User?                @relation("RestantesRegistrados", fields: [restanteRegistradoPorId], references: [id], onDelete: SetNull)
   entradaRegistradaPor    User?                @relation("EntradasRegistradas", fields: [entradaRegistradaPorId], references: [id], onDelete: SetNull)
   itens                   EncomendaItem[]
+  /// Itens adicionais escolhidos (nome e preço por potinho congelados).
+  adicionaisItens         EncomendaAdicional[]
   /// Cobranças da ENTRADA e do RESTANTE (tabela `pagamentos`, a mesma dos pedidos).
   pagamentos              Pagamento[]
   devolucoes              EncomendaDevolucao[]
@@ -706,6 +711,62 @@ model Encomenda {
   @@index([restanteRegistradoPorId])
   @@index([entradaRegistradaPorId])
   @@map("encomendas")
+}
+
+/// Itens adicionais que a cliente pode marcar na encomenda (florzinhas, paninho na tampa, caixinha,
+/// colherzinha): cadastro editável no painel. O preço é POR POTINHO (R$ 0,00 = sem custo) e vale para todos
+/// os potinhos da encomenda. A encomenda guarda uma cópia do nome e do preço (`EncomendaAdicional`), então
+/// mudar o preço aqui nunca altera encomendas antigas. Sem `imagemUrl`, a loja desenha uma ilustração padrão.
+model MimoAdicional {
+  /// Identificador legível ("florzinhas", "paninho-na-tampa", "caixinha", "colherzinha"): também escolhe a ilustração padrão.
+  id              String                @id
+  nome            String                @db.VarChar(60)
+  descricao       String                @db.VarChar(160)
+  /// Reais por potinho (0 a 999,99).
+  precoPorPotinho Decimal               @default(0) @map("preco_por_potinho") @db.Decimal(10, 2)
+  ativo           Boolean               @default(true)
+  ordem           Int                   @default(0)
+  /// "/fotos/<id>" da foto enviada pelo painel; nulo = ilustração padrão desenhada em SVG.
+  imagemUrl       String?               @map("imagem_url")
+  criadoEm        DateTime              @default(now()) @map("criado_em")
+  atualizadoEm    DateTime              @updatedAt @map("atualizado_em")
+  fotos           MimoAdicionalFoto[]
+  encomendas      EncomendaAdicional[]
+
+  @@index([ativo, ordem])
+  @@map("mimo_adicionais")
+}
+
+/// Foto de um item adicional enviada pelo painel (a mesma ideia de `produto_fotos`: a Netlify não guarda
+/// arquivos, então a imagem fica no banco, servida em /fotos/<id> com cache permanente).
+model MimoAdicionalFoto {
+  id          String        @id @default(cuid())
+  adicionalId String        @map("adicional_id")
+  /// image/jpeg, image/png ou image/webp (conferido pelos primeiros bytes).
+  tipo        String        @db.VarChar(20)
+  dados       Bytes
+  criadoEm    DateTime      @default(now()) @map("criado_em")
+  adicional   MimoAdicional @relation(fields: [adicionalId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([adicionalId])
+  @@map("mimo_adicional_fotos")
+}
+
+/// Adicional escolhido na encomenda, com o nome e o preço POR POTINHO congelados na solicitação. Vale para
+/// todos os potinhos da encomenda (v1: sem quantidade por item); o valor é `precoPorPotinho × encomenda.potinhos`.
+model EncomendaAdicional {
+  id              String        @id @default(cuid())
+  encomendaId     String        @map("encomenda_id")
+  adicionalId     String        @map("adicional_id")
+  nome            String        @db.VarChar(60)
+  precoPorPotinho Decimal       @map("preco_por_potinho") @db.Decimal(10, 2)
+  encomenda       Encomenda     @relation(fields: [encomendaId], references: [id], onDelete: Cascade)
+  /// Restrict: adicional com encomenda não se apaga (desative-o), como os sabores.
+  adicional       MimoAdicional @relation(fields: [adicionalId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([encomendaId, adicionalId])
+  @@index([adicionalId])
+  @@map("encomenda_adicionais")
 }
 
 /// Potinhos de cada sabor. O sabor é o produto do catálogo marcado "disponível em mini".
