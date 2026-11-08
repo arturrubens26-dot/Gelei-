@@ -1035,7 +1035,7 @@ async function main() {
                   to_char((now() at time zone 'America/Fortaleza')::date + 10, 'YYYY-MM-DD') entrega`,
         );
         const corpo = {
-          itens: [{ productId: produto, quantidade: 15 }],
+          itens: [{ productId: produto, quantidade: 20 }],
           dataFesta: festa,
           dataEntrega: entrega,
           modoEntrega: "RETIRADA",
@@ -1043,33 +1043,44 @@ async function main() {
           aceitePolitica: true,
           politicaVersao: "2026-11-v2",
           percentualRetido: 0,
-          totalEsperadoCentavos: 15 * cfgAntes.precoPotinhoCentavos,
+          totalEsperadoCentavos: 20 * cfgAntes.precoPotinhoCentavos,
         };
         const chave = `e2e-${marca}-criar`;
         const cria = (c, extra = {}, k = chave) => a.req("POST", "/api/encomendas", { corpo: { ...corpo, ...c }, cabecalhos: { "Idempotency-Key": k, ...extra } });
         const semChave = await a.req("POST", "/api/encomendas", { corpo });
         confere(semChave.status === 400, "sem Idempotency-Key → 400", semChave.json);
         const totalErrado = await cria({ totalEsperadoCentavos: 1 }, {}, `${chave}-t`);
-        confere(totalErrado.status === 409 && totalErrado.json?.detalhes?.total === (15 * cfgAntes.precoPotinhoCentavos) / 100, "total diferente → 409 com o total atual", totalErrado.json);
+        confere(totalErrado.status === 409 && totalErrado.json?.detalhes?.total === (20 * cfgAntes.precoPotinhoCentavos) / 100, "total diferente → 409 com o total atual", totalErrado.json);
         const fora = await cria(
           { modoEntrega: "ENTREGA", endereco: { cep: "01310-100", rua: "Av. Paulista", numero: "1000", bairro: "Bela Vista", cidade: "São Paulo", estado: "SP" } },
           {},
           `${chave}-f`,
         );
         confere(fora.status === 422 && fora.json?.detalhes?.foraDaArea === true, "entrega fora de Teresina → 422 foraDaArea", fora.json);
-        const poucos = await cria({ itens: [{ productId: produto, quantidade: 14 }] }, {}, `${chave}-p`);
-        confere(poucos.status === 400 && poucos.json?.detalhes?.itens, "14 potinhos → 400 em itens", poucos.json);
+        confere(/^Entregamos apenas em Teresina-PI\./.test(fora.json?.erro ?? ""), "a recusa diz \"Entregamos apenas em Teresina-PI\"", fora.json);
+        const [{ festa9, entrega8 }] = await sql(
+          `select to_char((now() at time zone 'America/Fortaleza')::date + 9, 'YYYY-MM-DD') festa9,
+                  to_char((now() at time zone 'America/Fortaleza')::date + 8, 'YYYY-MM-DD') entrega8`,
+        );
+        const cedoDemais = await cria({ dataFesta: festa9, dataEntrega: entrega8 }, {}, `${chave}-d`);
+        confere(
+          cedoDemais.status === 400 && /10 dias de antecedência/.test(cedoDemais.json?.detalhes?.dataFesta?.[0] ?? ""),
+          "festa com 9 dias de antecedência → 400 (mínimo 10)",
+          cedoDemais.json,
+        );
+        const poucos = await cria({ itens: [{ productId: produto, quantidade: 19 }] }, {}, `${chave}-p`);
+        confere(poucos.status === 400 && poucos.json?.detalhes?.itens, "19 potinhos → 400 em itens", poucos.json);
         const criada = await cria({});
         const encCriada = criada.json?.encomenda;
         if (encCriada?.id) encomendas.push(encCriada.id);
         confere(
-          criada.status === 201 && encCriada?.status === "SOLICITADA" && encCriada.potinhos === 15 && encCriada.total === (15 * cfgAntes.precoPotinhoCentavos) / 100 && encCriada.telefone === "86999991234",
+          criada.status === 201 && encCriada?.status === "SOLICITADA" && encCriada.potinhos === 20 && encCriada.total === (20 * cfgAntes.precoPotinhoCentavos) / 100 && encCriada.telefone === "86999991234",
           "POST /api/encomendas → 201 SOLICITADA, valores do servidor",
           criada.json,
         );
         const repete = await cria({});
         confere(repete.status === 200 && repete.json?.encomenda?.id === encCriada?.id, "mesma chave e mesmo conteúdo → 200, a mesma encomenda", repete.json);
-        const outra = await cria({ itens: [{ productId: produto, quantidade: 16 }], totalEsperadoCentavos: 16 * cfgAntes.precoPotinhoCentavos });
+        const outra = await cria({ itens: [{ productId: produto, quantidade: 21 }], totalEsperadoCentavos: 21 * cfgAntes.precoPotinhoCentavos });
         confere(outra.status === 422, "mesma chave com outro conteúdo → 422", outra.json);
         const sEnt = await a.req("GET", `/api/encomendas/${encCriada?.id}/pagamento?parcela=ENTRADA`);
         confere(sEnt.json?.etapa === "INDISPONIVEL" && sEnt.json.motivoIndisponivel === "NAO_LIBERADA", "entrada antes da aprovação: INDISPONIVEL / NAO_LIBERADA", sEnt.json);
@@ -1418,7 +1429,7 @@ async function main() {
     const chave30 = `e2e-${marca}-idem`;
     const cfg30 = (await admin.req("GET", "/api/admin/lembrancinhas")).json.config;
     const corpoBase30 = (festa, entrega) => ({
-      itens: [{ productId: produto, quantidade: 15 }],
+      itens: [{ productId: produto, quantidade: 20 }],
       dataFesta: festa,
       dataEntrega: entrega,
       modoEntrega: "RETIRADA",
@@ -1426,7 +1437,7 @@ async function main() {
       aceitePolitica: true,
       politicaVersao: "2026-11-v2",
       percentualRetido: 0,
-      totalEsperadoCentavos: 15 * cfg30.precoPotinhoCentavos,
+      totalEsperadoCentavos: 20 * cfg30.precoPotinhoCentavos,
     });
     const [{ festa: festa30, entrega: entrega30 }] = await sql(
       `select to_char((now() at time zone 'America/Fortaleza')::date + 12, 'YYYY-MM-DD') festa, to_char((now() at time zone 'America/Fortaleza')::date + 10, 'YYYY-MM-DD') entrega`,
@@ -1460,7 +1471,7 @@ async function main() {
         confere(semObs.status === 422, "mesma chave sem a observação → 422", semObs.json);
         // Endereço: entrega com endereço salvo; outro endereço com a mesma chave → 422.
         await sql("insert into addresses (id, user_id, cep, rua, numero, bairro, cidade, estado) values ($1, $3, '64035420', 'Rua E2E A', '10', 'Centro', 'Teresina', 'PI'), ($2, $3, '64035420', 'Rua E2E B', '20', 'Centro', 'Teresina', 'PI')", [`ad${marca}a`, `ad${marca}b`, uid30]);
-        const entrega = (addressId) => ({ ...corpoBase30(festa30, entrega30), modoEntrega: "ENTREGA", addressId, totalEsperadoCentavos: 15 * cfg30.precoPotinhoCentavos + taxa30 });
+        const entrega = (addressId) => ({ ...corpoBase30(festa30, entrega30), modoEntrega: "ENTREGA", addressId, totalEsperadoCentavos: 20 * cfg30.precoPotinhoCentavos + taxa30 });
         const chaveE = `${chave30}-entrega`;
         const ent1 = await postar(entrega(`ad${marca}a`), chaveE);
         if (ent1.json?.encomenda?.id) encomendas.push(ent1.json.encomenda.id);

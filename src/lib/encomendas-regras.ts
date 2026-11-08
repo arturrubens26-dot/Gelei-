@@ -66,15 +66,21 @@ export const palavraDoModo = (modo: ModoEntrega | undefined) =>
 
 // --- limites e prazos (decisões da dona, 2026-10-21) ----------------------------------------------
 
-export const MIN_POTINHOS = 15;
+export const MIN_POTINHOS = 20;
 export const MAX_POTINHOS = 50;
 /** Sabores diferentes numa encomenda (teto da validação de entrada). */
 export const MAX_SABORES = 20;
-/** A festa é de hoje+5 (D11) a hoje+90 (D9). */
-export const ANTECEDENCIA_MIN_DIAS = 5;
+/**
+ * A festa é de hoje+10 (decisão da dona, 2026-11-07; antes eram 5 dias) a hoje+90 (D9). O prazo conta da
+ * solicitação, e o dia da solicitação não entra: pedido de 07/11 → festa a partir de 17/11.
+ */
+export const ANTECEDENCIA_MIN_DIAS = 10;
 export const ANTECEDENCIA_MAX_DIAS = 90;
-/** A entrega ou retirada é de hoje+4 até a véspera da festa (D11). */
-export const DIAS_MIN_ATE_ENTREGA = 4;
+/**
+ * A entrega ou retirada é de hoje+9 (a véspera da festa mais próxima) até a véspera da festa: a Geleiô
+ * sempre tem 9 dias ou mais para preparar, e a entrega continua sendo ANTES do dia da festa.
+ */
+export const DIAS_MIN_ATE_ENTREGA = ANTECEDENCIA_MIN_DIAS - 1;
 /**
  * Corte OPERACIONAL: 23h59 de 3 dias antes da entrega ou retirada. Garante tempo de produção (a entrada
  * se paga até aqui e a loja responde antes dele). NÃO é prazo de desistência: na política v2 a cliente
@@ -158,8 +164,8 @@ const menor = (a: Date, b: Date) => (a.getTime() <= b.getTime() ? a : b);
 export type FaixaDeDatas = { festaMin: string; festaMax: string; entregaMin: string; entregaMax: string };
 
 /**
- * Datas aceitas a partir de hoje (no fuso da loja): festa de hoje+5 a hoje+90; entrega ou retirada de
- * hoje+4 até a véspera da festa (sem festa escolhida, até a véspera da festa mais distante).
+ * Datas aceitas a partir de hoje (no fuso da loja): festa de hoje+10 a hoje+90; entrega ou retirada de
+ * hoje+9 até a véspera da festa (sem festa escolhida, até a véspera da festa mais distante).
  */
 export function faixaDeDatas(hoje: string, dataFesta?: string): FaixaDeDatas {
   const festaMin = somarDias(hoje, ANTECEDENCIA_MIN_DIAS);
@@ -172,7 +178,7 @@ export type ErrosDeDatas = Partial<Record<"dataFesta" | "dataEntrega", string[]>
 
 /**
  * Confere as datas contra o "hoje" da LOJA (o do servidor, nunca o do navegador). Os erros vêm por
- * campo, com a data concreta que valeria: "A festa precisa ser a partir de 15/11/2026 (5 dias de
+ * campo, com a data concreta que valeria: "A festa precisa ser a partir de 17/11/2026 (10 dias de
  * antecedência)."
  */
 export function validarDatas(entrada: {
@@ -217,7 +223,8 @@ export function corteDaEntrega(dataEntrega: string): Date {
 /**
  * Prazos fixados na solicitação (S = dia da solicitação na loja, E = entrega ou retirada):
  * - a loja responde até o fim do dia seguinte (00:00 de S+2) ou até o meio-dia de E−3, o que vier
- *   primeiro (D5). Como E ≥ S+4, ela tem pelo menos até o meio-dia de S+1;
+ *   primeiro (D5). Como E ≥ S+9, o fim do dia seguinte sempre vem primeiro (o meio-dia de E−3 cai em S+6
+ *   ou depois): a antecedência de 10 dias não encurta o prazo de resposta;
  * - o corte operacional é às 23h59 de E−3 (`corteDaEntrega`). Ele vem sempre depois de `responderAte`.
  */
 export function prazosDaEncomenda(criadaEm: Date, dataEntrega: string): { responderAte: Date; corteEm: Date } {
@@ -314,7 +321,7 @@ export type ResultadoPotinhos<I extends SaborNoKit> =
 /**
  * Junta o mesmo sabor repetido (a mesma regra dos kits) e confere: quantidades inteiras ≥ 1, todo
  * sabor disponível em mini (`saboresMini`: à venda E marcados "disponível em mini") e o total entre
- * 15 e 50 potinhos. A mensagem é a do 400 em `itens`: "Mínimo de 15 potinhos; você escolheu 12."
+ * 20 e 50 potinhos. A mensagem é a do 400 em `itens`: "Mínimo de 20 potinhos; você escolheu 12."
  */
 export function conferirPotinhos<I extends SaborNoKit>(itens: readonly I[], saboresMini: ReadonlySet<string>): ResultadoPotinhos<I> {
   if (itens.some((i) => !Number.isInteger(i.quantidade) || i.quantidade < 1)) {

@@ -505,7 +505,7 @@ const whereAbertas = (userId: string, agora: Date): Prisma.EncomendaWhereInput =
  * - 503 recurso desativado, CNPJ/CPF ou e-mail da loja pendentes (D13) ou pagamento pelo site
  *   indisponível (nada é gravado);
  * - 400 datas (por campo, contra o "hoje" da loja no SERVIDOR); 422 sabor indisponível em mini;
- *   400 potinhos fora de 15–50 (em `itens`);
+ *   400 potinhos fora de 20–50 (em `itens`);
  * - 409 política mudou (`politicaVersao`/`percentualRetido` diferentes dos atuais);
  * - 404 endereço salvo de outra pessoa; 422 CEP inválido ou que não bate com a cidade (`endereco.cep`);
  * - 422 entrega fora de Teresina (`detalhes.foraDaArea`, mensagem MENSAGEM_FORA_DA_AREA);

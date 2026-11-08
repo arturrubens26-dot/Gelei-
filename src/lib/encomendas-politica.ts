@@ -21,6 +21,7 @@ import {
   valorRetidoDaEntrada,
   type ModoEntrega,
 } from "@/lib/encomendas-regras";
+import { AVISO_SO_TERESINA } from "@/lib/entrega-regras";
 
 export const POLITICA_VERSAO = "2026-11-v2";
 
@@ -70,7 +71,7 @@ function textosDaPoliticaV2(d: DadosDaPolitica): string[] {
     `Se desistir, devolvemos 100% de tudo o que você pagou (a entrada de ${brl(d.entradaCentavos)}, o restante de ${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? " e o frete" : ""}: ${brl(total)} no total), de imediato, pelo mesmo meio do pagamento e com correção monetária quando for o caso. Sem taxa e sem desconto.`,
     "Depois de receber, os potinhos devem estar lacrados e sem uso. A devolução deles a gente combina com você, e o custo do retorno é da Geleiô.",
     "Se a Geleiô não puder fazer a encomenda, devolvemos tudo.",
-    `O restante (${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? ", com o frete" : ""}) é pago até a ${palavra}, aqui no site (PIX ou cartão) ou combinado direto com a Geleiô; a encomenda só sai quitada.`,
+    `O restante (${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? ", com o frete" : ""}) é pago até a ${palavra}, aqui no site (PIX ou cartão) ou combinado direto com a Geleiô; a encomenda só sai quitada. ${AVISO_SO_TERESINA} Para outros lugares, a opção é a retirada na loja, sem custo.`,
     "Esta política não exclui nem limita os direitos previstos no Código de Defesa do Consumidor.",
   ];
 }

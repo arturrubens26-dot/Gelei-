@@ -26,8 +26,8 @@ export default async function PaginaEntregaETrocas() {
 
       <h2>Onde entregamos</h2>
       <p>
-        Por enquanto, só em <strong>Teresina</strong> (CEPs de 64000-000 a 64099-999), {centavos > 0 ? `com taxa fixa de ${taxa}` : "sem taxa de entrega"}. O valor aparece no
-        resumo do pedido antes de você pagar. Fora de Teresina ainda não entregamos, mas você pode escolher a retirada na loja.
+        <strong>Entregamos apenas em Teresina-PI</strong> (CEPs de 64000-000 a 64099-999), {centavos > 0 ? `com taxa fixa de ${taxa}` : "sem taxa de entrega"}. O valor aparece no
+        resumo do pedido antes de você pagar. Para quem está fora de Teresina, a opção é a retirada na loja. Isso vale também para as encomendas de mimos.
       </p>
 
       <h2>Retirada na loja</h2>

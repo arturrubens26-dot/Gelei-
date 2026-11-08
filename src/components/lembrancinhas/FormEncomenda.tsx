@@ -27,9 +27,11 @@ import {
 } from "@/lib/encomendas-regras";
 import type { EnderecoSalvo } from "@/lib/enderecos";
 import {
+  AVISO_SO_TERESINA,
   CIDADE_ATENDIDA,
   MENSAGEM_FORA_DA_AREA,
   MENSAGEM_TELEFONE_INVALIDO,
+  UF_ATENDIDA,
   cepAtendido,
   enderecoDeRetirada,
   formatarTelefone,
@@ -60,7 +62,7 @@ type Props = {
 
 /**
  * Solicitação de mimos (minis de 40 ml), pensada primeiro para o celular. Na ordem: data da
- * festa, sabores (15 a 50 potinhos), entrega ou retirada e o dia, WhatsApp e observação, e o resumo
+ * festa, sabores (20 a 50 potinhos), entrega ou retirada e o dia, WhatsApp e observação, e o resumo
  * com a política de desistência (as datas e valores desta encomenda) e o aceite.
  *
  * As contas são as de `encomendas-regras` (as mesmas do servidor, em centavos): o total que a cliente
@@ -219,7 +221,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
     if (!potinhosOk) {
       faltas.push(total < minPotinhos ? `Escolha pelo menos ${minPotinhos} potinhos (agora: ${total}).` : `No máximo ${maxPotinhos} potinhos.`);
     }
-    if (!retirada && foraDaArea) faltas.push("Entregamos só em Teresina: escolha a retirada na loja ou um endereço de Teresina.");
+    if (!retirada && foraDaArea) faltas.push(`${AVISO_SO_TERESINA} Escolha a retirada na loja ou um endereço de Teresina.`);
     else if (!entregaPronta) faltas.push("Complete o endereço de entrega.");
     if (!telefoneOk) faltas.push("Informe seu WhatsApp com DDD.");
     if (!aceite) faltas.push("Leia e aceite a política de desistência.");
@@ -462,9 +464,9 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
             nome={`${uid}-modo`}
             marcado={!retirada}
             aoEscolher={() => escolherModo("ENTREGA")}
-            titulo={`Entregar em ${CIDADE_ATENDIDA}`}
+            titulo={`Entregar em ${CIDADE_ATENDIDA}-${UF_ATENDIDA}`}
             preco={taxa}
-            descricao="Para CEPs de Teresina (começam com 640)."
+            descricao="Entregamos apenas em Teresina-PI (CEPs que começam com 640)."
           />
           <OpcaoDeEntrega
             nome={`${uid}-modo`}
@@ -651,8 +653,9 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
           <Linha rotulo={`${potinhos(total)} × ${brl(precoCentavos)}`} valor={brl(total * precoCentavos)} />
           <Linha
             rotulo={retirada ? "Retirada na loja" : "Taxa de entrega"}
-            valor={retirada ? "Grátis" : freteCentavos !== null ? brl(freteCentavos) : foraDaArea ? "fora da área" : "informe o endereço"}
+            valor={retirada ? "Grátis" : freteCentavos !== null ? brl(freteCentavos) : foraDaArea ? "fora de Teresina" : "informe o endereço"}
           />
+          <p className="text-xs text-primaria/80">{AVISO_SO_TERESINA} Fora de Teresina, só a retirada na loja.</p>
           <div className="flex justify-between gap-4 border-t-2 border-accent2/60 pt-2 text-xl font-bold">
             <dt>Total</dt>
             <dd className="tabular-nums">{totalCentavos !== null ? brl(totalCentavos) : "—"}</dd>

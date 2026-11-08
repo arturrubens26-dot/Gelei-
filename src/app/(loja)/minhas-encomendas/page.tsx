@@ -56,7 +56,7 @@ async function ListaDeEncomendas() {
         <p className="font-titulos text-2xl">Você ainda não fez encomendas de mimos.</p>
         <p className="max-w-md text-primaria/80">
           {config.ativo
-            ? "Potinhos de geleia de 40 ml para os convidados da sua festa, de 15 a 50, nos sabores que você escolher."
+            ? `Potinhos de geleia de 40 ml para os convidados da sua festa, de ${config.minPotinhos} a ${config.maxPotinhos}, nos sabores que você escolher. Entregamos apenas em Teresina-PI (ou você retira na loja).`
             : "As encomendas de mimos voltam em breve."}
         </p>
         <Link href={config.ativo ? "/mimos" : "/products"} className="btn-primario px-8">

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  AVISO_SO_TERESINA,
   MAX_TAXA_ENTREGA_CENTAVOS,
   MENSAGEM_FORA_DA_AREA,
   TAXA_ENTREGA_PADRAO_CENTAVOS,
@@ -44,6 +45,8 @@ describe("área de entrega", () => {
     assert.equal(fora.ok, false);
     assert.equal(!fora.ok && fora.motivo, "FORA_DA_AREA");
     assert.equal(!fora.ok && fora.mensagem, MENSAGEM_FORA_DA_AREA);
+    assert.match(MENSAGEM_FORA_DA_AREA, /^Entregamos apenas em Teresina-PI./);
+    assert.equal(AVISO_SO_TERESINA, "Entregamos apenas em Teresina-PI.");
     const semCep = calcularFrete({ modo: "ENTREGA", cep: null, taxaCentavos: 1500 });
     assert.equal(!semCep.ok && semCep.motivo, "SEM_CEP");
   });

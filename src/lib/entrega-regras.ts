@@ -26,8 +26,10 @@ export const ROTULO_MODO_ENTREGA: Record<ModoEntrega, string> = {
   RETIRADA: "Retirada na loja",
 };
 
-export const MENSAGEM_FORA_DA_AREA =
-  "Ainda não entregamos na sua região. Você pode retirar o pedido na loja, sem custo.";
+/** A frase curta, para qualquer tela que fale de entrega (a mesma em todo o site). */
+export const AVISO_SO_TERESINA = `Entregamos apenas em ${CIDADE_ATENDIDA}-${UF_ATENDIDA}.`;
+
+export const MENSAGEM_FORA_DA_AREA = `${AVISO_SO_TERESINA} Para outros lugares, você pode retirar o pedido na loja, sem custo.`;
 
 /** Endereço de retirada em uma linha: "Rua Paulo Veloso do Vale, 6935 · Brasilar · Teresina/PI · CEP 64035-420". */
 export function enderecoDeRetirada(): string {

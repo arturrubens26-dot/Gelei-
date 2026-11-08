@@ -9,7 +9,7 @@ import { Ornamento } from "@/components/marca/Ornamento";
 import { getUsuarioAtual } from "@/lib/auth/dal";
 import { hojeNaLoja } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
-import { ANTECEDENCIA_MIN_DIAS, DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA } from "@/lib/encomendas-regras";
+import { ANTECEDENCIA_MIN_DIAS, DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
 import { listarEnderecos } from "@/lib/enderecos";
 import { obterTaxaDeEntregaCentavos } from "@/lib/entrega";
 import { obterLembrancinhas, type LembrancinhasDTO } from "@/lib/lembrancinhas";
@@ -17,7 +17,7 @@ import { telefoneDoCliente } from "@/lib/pedidos";
 
 export const metadata: Metadata = {
   title: "Mimos",
-  description: "Potinhos de geleia de 40 ml para o mimo da sua festa: de 15 a 50 potinhos, nos sabores que você escolher.",
+  description: `Potinhos de geleia de 40 ml para o mimo da sua festa: de ${MIN_POTINHOS} a ${MAX_POTINHOS} potinhos, nos sabores que você escolher. Entregamos apenas em Teresina-PI, ou você retira na loja.`,
 };
 
 /**
@@ -84,7 +84,7 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
         <Fato rotulo="cada potinho" valor={config.precoPotinho > 0 ? formatarBRL(config.precoPotinho) : "—"} />
         <Fato rotulo="potinhos por encomenda" valor={`${config.minPotinhos} a ${config.maxPotinhos}`} />
         <Fato rotulo="de antecedência, no mínimo" valor={`${ANTECEDENCIA_MIN_DIAS} dias`} />
-        <Fato rotulo="ou retirada na loja" valor="Entrega em Teresina" />
+        <Fato rotulo="ou retirada na loja, sem custo" valor="Entregamos apenas em Teresina-PI" />
       </dl>
 
       <section aria-labelledby="titulo-como-funciona" className="mt-8 rounded-lg border border-accent2/60 bg-white/60 p-5 sm:p-6">
@@ -102,7 +102,7 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
             50% do valor dos potinhos, em até {HORAS_PARA_PAGAR_ENTRADA} horas depois da aprovação, com PIX ou cartão. Aí a encomenda está confirmada.
           </Passo>
           <Passo numero={4} titulo="Preparo e entrega">
-            O restante é pago até o dia da entrega ou da retirada. Você pode desistir antes de receber e até {DIAS_DESISTENCIA_APOS_RECEBER}{" "}
+            Entregamos apenas em Teresina-PI; de outro lugar, é só retirar na loja. O restante é pago até o dia da entrega ou da retirada. Você pode desistir antes de receber e até {DIAS_DESISTENCIA_APOS_RECEBER}{" "}
             dias depois, e devolvemos tudo o que pagou.
           </Passo>
         </ol>

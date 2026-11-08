@@ -8,7 +8,9 @@ import {
   textosDaPolitica,
   versaoDaPoliticaConhecida,
 } from "@/lib/encomendas-politica";
+import { somarDias } from "@/lib/vendas";
 import {
+  ANTECEDENCIA_MIN_DIAS,
   FOLGA_DA_ENTRADA_MS,
   MAX_POTINHOS,
   MIN_POTINHOS,
@@ -73,13 +75,13 @@ describe("datas no fuso da loja (Teresina, −03:00)", () => {
     assert.equal(diaDaLoja(new Date("2026-11-11T03:00:00Z")), "2026-11-11");
   });
 
-  it("às 23:59:59 de 10/11 a festa em 15/11 passa; à meia-noite de 11/11, não", () => {
+  it("às 23:59:59 de 10/11 a festa em 20/11 passa; à meia-noite de 11/11, não", () => {
     const antes = diaDaLoja(new Date("2026-11-11T02:59:59Z"));
     const depois = diaDaLoja(new Date("2026-11-11T03:00:00Z"));
-    assert.deepEqual(validarDatas({ hoje: antes, dataFesta: "2026-11-15", dataEntrega: "2026-11-14" }), { ok: true });
-    const r = validarDatas({ hoje: depois, dataFesta: "2026-11-15", dataEntrega: "2026-11-15" });
+    assert.deepEqual(validarDatas({ hoje: antes, dataFesta: "2026-11-20", dataEntrega: "2026-11-19" }), { ok: true });
+    const r = validarDatas({ hoje: depois, dataFesta: "2026-11-20", dataEntrega: "2026-11-19" });
     assert.equal(r.ok, false);
-    assert.deepEqual(r.ok ? null : r.erros.dataFesta, ["A festa precisa ser a partir de 16/11/2026 (5 dias de antecedência)."]);
+    assert.deepEqual(r.ok ? null : r.erros.dataFesta, ["A festa precisa ser a partir de 21/11/2026 (10 dias de antecedência)."]);
   });
 
   it("início do dia e meio-dia são instantes fixos em −03:00", () => {
@@ -110,11 +112,14 @@ describe("datas no fuso da loja (Teresina, −03:00)", () => {
 describe("antecedência e datas de entrega", () => {
   const hoje = "2026-11-10";
 
-  it("festa: 14/11 recusada, 15/11 aceita", () => {
-    const r = validarDatas({ hoje, dataFesta: "2026-11-14", dataEntrega: "2026-11-13" });
+  it("antecedência mínima de 10 dias: festa em 19/11 recusada, em 20/11 aceita (hoje = 10/11)", () => {
+    assert.equal(ANTECEDENCIA_MIN_DIAS, 10);
+    const r = validarDatas({ hoje, dataFesta: "2026-11-19", dataEntrega: "2026-11-18" });
     assert.equal(r.ok, false);
-    assert.match(r.ok ? "" : r.erros.dataFesta![0], /a partir de 15\/11\/2026 \(5 dias de antecedência\)/);
-    assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-15", dataEntrega: "2026-11-14" }), { ok: true });
+    assert.match(r.ok ? "" : r.erros.dataFesta![0], /a partir de 20\/11\/2026 \(10 dias de antecedência\)/);
+    assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-20", dataEntrega: "2026-11-19" }), { ok: true });
+    // Os 5 dias de antes não valem mais.
+    assert.equal(validarDatas({ hoje, dataFesta: "2026-11-15", dataEntrega: "2026-11-14" }).ok, false);
   });
 
   it("festa: hoje+90 aceita, hoje+91 recusada", () => {
@@ -130,39 +135,39 @@ describe("antecedência e datas de entrega", () => {
     assert.deepEqual(r.ok ? null : r.erros, { dataFesta: ["Data da festa inválida."], dataEntrega: ["Data da retirada inválida."] });
   });
 
-  it("festa em 15/11: entrega em 14/11 aceita; 15/11 (dia da festa) e 13/11 (antes de hoje+4) recusadas", () => {
-    assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-15", dataEntrega: "2026-11-14" }), { ok: true });
-    const noDia = validarDatas({ hoje, dataFesta: "2026-11-15", dataEntrega: "2026-11-15", modo: "ENTREGA" });
-    assert.deepEqual(noDia.ok ? null : noDia.erros.dataEntrega, ["A entrega precisa ser antes do dia da festa (até 14/11/2026)."]);
-    const cedo = validarDatas({ hoje, dataFesta: "2026-11-15", dataEntrega: "2026-11-13", modo: "RETIRADA" });
+  it("festa em 20/11: entrega em 19/11 aceita; 20/11 (dia da festa) e 18/11 (antes de hoje+9) recusadas", () => {
+    assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-20", dataEntrega: "2026-11-19" }), { ok: true });
+    const noDia = validarDatas({ hoje, dataFesta: "2026-11-20", dataEntrega: "2026-11-20", modo: "ENTREGA" });
+    assert.deepEqual(noDia.ok ? null : noDia.erros.dataEntrega, ["A entrega precisa ser antes do dia da festa (até 19/11/2026)."]);
+    const cedo = validarDatas({ hoje, dataFesta: "2026-11-20", dataEntrega: "2026-11-18", modo: "RETIRADA" });
     assert.deepEqual(cedo.ok ? null : cedo.erros.dataEntrega, [
-      "Retirada a partir de 14/11/2026: precisamos de 4 dias para preparar os potinhos.",
+      "Retirada a partir de 19/11/2026: precisamos de 9 dias para preparar os potinhos.",
     ]);
   });
 
-  it("festa em 30/11: entrega em 14/11 e em 29/11 aceitas", () => {
-    assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-30", dataEntrega: "2026-11-14" }), { ok: true });
+  it("festa em 30/11: entrega em 19/11 e em 29/11 aceitas", () => {
+    assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-30", dataEntrega: "2026-11-19" }), { ok: true });
     assert.deepEqual(validarDatas({ hoje, dataFesta: "2026-11-30", dataEntrega: "2026-11-29" }), { ok: true });
   });
 
   it("faixaDeDatas dá os limites concretos para o calendário", () => {
-    assert.deepEqual(faixaDeDatas(hoje), { festaMin: "2026-11-15", festaMax: "2027-02-08", entregaMin: "2026-11-14", entregaMax: "2027-02-07" });
-    assert.deepEqual(faixaDeDatas(hoje, "2026-11-30"), { festaMin: "2026-11-15", festaMax: "2027-02-08", entregaMin: "2026-11-14", entregaMax: "2026-11-29" });
+    assert.deepEqual(faixaDeDatas(hoje), { festaMin: "2026-11-20", festaMax: "2027-02-08", entregaMin: "2026-11-19", entregaMax: "2027-02-07" });
+    assert.deepEqual(faixaDeDatas(hoje, "2026-11-30"), { festaMin: "2026-11-20", festaMax: "2027-02-08", entregaMin: "2026-11-19", entregaMax: "2026-11-29" });
     // Festa inválida: a entrega vai até a véspera da festa mais distante.
     assert.equal(faixaDeDatas(hoje, "2026-02-30").entregaMax, "2027-02-07");
   });
 
   it("virada de mês e de ano", () => {
-    assert.deepEqual(validarDatas({ hoje: "2026-12-28", dataFesta: "2027-01-02", dataEntrega: "2027-01-01" }), { ok: true });
-    assert.equal(validarDatas({ hoje: "2026-12-28", dataFesta: "2027-01-01", dataEntrega: "2026-12-31" }).ok, false);
+    assert.deepEqual(validarDatas({ hoje: "2026-12-28", dataFesta: "2027-01-07", dataEntrega: "2027-01-06" }), { ok: true });
+    assert.equal(validarDatas({ hoje: "2026-12-28", dataFesta: "2027-01-06", dataEntrega: "2027-01-05" }).ok, false);
   });
 });
 
 describe("prazos", () => {
-  it("solicitação 10/11 15:00Z, entrega 14/11: responde até 11/11 12:00 local; corte 11/11 23h59", () => {
-    const p = prazosDaEncomenda(new Date("2026-11-10T15:00:00Z"), "2026-11-14");
-    assert.equal(iso(p.responderAte), "2026-11-11T15:00:00.000Z");
-    assert.equal(iso(p.corteEm), "2026-11-12T03:00:00.000Z");
+  it("solicitação 10/11 15:00Z, entrega 19/11 (limite dos 10 dias): responde até o fim de 11/11; corte 16/11 23h59", () => {
+    const p = prazosDaEncomenda(new Date("2026-11-10T15:00:00Z"), "2026-11-19");
+    assert.equal(iso(p.responderAte), "2026-11-12T03:00:00.000Z");
+    assert.equal(iso(p.corteEm), "2026-11-17T03:00:00.000Z");
   });
 
   it("entrega em 30/11: responde até o fim do dia seguinte; corte em 27/11 23h59", () => {
@@ -179,16 +184,21 @@ describe("prazos", () => {
     assert.equal(iso(depois.responderAte), "2026-11-13T03:00:00.000Z");
   });
 
-  it("com a entrega no limite (S+4), a loja tem pelo menos até o meio-dia de S+1 e o corte vem depois", () => {
+  it("com a entrega no limite (S+9), a loja responde até o fim de S+1 e o corte vem bem depois", () => {
     for (const hora of ["03:00:00", "12:00:00", "23:00:00", "02:59:59"]) {
       const criada = new Date(`2026-11-10T${hora}Z`);
       const s = diaDaLoja(criada);
       const e = new Date(`${s}T12:00:00Z`);
-      e.setUTCDate(e.getUTCDate() + 4);
+      e.setUTCDate(e.getUTCDate() + 9);
       const p = prazosDaEncomenda(criada, e.toISOString().slice(0, 10));
       const meioDiaS1 = new Date(meioDia(s).getTime() + 24 * HORA);
       assert.ok(p.responderAte.getTime() >= meioDiaS1.getTime(), hora);
-      assert.ok(p.corteEm.getTime() > p.responderAte.getTime(), hora);
+      // Com 10 dias, o prazo de resposta é sempre o fim do dia seguinte (00:00 de S+2): o meio-dia de E−3 não o encurta.
+      assert.equal(iso(p.responderAte), iso(inicioDoDia(somarDias(s, 2))), hora);
+      assert.ok(p.corteEm.getTime() > p.responderAte.getTime() + 24 * HORA, hora);
+      // A entrada (24 h depois de uma aprovação no último minuto) cabe antes do corte operacional.
+      const aprovada = new Date(p.responderAte.getTime() - MIN);
+      assert.equal(iso(prazoDaEntrada(aprovada, p.corteEm)), new Date(aprovada.getTime() + 24 * HORA).toISOString(), hora);
     }
   });
 
@@ -229,9 +239,13 @@ describe("validade do link (valid_until)", () => {
 
 describe("potinhos", () => {
   const mini = new Set(["morango", "maracuja", "pimenta"]);
-  it("14 abaixo do mínimo; 15 e 50 passam; 51 acima", () => {
-    const abaixo = conferirPotinhos([{ productId: "morango", quantidade: 14 }], mini);
-    assert.deepEqual(abaixo.ok ? null : [abaixo.motivo, abaixo.mensagem], ["abaixo-do-minimo", "Mínimo de 15 potinhos; você escolheu 14."]);
+  it("19 abaixo do mínimo; 20 e 50 passam; 51 acima", () => {
+    assert.equal(MIN_POTINHOS, 20);
+    assert.equal(MAX_POTINHOS, 50);
+    const abaixo = conferirPotinhos([{ productId: "morango", quantidade: 19 }], mini);
+    assert.deepEqual(abaixo.ok ? null : [abaixo.motivo, abaixo.mensagem], ["abaixo-do-minimo", "Mínimo de 20 potinhos; você escolheu 19."]);
+    // Os 15 de antes não valem mais.
+    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 15 }], mini).ok, false);
     assert.equal(conferirPotinhos([{ productId: "morango", quantidade: MIN_POTINHOS }], mini).ok, true);
     assert.equal(conferirPotinhos([{ productId: "morango", quantidade: MAX_POTINHOS }], mini).ok, true);
     const acima = conferirPotinhos([{ productId: "morango", quantidade: 51 }], mini);
@@ -241,9 +255,9 @@ describe("potinhos", () => {
     const r = conferirPotinhos([{ productId: "morango", quantidade: 13 }, { productId: "maracuja", quantidade: 10 }], mini);
     assert.equal(r.ok && r.total, 23);
   });
-  it("Morango ×5 + Morango ×10 vira Morango ×15", () => {
-    const r = conferirPotinhos([{ productId: "morango", quantidade: 5 }, { productId: "morango", quantidade: 10 }], mini);
-    assert.deepEqual(r.ok ? r.itens : null, [{ productId: "morango", quantidade: 15 }]);
+  it("Morango ×5 + Morango ×15 vira Morango ×20", () => {
+    const r = conferirPotinhos([{ productId: "morango", quantidade: 5 }, { productId: "morango", quantidade: 15 }], mini);
+    assert.deepEqual(r.ok ? r.itens : null, [{ productId: "morango", quantidade: 20 }]);
   });
   it("quantidade 0 ou 1,5 é inválida", () => {
     for (const q of [0, 1.5, -2]) {
@@ -965,6 +979,7 @@ describe("política de desistência", () => {
       assert.match(todo, /lacrados e sem uso/);
       assert.match(todo, /custo do retorno é da Geleiô/);
       assert.match(todo, /de imediato, pelo mesmo meio do pagamento/);
+      assert.match(todo, /Entregamos apenas em Teresina-PI/);
       // Nada que diga que algo fica com a loja nem prazo de "devolução integral até o corte".
       assert.doesNotMatch(todo, /fica com a Geleiô|ficam com a Geleiô|retém|retida|retido|retenção|3 dias antes|23h59/);
     }
