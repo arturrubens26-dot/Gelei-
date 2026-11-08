@@ -2,7 +2,9 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { resumoEncomendasDashboard } from "@/lib/encomendas-admin";
-import { lembrancinhasDoMes, liquidoLembrancinhasPorMes, type LembrancinhasDoMesDTO } from "@/lib/encomendas-financeiro";
+import { lembrancinhasDoMes, type LembrancinhasDoMesDTO } from "@/lib/encomendas-financeiro";
+import { totaisDoPeriodo, totaisPorMes } from "@/lib/planilha/livro";
+import { fimDoMes } from "@/lib/planilha/regras";
 import {
   FUSO_LOJA,
   PADRAO_MES,
@@ -229,8 +231,22 @@ export type FinanceiroDoMes = {
   mes: string;
   /** Mês corrente: a navegação não passa dele. */
   mesAtual: string;
-  resumo: { entradas: number; saidas: number; resultado: number; vendas: number; lancamentos: number };
+  /**
+   * Do livro-caixa da planilha (src/lib/planilha/livro.ts), o mesmo número da planilha: `entradas` = vendas
+   * pagas + líquido dos mimos + entradas manuais; `saidas` = despesas. Aporte e retirada da dona (categorias
+   * "fora do resultado") ficam fora do resultado e aparecem em `foraDoResultado`.
+   */
+  resumo: {
+    entradas: number;
+    saidas: number;
+    resultado: number;
+    vendas: number;
+    lancamentos: number;
+    foraDoResultado: { entradas: number; saidas: number };
+  };
   entradas: {
+    /** Entradas manuais da planilha no mês (sem o aporte da dona), por categoria. */
+    manuais: { total: number; lancamentos: number; porCategoria: { categoriaId: string; nome: string; total: number; lancamentos: number }[] };
     /** Pedidos pelo site; `frete` já está dentro do `total`. */
     site: { total: number; pedidos: number; frete: number };
     presencial: { total: number; vendas: number };
@@ -301,7 +317,13 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
     WHERE status IN (${SQL_STATUS_PAGOS})
       AND created_at >= ${inicioDoMesSql(mes)} AND created_at < ${inicioDoMesSql(proximo)}`;
 
-  const [porCanal, porSabor, somaKits, somaDespesas, porCategoria, vendasMensais, despesasMensais, pedidos, despesas, lembrancinhas, lembrancinhasMensais] = await Promise.all([
+  // Retirada da dona (pró-labore) e outras saídas "fora do resultado" não entram nas saídas por categoria.
+  const noResultado = { OR: [{ categoriaId: null }, { categoriaFin: { foraDoResultado: false } }] } satisfies Prisma.ExpenseWhereInput;
+  const entradasManuaisDoMes = {
+    data: { gte: new Date(`${mes}-01T00:00:00Z`), lt: new Date(`${proximo}-01T00:00:00Z`) },
+  } satisfies Prisma.EntradaManualWhereInput;
+
+  const [porCanal, porSabor, somaKits, contaDespesas, porCategoria, vendasMensais, totaisDoMes, totaisMensais, pedidos, despesas, lembrancinhas, manuaisPorCategoria, linhasManuais] = await Promise.all([
     db.order.groupBy({ by: ["canal"], where: vendasDoMes, _sum: { total: true, deliveryFee: true }, _count: { _all: true } }),
     // Potes avulsos + potes dentro de caixas. O pote em kit vale a parte rateada do preço da caixa
     // (valor_rateado é de TODOS os potes daquele sabor numa caixa; × caixas).
@@ -336,8 +358,8 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
         FROM order_kit_sabores oks
         WHERE oks.order_kit_id = ok.id
       ) av`,
-    db.expense.aggregate({ where: despesasDoMes, _sum: { valorTotal: true }, _count: { _all: true } }),
-    db.expense.groupBy({ by: ["categoria"], where: despesasDoMes, _sum: { valorTotal: true }, _count: { _all: true } }),
+    db.expense.count({ where: despesasDoMes }),
+    db.expense.groupBy({ by: ["categoria"], where: { AND: [despesasDoMes, noResultado] }, _sum: { valorTotal: true }, _count: { _all: true } }),
     // created_at é guardado em UTC; converte para o horário de Brasília antes de agrupar por mês.
     db.$queryRaw<{ mes: string; receita: unknown; pedidos: bigint }[]>`
       SELECT to_char(date_trunc('month', (created_at AT TIME ZONE 'UTC') AT TIME ZONE ${FUSO}), 'YYYY-MM') AS mes,
@@ -347,11 +369,9 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       WHERE status IN (${SQL_STATUS_PAGOS})
         AND created_at >= ${inicioDoMesSql(inicioEvolucao)} AND created_at < ${inicioDoMesSql(proximo)}
       GROUP BY 1`,
-    db.$queryRaw<{ mes: string; despesas: unknown }[]>`
-      SELECT to_char(date_trunc('month', data), 'YYYY-MM') AS mes, SUM(valor_total) AS despesas
-      FROM expenses
-      WHERE data >= ${`${inicioEvolucao}-01`}::date AND data < ${`${proximo}-01`}::date
-      GROUP BY 1`,
+    // Entradas e saídas (do mês e dos 12 meses) saem do livro-caixa: o mesmo número da planilha.
+    totaisDoPeriodo(`${mes}-01`, fimDoMes(mes)),
+    totaisPorMes(`${inicioEvolucao}-01`, fimDoMes(mes)),
     db.order.findMany({
       where: vendasDoMes,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -362,10 +382,22 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       where: despesasDoMes,
       orderBy: [{ data: "desc" }, { createdAt: "desc" }, { id: "desc" }],
       take: MAX_MOVIMENTACOES + 1,
-      select: { id: true, data: true, descricao: true, categoria: true, valorTotal: true, createdAt: true },
+      select: { id: true, data: true, descricao: true, categoria: true, valorTotal: true, createdAt: true, categoriaFin: { select: { nome: true } } },
     }),
     lembrancinhasDoMes(limites.inicio, limites.fim),
-    liquidoLembrancinhasPorMes(limites.inicioEvolucao, limites.fim),
+    db.$queryRaw<{ categoriaId: string; nome: string; centavos: bigint; lancamentos: number }[]>`
+      SELECT c.id AS "categoriaId", c.nome, ROUND(SUM(m.valor) * 100)::bigint AS centavos, COUNT(*)::int AS lancamentos
+      FROM entradas_manuais m
+      JOIN categorias_financeiras c ON c.id = m.categoria_id
+      WHERE m.data >= ${`${mes}-01`}::date AND m.data < ${`${proximo}-01`}::date AND NOT c.fora_do_resultado
+      GROUP BY c.id, c.nome
+      ORDER BY centavos DESC, c.nome`,
+    db.entradaManual.findMany({
+      where: entradasManuaisDoMes,
+      orderBy: [{ data: "desc" }, { criadoEm: "desc" }, { id: "desc" }],
+      take: MAX_MOVIMENTACOES + 1,
+      select: { id: true, data: true, descricao: true, valor: true, criadoEm: true, categoria: { select: { id: true, nome: true } } },
+    }),
   ]);
 
   // Decimal (não float) para somar dinheiro sem erro de arredondamento; vira number só na saída.
@@ -373,13 +405,11 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
   const site = porCanal.find((l) => l.canal === "ONLINE");
   const presencial = porCanal.find((l) => l.canal === "PRESENCIAL");
   const entradas = porCanal.reduce((s, l) => s.add(l._sum.total ?? 0), zero);
-  // O resumo soma o líquido dos mimos; o ticket médio continua só com os pedidos.
-  const entradasComLembrancinhas = entradas.add(lembrancinhas.resumo.liquido);
+  // O ticket médio continua só com os pedidos; o resumo (do livro) soma também mimos e entradas manuais.
   const vendas = porCanal.reduce((s, l) => s + l._count._all, 0);
-  const saidas = somaDespesas._sum.valorTotal ?? zero;
+  const reais = (centavos: number) => centavos / 100;
 
-  const receitaPorMes = new Map(vendasMensais.map((l) => [l.mes, l]));
-  const despesaPorMes = new Map(despesasMensais.map((l) => [l.mes, Number(String(l.despesas))]));
+  const pedidosPorMes = new Map(vendasMensais.map((l) => [l.mes, Number(l.pedidos)]));
 
   // Entradas e saídas numa lista só, do dia mais recente para o mais antigo.
   const linhas = [
@@ -399,6 +429,17 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       },
     })),
     ...lembrancinhas.movimentacoes.map(({ ordem, ...linha }) => ({ ordem, linha })),
+    ...linhasManuais.map((m) => ({
+      ordem: m.criadoEm.getTime(),
+      linha: {
+        tipo: "entrada" as const,
+        id: m.id,
+        dia: m.data.toISOString().slice(0, 10),
+        descricao: m.descricao,
+        detalhe: m.categoria.nome,
+        valor: m.valor.toNumber(),
+      },
+    })),
     ...despesas.map((d) => ({
       ordem: d.createdAt.getTime(),
       linha: {
@@ -406,23 +447,31 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
         id: d.id,
         dia: d.data.toISOString().slice(0, 10),
         descricao: d.descricao,
-        detalhe: ROTULO_CATEGORIA[d.categoria],
+        detalhe: d.categoriaFin?.nome ?? ROTULO_CATEGORIA[d.categoria],
         valor: d.valorTotal.toNumber(),
       },
     })),
   ].sort((a, b) => (a.linha.dia === b.linha.dia ? b.ordem - a.ordem : a.linha.dia < b.linha.dia ? 1 : -1));
 
+  const manuais = manuaisPorCategoria.map((c) => ({ categoriaId: c.categoriaId, nome: c.nome, total: reais(Number(c.centavos)), lancamentos: Number(c.lancamentos) }));
+
   return {
     mes,
     mesAtual,
     resumo: {
-      entradas: entradasComLembrancinhas.toNumber(),
-      saidas: saidas.toNumber(),
-      resultado: entradasComLembrancinhas.sub(saidas).toNumber(),
+      entradas: reais(totaisDoMes.entradasCentavos),
+      saidas: reais(totaisDoMes.saidasCentavos),
+      resultado: reais(totaisDoMes.resultadoCentavos),
       vendas,
-      lancamentos: somaDespesas._count._all,
+      lancamentos: contaDespesas,
+      foraDoResultado: { entradas: reais(totaisDoMes.foraDoResultado.entradasCentavos), saidas: reais(totaisDoMes.foraDoResultado.saidasCentavos) },
     },
     entradas: {
+      manuais: {
+        total: reais(manuaisPorCategoria.reduce((s, c) => s + Number(c.centavos), 0)),
+        lancamentos: manuais.reduce((s, c) => s + c.lancamentos, 0),
+        porCategoria: manuais,
+      },
       site: {
         total: site?._sum.total?.toNumber() ?? 0,
         pedidos: site?._count._all ?? 0,
@@ -449,13 +498,12 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       .sort((a, b) => b.total - a.total),
     evolucao: Array.from({ length: MESES_NO_GRAFICO }, (_, i) => {
       const m = somarMeses(inicioEvolucao, i);
-      const linha = receitaPorMes.get(m);
+      const totais = totaisMensais.get(m);
       return {
         mes: m,
-        // Arredonda no centavo: a soma de float do líquido dos mimos não deixa resto.
-        receita: Math.round(((linha ? Number(String(linha.receita)) : 0) + (lembrancinhasMensais.get(m) ?? 0)) * 100) / 100,
-        pedidos: linha ? Number(linha.pedidos) : 0,
-        despesas: despesaPorMes.get(m) ?? 0,
+        receita: reais(totais?.entradasCentavos ?? 0),
+        pedidos: pedidosPorMes.get(m) ?? 0,
+        despesas: reais(totais?.saidasCentavos ?? 0),
       };
     }),
     movimentacoes: linhas.slice(0, MAX_MOVIMENTACOES).map((l) => l.linha),
