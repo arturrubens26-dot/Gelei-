@@ -33,7 +33,12 @@ async function principal() {
       console.log(`✔ ${email} já é administrador. Nada foi alterado.`);
       return;
     }
-    await db.user.update({ where: { id: usuario.id }, data: { isAdmin: true, sessaoVersao: { increment: 1 } } });
+    // `select` mínimo: o cliente gerado pode conhecer colunas que o banco de produção ainda não tem.
+    await db.user.update({
+      where: { id: usuario.id },
+      data: { isAdmin: true, sessaoVersao: { increment: 1 } },
+      select: { id: true },
+    });
     console.log(`✔ ${usuario.nome} (${email}) agora é administrador. Ela precisa entrar de novo em /login.`);
   } finally {
     await db.$disconnect();
