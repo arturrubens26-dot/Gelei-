@@ -17,6 +17,7 @@
     "db:deploy:producao": "node scripts/migrar-producao.mjs",
     "db:seed": "prisma db seed",
     "admin:senha": "tsx scripts/redefinir-senha-admin.ts",
+    "admin:promover": "tsx scripts/promover-admin.ts",
     "dados:salvar": "node scripts/dados.mjs salvar --commit",
     "dados:salvar:producao": "node scripts/dados.mjs salvar --producao --commit",
     "test": "npm run test:unit",
