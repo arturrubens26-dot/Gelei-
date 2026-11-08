@@ -76,6 +76,15 @@ model User {
   entradasRegistradas   Encomenda[]          @relation("EntradasRegistradas")
   /// Devoluções de encomenda que este admin marcou como feitas (auditoria).
   devolucoesRegistradas EncomendaDevolucao[] @relation("DevolucoesRegistradas")
+  /// Planilha financeira (auditoria: quem lançou, quem alterou).
+  despesasAlteradas     Expense[]             @relation("DespesasAlteradas")
+  entradasCriadas       EntradaManual[]       @relation("EntradasCriadas")
+  entradasAlteradas     EntradaManual[]       @relation("EntradasAlteradas")
+  categoriasAlteradas   CategoriaFinanceira[] @relation("CategoriasAlteradas")
+  configFinanceiro      ConfigFinanceiro[]    @relation("ConfigFinanceiroAlterada")
+  importacoesFeitas     Importacao[]          @relation("ImportacoesFeitas")
+  importacoesDesfeitas  Importacao[]          @relation("ImportacoesDesfeitas")
+  auditoriaFinanceira   AuditoriaFinanceira[] @relation("AuditoriaFinanceira")
 
   @@map("users")
 }
@@ -326,11 +335,161 @@ model Expense {
   quantidadeBase Decimal?        @map("quantidade_base") @db.Decimal(14, 3)
   /// Restrict: insumo com compra não se apaga (desativa).
   insumo         Insumo?         @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+  /// Categoria editável da planilha (a migração preenche as antigas com `saida-<categoria>`). `categoria`
+  /// continua sendo gravada (= o grupo da categoria) para os relatórios antigos. Restrict: categoria com
+  /// lançamentos só se desativa.
+  categoriaId     String?              @map("categoria_id")
+  categoriaFin    CategoriaFinanceira? @relation(fields: [categoriaId], references: [id], onDelete: Restrict)
+  /// Forma de pagamento (opcional; a planilha mostra).
+  formaPagamento  PaymentMethod?       @map("forma_pagamento")
+  /// Trava otimista: sobe a cada alteração (dois admins editando a mesma linha → 409).
+  versao          Int                  @default(0)
+  atualizadoEm    DateTime?            @map("atualizado_em")
+  atualizadoPorId String?              @map("atualizado_por_id")
+  atualizadoPor   User?                @relation("DespesasAlteradas", fields: [atualizadoPorId], references: [id], onDelete: SetNull)
+  /// Chave da linha nova enviada pela planilha (retry de rede não duplica). Única por admin.
+  idempotencyKey  String?              @map("idempotency_key") @db.VarChar(100)
+  importacaoId    String?              @map("importacao_id")
+  importacao      Importacao?          @relation(fields: [importacaoId], references: [id], onDelete: SetNull)
 
+  @@unique([criadoPorId, idempotencyKey])
   @@index([data])
   @@index([criadoPorId])
   @@index([insumoId])
+  @@index([categoriaId])
+  @@index([importacaoId])
+  @@index([atualizadoPorId])
   @@map("expenses")
+}
+
+// --- Planilha financeira (/admin/planilha) ---------------------------------------------------------
+// As saídas continuam em `expenses`; as entradas manuais ficam em `entradas_manuais`; as vendas do site,
+// presenciais e dos mimos são calculadas na leitura (src/lib/planilha/livro.ts), nunca copiadas.
+
+enum TipoLancamento {
+  ENTRADA
+  SAIDA
+}
+
+enum AcaoAuditoria {
+  CRIOU
+  ALTEROU
+  EXCLUIU
+  IMPORTOU
+  DESFEZ_IMPORTACAO
+  PROMOVEU_ADMIN
+  REBAIXOU_ADMIN
+}
+
+/// Categorias editáveis (aba "Auxiliar"). As semeadas têm id legível ("saida-ingredientes").
+/// SQL à mão: UNIQUE (tipo, lower(nome)); CHECK (tipo = 'SAIDA' OR grupo IS NULL).
+model CategoriaFinanceira {
+  id              String           @id @default(cuid())
+  tipo            TipoLancamento
+  nome            String           @db.VarChar(40)
+  /// Só SAÍDA: o grupo fixo antigo (enum), que os relatórios e a tela de Despesas continuam usando.
+  grupo           ExpenseCategory?
+  /// Aporte da dona, retirada/pró-labore: mexem no saldo, não no lucro.
+  foraDoResultado Boolean          @default(false) @map("fora_do_resultado")
+  ativo           Boolean          @default(true)
+  ordem           Int              @default(0)
+  criadoEm        DateTime         @default(now()) @map("criado_em")
+  atualizadoEm    DateTime         @updatedAt @map("atualizado_em")
+  atualizadoPorId String?          @map("atualizado_por_id")
+  atualizadoPor   User?            @relation("CategoriasAlteradas", fields: [atualizadoPorId], references: [id], onDelete: SetNull)
+  despesas        Expense[]
+  entradas        EntradaManual[]
+
+  @@index([tipo, ativo, ordem])
+  @@index([atualizadoPorId])
+  @@map("categorias_financeiras")
+}
+
+/// Entrada de dinheiro que não passa pelo sistema (venda fora do site, aporte, reembolso). CHECK valor > 0.
+model EntradaManual {
+  id              String              @id @default(cuid())
+  /// Dia (sem hora).
+  data            DateTime            @db.Date
+  /// Restrict: categoria com lançamentos só se desativa.
+  categoriaId     String              @map("categoria_id")
+  descricao       String              @db.VarChar(120)
+  valor           Decimal             @db.Decimal(10, 2)
+  formaPagamento  PaymentMethod?      @map("forma_pagamento")
+  observacao      String?             @db.VarChar(300)
+  /// Trava otimista (dois admins).
+  versao          Int                 @default(0)
+  idempotencyKey  String?             @map("idempotency_key") @db.VarChar(100)
+  importacaoId    String?             @map("importacao_id")
+  criadoEm        DateTime            @default(now()) @map("criado_em")
+  criadoPorId     String?             @map("criado_por_id")
+  atualizadoEm    DateTime?           @map("atualizado_em")
+  atualizadoPorId String?             @map("atualizado_por_id")
+  categoria       CategoriaFinanceira @relation(fields: [categoriaId], references: [id], onDelete: Restrict)
+  importacao      Importacao?         @relation(fields: [importacaoId], references: [id], onDelete: SetNull)
+  criadoPor       User?               @relation("EntradasCriadas", fields: [criadoPorId], references: [id], onDelete: SetNull)
+  atualizadoPor   User?               @relation("EntradasAlteradas", fields: [atualizadoPorId], references: [id], onDelete: SetNull)
+
+  @@unique([criadoPorId, idempotencyKey])
+  @@index([data])
+  @@index([categoriaId])
+  @@index([importacaoId])
+  @@index([atualizadoPorId])
+  @@map("entradas_manuais")
+}
+
+/// Linha única (id = 1, CHECK), como config_loja: o saldo da conta da loja num dia.
+model ConfigFinanceiro {
+  id              Int       @id @default(1)
+  /// Pode ser negativo (conta no vermelho).
+  saldoInicial    Decimal   @default(0) @map("saldo_inicial") @db.Decimal(12, 2)
+  /// A partir de que dia o saldo inicial vale (nulo = ainda não configurado).
+  saldoInicialEm  DateTime? @map("saldo_inicial_em") @db.Date
+  atualizadoEm    DateTime  @default(now()) @updatedAt @map("atualizado_em")
+  atualizadoPorId String?   @map("atualizado_por_id")
+  atualizadoPor   User?     @relation("ConfigFinanceiroAlterada", fields: [atualizadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([atualizadoPorId])
+  @@map("config_financeiro")
+}
+
+/// Arquivo do Excel importado (fase 3): o hash evita importar o mesmo arquivo duas vezes.
+model Importacao {
+  id            String          @id @default(cuid())
+  arquivoNome   String          @map("arquivo_nome") @db.VarChar(120)
+  arquivoHash   String          @map("arquivo_hash") @db.Char(64)
+  linhas        Int
+  criadoEm      DateTime        @default(now()) @map("criado_em")
+  criadoPorId   String?         @map("criado_por_id")
+  desfeitaEm    DateTime?       @map("desfeita_em")
+  desfeitaPorId String?         @map("desfeita_por_id")
+  criadoPor     User?           @relation("ImportacoesFeitas", fields: [criadoPorId], references: [id], onDelete: SetNull)
+  desfeitaPor   User?           @relation("ImportacoesDesfeitas", fields: [desfeitaPorId], references: [id], onDelete: SetNull)
+  despesas      Expense[]
+  entradas      EntradaManual[]
+
+  @@index([arquivoHash])
+  @@index([criadoPorId])
+  @@index([desfeitaPorId])
+  @@map("importacoes")
+}
+
+/// Histórico das alterações financeiras (dois admins): gravado na MESMA transação da mudança.
+model AuditoriaFinanceira {
+  id         String        @id @default(cuid())
+  /// "despesa" | "entrada" | "categoria" | "config" | "importacao" | "usuario"
+  entidade   String        @db.VarChar(30)
+  entidadeId String        @map("entidade_id")
+  acao       AcaoAuditoria
+  antes      Json?
+  depois     Json?
+  adminId    String?       @map("admin_id")
+  criadoEm   DateTime      @default(now()) @map("criado_em")
+  admin      User?         @relation("AuditoriaFinanceira", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([entidade, entidadeId])
+  @@index([criadoEm])
+  @@index([adminId])
+  @@map("auditoria_financeira")
 }
 
 /// Unidade em que o estoque e o custo de um insumo são contados.
