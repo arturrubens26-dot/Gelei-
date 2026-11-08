@@ -86,6 +86,10 @@ export type DespesaDTO = {
   insumo: { id: string; nome: string; unidade: UnidadeInsumo } | null;
   /** Quantidade que entrou no estoque, na unidade do insumo (2,155 kg → 2155 g). */
   quantidadeBase: number | null;
+  /** Categoria editável da planilha ("saida-ingredientes" ou uma criada pela dona). */
+  categoriaId: string | null;
+  /** Trava otimista: mande de volta no PATCH para não sobrescrever a alteração de outro admin. */
+  versao: number;
 };
 
 /** Visão de um mês no painel de despesas: o que entrou (vendas pagas), o que saiu e o saldo. */
@@ -101,12 +105,16 @@ export type PlannerMes = {
   lancamentos: number;
   /**
    * Vendas pagas (Pago, Enviado, Entregue) criadas no mês, com frete, MAIS o líquido dos mimos
-   * (parcelas pagas − devoluções feitas no mês; o mesmo número do Financeiro).
+   * (parcelas pagas − devoluções feitas no mês) MAIS as entradas manuais da planilha (sem o aporte da dona):
+   * o mesmo número do Financeiro e da planilha (src/lib/planilha/livro.ts).
    */
   entradas: number;
   pedidosPagos: number;
   /** A parte dos mimos em `entradas` (reais; pode ser negativa num mês só de devoluções). */
   lembrancinhas: number;
+  /** A parte das entradas manuais da planilha em `entradas` (reais; sem o aporte da dona). */
+  entradasManuais: number;
+  /** Entradas − despesas do resultado (a retirada da dona e o aporte ficam de fora: mexem no saldo, não no lucro). */
   saldo: number;
   /** Do maior gasto para o menor. */
   porCategoria: { categoria: CategoriaDespesa; total: number; lancamentos: number }[];

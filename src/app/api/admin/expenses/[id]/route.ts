@@ -2,7 +2,10 @@ import { autenticarApi, comTratamento, erro, lerCorpo, origemInvalida } from "@/
 import { atualizarDespesa, excluirDespesa } from "@/lib/despesas-admin";
 import { despesaSchema } from "@/lib/validacao";
 
-/** PATCH /api/admin/expenses/[id] — corrige uma despesa (envia todos os campos, como no lançamento). */
+/**
+ * PATCH /api/admin/expenses/[id] — corrige uma despesa (envia todos os campos, como no lançamento). Com
+ * `versao` no corpo, 409 `codigo: "versao"` se outro admin alterou antes. Grava quem alterou e o histórico.
+ */
 export const PATCH = comTratamento(
   "api/admin/expenses PATCH",
   async (request: Request, ctx: RouteContext<"/api/admin/expenses/[id]">) => {
@@ -15,7 +18,7 @@ export const PATCH = comTratamento(
     if (!corpo.ok) return corpo.resposta;
 
     const { id } = await ctx.params;
-    const despesa = await atualizarDespesa(id, corpo.dados);
+    const despesa = await atualizarDespesa(id, corpo.dados, auth.usuario.id);
     if (!despesa) return erro(404, "Despesa não encontrada. Ela pode ter sido excluída.");
     console.info(`[admin] ${auth.usuario.id} alterou a despesa ${id}`);
     return Response.json(despesa);
@@ -32,7 +35,7 @@ export const DELETE = comTratamento(
     if (!auth.ok) return auth.resposta;
 
     const { id } = await ctx.params;
-    if (!(await excluirDespesa(id))) return erro(404, "Despesa não encontrada. Ela pode já ter sido excluída.");
+    if (!(await excluirDespesa(id, auth.usuario.id))) return erro(404, "Despesa não encontrada. Ela pode já ter sido excluída.");
     console.info(`[admin] ${auth.usuario.id} excluiu a despesa ${id}`);
     return new Response(null, { status: 204 });
   },

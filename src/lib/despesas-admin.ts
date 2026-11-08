@@ -4,6 +4,10 @@ import { db } from "@/lib/db";
 import { liquidoLembrancinhasDoMes } from "@/lib/encomendas-financeiro";
 import { FUSO_LOJA, hojeNaLoja, somarMeses, type DespesaDTO, type PlannerMes } from "@/lib/despesas";
 import { ErroNegocio } from "@/lib/erros";
+import { fotoDaLinha, registrarAuditoria, type ClienteDb } from "@/lib/planilha/auditoria";
+import { fimDoMes } from "@/lib/planilha/regras";
+import { incluirDespesa, linhaDeDespesa, totaisDoPeriodo } from "@/lib/planilha/livro";
+import { categoriaDoGrupo } from "@/lib/planilha/tipos";
 import { SIGLA_INSUMO, arredondarQtd, fatorConversao } from "@/lib/producao";
 import { STATUS_PAGOS } from "@/lib/status";
 import type { DespesaEntrada } from "@/lib/validacao";
@@ -29,6 +33,8 @@ function paraDTO(d: DespesaDoBanco): DespesaDTO {
     observacao: d.observacao,
     insumo: d.insumo,
     quantidadeBase: d.quantidadeBase ? d.quantidadeBase.toNumber() : null,
+    categoriaId: d.categoriaId,
+    versao: d.versao,
   };
 }
 
@@ -38,10 +44,14 @@ const diaParaDate = (dia: string) => new Date(`${dia}T00:00:00Z`);
 /**
  * Compra de insumo: confere o insumo e calcula quanto entra no estoque na unidade dele
  * (kg → g e L → mL sozinho; pacote/caixa só se a pessoa informar quanto veio).
+ * Usado também pela planilha (alterar a quantidade de uma compra ligada recalcula o estoque).
  */
-async function vinculoComEstoque(e: DespesaEntrada): Promise<{ insumoId: string | null; quantidadeBase: Prisma.Decimal | null }> {
+export async function vinculoComEstoque(
+  e: Pick<DespesaEntrada, "insumoId" | "unidade" | "quantidade" | "quantidadeBase">,
+  cliente: ClienteDb = db,
+): Promise<{ insumoId: string | null; quantidadeBase: Prisma.Decimal | null }> {
   if (!e.insumoId) return { insumoId: null, quantidadeBase: null };
-  const insumo = await db.insumo.findUnique({ where: { id: e.insumoId }, select: { nome: true, unidade: true } });
+  const insumo = await cliente.insumo.findUnique({ where: { id: e.insumoId }, select: { nome: true, unidade: true } });
   if (!insumo) throw new ErroNegocio(400, "Insumo não encontrado.", { insumoId: ["Insumo não encontrado. Atualize a página."] });
   // Com conversão conhecida o servidor calcula sempre: um valor enviado que não bate (2 kg chegando
   // como 5 g) deixaria o custo médio absurdo. Só pacote/caixa usam o "quantos vieram" informado.
@@ -58,7 +68,7 @@ async function vinculoComEstoque(e: DespesaEntrada): Promise<{ insumoId: string 
   return { insumoId: e.insumoId, quantidadeBase: new Prisma.Decimal(String(base)) };
 }
 
-async function paraBanco(e: DespesaEntrada) {
+async function paraBanco(e: DespesaEntrada, cliente: ClienteDb) {
   return {
     descricao: e.descricao,
     categoria: e.categoria,
@@ -69,36 +79,71 @@ async function paraBanco(e: DespesaEntrada) {
     data: diaParaDate(e.data),
     fornecedor: e.fornecedor,
     observacao: e.observacao,
-    ...(await vinculoComEstoque(e)),
+    ...(await vinculoComEstoque(e, cliente)),
   };
 }
 
+/** Lança a despesa (tela de Despesas) na categoria semeada do grupo, com o histórico na mesma transação. */
 export async function criarDespesa(entrada: DespesaEntrada, criadoPorId: string): Promise<DespesaDTO> {
-  const despesa = await db.expense.create({ data: { ...(await paraBanco(entrada)), criadoPorId }, include: comInsumo });
-  return paraDTO(despesa);
+  return db.$transaction(async (tx) => {
+    const criada = await tx.expense.create({
+      data: { ...(await paraBanco(entrada, tx)), categoriaId: categoriaDoGrupo(entrada.categoria), criadoPorId },
+      include: incluirDespesa,
+    });
+    await registrarAuditoria(tx, { entidade: "despesa", entidadeId: criada.id, acao: "CRIOU", depois: fotoDaLinha(linhaDeDespesa(criada)), adminId: criadoPorId });
+    return paraDTO(criada);
+  });
 }
 
 /**
- * Substitui os campos da despesa e devolve a linha gravada (numa consulta só: sem janela entre gravar
- * e reler). `null` se ela não existe (ou foi excluída no meio do caminho).
+ * Substitui os campos da despesa (tela de Despesas) e devolve a linha gravada. `null` se ela não existe (ou
+ * foi excluída no meio do caminho). Com `entrada.versao`, responde 409 se outro admin alterou antes; sem ela
+ * (tela antiga), vale a última gravação, mas a troca fica registrada no histórico com quem fez.
+ * A categoria da planilha continua a mesma se o grupo não mudou ("Gás" continua "Gás" dentro de Outros);
+ * se mudou, passa para a categoria semeada do grupo novo.
  */
-export async function atualizarDespesa(id: string, entrada: DespesaEntrada): Promise<DespesaDTO | null> {
-  try {
-    return paraDTO(await db.expense.update({ where: { id }, data: await paraBanco(entrada), include: comInsumo }));
-  } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") return null;
-    throw e;
-  }
+export async function atualizarDespesa(id: string, entrada: DespesaEntrada, adminId: string): Promise<DespesaDTO | null> {
+  return db.$transaction(async (tx) => {
+    const atual = await tx.expense.findUnique({ where: { id }, include: incluirDespesa });
+    if (!atual) return null;
+    if (entrada.versao !== undefined && entrada.versao !== atual.versao) {
+      throw new ErroNegocio(409, "Outra pessoa alterou esta despesa. Atualize a página para ver a versão atual.", { atual: paraDTO(atual) }, "versao");
+    }
+    const categoriaId = atual.categoriaFin && atual.categoriaFin.grupo === entrada.categoria ? atual.categoriaFin.id : categoriaDoGrupo(entrada.categoria);
+    const { count } = await tx.expense.updateMany({
+      where: { id, versao: atual.versao },
+      data: { ...(await paraBanco(entrada, tx)), categoriaId, versao: { increment: 1 }, atualizadoEm: new Date(), atualizadoPorId: adminId },
+    });
+    if (count === 0) throw new ErroNegocio(409, "Outra pessoa alterou esta despesa agora mesmo. Atualize a página.", undefined, "versao");
+    const gravada = await tx.expense.findUniqueOrThrow({ where: { id }, include: incluirDespesa });
+    await registrarAuditoria(tx, {
+      entidade: "despesa",
+      entidadeId: id,
+      acao: "ALTEROU",
+      antes: fotoDaLinha(linhaDeDespesa(atual)),
+      depois: fotoDaLinha(linhaDeDespesa(gravada)),
+      adminId,
+    });
+    return paraDTO(gravada);
+  });
 }
 
-export async function excluirDespesa(id: string): Promise<boolean> {
-  const { count } = await db.expense.deleteMany({ where: { id } });
-  return count === 1;
+/** Exclui (tela de Despesas), guardando no histórico como ela era. */
+export async function excluirDespesa(id: string, adminId: string): Promise<boolean> {
+  return db.$transaction(async (tx) => {
+    const atual = await tx.expense.findUnique({ where: { id }, include: incluirDespesa });
+    if (!atual) return false;
+    const { count } = await tx.expense.deleteMany({ where: { id } });
+    if (count !== 1) return false;
+    await registrarAuditoria(tx, { entidade: "despesa", entidadeId: id, acao: "EXCLUIU", antes: fotoDaLinha(linhaDeDespesa(atual)), adminId });
+    return true;
+  });
 }
 
 /**
  * O mês no painel de despesas: lançamentos, total por categoria, vendas pagas do mês e saldo.
- * Sem `mes`, usa o mês corrente no horário de Brasília.
+ * Sem `mes`, usa o mês corrente no horário de Brasília. Entradas, despesas e saldo saem do livro-caixa da
+ * planilha (src/lib/planilha/livro.ts): os mesmos números do Financeiro e da planilha.
  */
 export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
   const hoje = hojeNaLoja();
@@ -117,8 +162,10 @@ export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
     status: { in: [...STATUS_PAGOS] },
     createdAt: { gte: limites.inicio, lt: limites.fim },
   } satisfies Prisma.OrderWhereInput;
+  // Retirada da dona (pró-labore) e outras saídas "fora do resultado": aparecem na lista, mas não no total.
+  const noResultado = { OR: [{ categoriaId: null }, { categoriaFin: { foraDoResultado: false } }] } satisfies Prisma.ExpenseWhereInput;
 
-  const [lista, soma, categorias, vendas, lembrancinhas] = await Promise.all([
+  const [lista, contagem, categorias, vendas, lembrancinhas, totais, entradasManuais] = await Promise.all([
     db.expense.findMany({
       where: doMes,
       // Mais recentes primeiro; `id` desempata para a ordem não mudar entre recargas.
@@ -126,28 +173,30 @@ export async function plannerDoMes(mes?: string): Promise<PlannerMes> {
       take: MAX_LISTA_MES + 1,
       include: comInsumo,
     }),
-    db.expense.aggregate({ where: doMes, _sum: { valorTotal: true }, _count: { _all: true } }),
-    db.expense.groupBy({ by: ["categoria"], where: doMes, _sum: { valorTotal: true }, _count: { _all: true } }),
-    db.order.aggregate({ where: vendasDoMes, _sum: { total: true }, _count: { _all: true } }),
+    db.expense.count({ where: doMes }),
+    db.expense.groupBy({ by: ["categoria"], where: { AND: [doMes, noResultado] }, _sum: { valorTotal: true }, _count: { _all: true } }),
+    db.order.aggregate({ where: vendasDoMes, _count: { _all: true } }),
     // O mesmo líquido dos mimos do Financeiro (parcelas pagas − devoluções feitas no mês).
     liquidoLembrancinhasDoMes(limites.inicio, limites.fim),
+    totaisDoPeriodo(`${alvo}-01`, fimDoMes(alvo)),
+    db.entradaManual.aggregate({
+      where: { data: { gte: diaParaDate(`${alvo}-01`), lt: diaParaDate(`${proximo}-01`) }, categoria: { foraDoResultado: false } },
+      _sum: { valor: true },
+    }),
   ]);
-
-  // Saldo com Decimal (sem erro de arredondamento); vira number só na saída.
-  const totalDespesas = soma._sum.valorTotal ?? new Prisma.Decimal(0);
-  const entradas = (vendas._sum.total ?? new Prisma.Decimal(0)).add(lembrancinhas);
 
   return {
     mes: alvo,
     hoje,
     despesas: lista.slice(0, MAX_LISTA_MES).map(paraDTO),
     truncado: lista.length > MAX_LISTA_MES,
-    totalDespesas: totalDespesas.toNumber(),
-    lancamentos: soma._count._all,
-    entradas: entradas.toNumber(),
+    totalDespesas: totais.saidasCentavos / 100,
+    lancamentos: contagem,
+    entradas: totais.entradasCentavos / 100,
     pedidosPagos: vendas._count._all,
     lembrancinhas,
-    saldo: entradas.sub(totalDespesas).toNumber(),
+    entradasManuais: (entradasManuais._sum.valor ?? new Prisma.Decimal(0)).toNumber(),
+    saldo: totais.resultadoCentavos / 100,
     porCategoria: categorias
       .map((c) => ({ categoria: c.categoria, total: c._sum.valorTotal?.toNumber() ?? 0, lancamentos: c._count._all }))
       .sort((a, b) => b.total - a.total),

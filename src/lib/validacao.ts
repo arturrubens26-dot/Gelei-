@@ -284,6 +284,11 @@ export const despesaSchema = z.object({
     .refine((q) => Math.abs(q * 1000 - Math.round(q * 1000)) < 1e-6, { message: "Use no máximo 3 casas decimais." })
     .nullish()
     .transform((v) => v ?? null),
+  /**
+   * Trava otimista (opcional): com ela, o PATCH responde 409 se outro admin alterou a despesa antes. A tela
+   * antiga de Despesas não manda (continua funcionando como "o último que salvou").
+   */
+  versao: z.number().int("Versão inválida.").min(0, "Versão inválida.").max(2_000_000_000, "Versão inválida.").optional(),
 });
 
 export type DespesaEntrada = z.infer<typeof despesaSchema>;

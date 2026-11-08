@@ -142,7 +142,7 @@ const diaDe = (d: Date) => d.toISOString().slice(0, 10);
 /** O que a consulta de uma despesa precisa trazer para virar linha da grade. */
 export const incluirDespesa = {
   insumo: { select: { id: true, nome: true, unidade: true } },
-  categoriaFin: { select: { id: true, nome: true, foraDoResultado: true } },
+  categoriaFin: { select: { id: true, nome: true, foraDoResultado: true, grupo: true } },
   criadoPor: { select: { id: true, nome: true } },
   atualizadoPor: { select: { id: true, nome: true } },
 } satisfies Prisma.ExpenseInclude;
@@ -353,16 +353,22 @@ export async function lancamentosDoPeriodo(de: string, ate: string, opcoes: { no
 }
 
 /**
- * Vendas do sistema (site ou presencial) do mesmo dia da loja e do mesmo valor: o aviso "parece venda
- * presencial" antes de lançar uma entrada manual (contar a venda da feira duas vezes).
+ * Vendas do sistema (site e presencial) de [de, ate] com algum dos valores dados: base do aviso "parece venda
+ * presencial" antes de lançar uma entrada manual (a venda da feira contada duas vezes). Quem chama casa o dia.
  */
-export async function vendasParecidas(dia: string, valorCentavos: number): Promise<LinhaPlanilhaDTO[]> {
-  const linhas = await db.$queryRaw<LinhaAutomaticaSql[]>`
-    SELECT mov.origem, mov.dia, mov.centavos, mov.ref_id, mov.alvo_id, mov.instante, o.forma_pagamento AS forma, NULL AS cliente
-    FROM (${movimentosSql(diaSql(dia), diaSql(dia), { manuais: false })}) mov
+export async function vendasComValores(
+  cliente: Prisma.TransactionClient | typeof db,
+  de: string,
+  ate: string,
+  valoresCentavos: readonly number[],
+): Promise<LinhaPlanilhaDTO[]> {
+  if (valoresCentavos.length === 0) return [];
+  const linhas = await cliente.$queryRaw<LinhaAutomaticaSql[]>`
+    SELECT mov.origem, mov.dia, mov.centavos, mov.ref_id, mov.alvo_id, mov.instante, o.forma_pagamento AS forma, NULL::text AS cliente
+    FROM (${movimentosSql(diaSql(de), diaSql(ate), { manuais: false })}) mov
     JOIN orders o ON o.id = mov.alvo_id
-    WHERE mov.origem IN ('site', 'presencial') AND mov.centavos = ${valorCentavos}
+    WHERE mov.origem IN ('site', 'presencial') AND mov.centavos IN (${Prisma.join(valoresCentavos.map((v) => Prisma.sql`${v}::bigint`))})
     ORDER BY mov.instante DESC
-    LIMIT 5`;
+    LIMIT 500`;
   return linhas.map((l) => linhaAutomatica(l, false));
 }

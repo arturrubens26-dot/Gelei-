@@ -10,6 +10,8 @@ export class ErroNegocio extends Error {
     readonly status: number,
     mensagem: string,
     readonly detalhes?: unknown,
+    /** Código estável para a tela decidir o que fazer (ex.: "versao", "categoria-em-uso"). */
+    readonly codigo?: string,
   ) {
     super(mensagem);
     this.name = "ErroNegocio";

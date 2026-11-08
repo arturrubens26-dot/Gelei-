@@ -5,11 +5,12 @@ import { Prisma } from "@/generated/prisma/client";
 import { getUsuarioAtual, type UsuarioAtual } from "@/lib/auth/dal";
 import { ErroNegocio } from "@/lib/erros";
 
-/** Resposta de erro padronizada: `{ erro: string, detalhes?: ... }`. */
-export function erro(status: number, mensagem: string, detalhes?: unknown): Response {
-  return Response.json(detalhes === undefined ? { erro: mensagem } : { erro: mensagem, detalhes }, {
-    status,
-  });
+/** Resposta de erro padronizada: `{ erro: string, codigo?: string, detalhes?: ... }`. */
+export function erro(status: number, mensagem: string, detalhes?: unknown, codigo?: string): Response {
+  return Response.json(
+    { erro: mensagem, ...(codigo === undefined ? {} : { codigo }), ...(detalhes === undefined ? {} : { detalhes }) },
+    { status },
+  );
 }
 
 /**
@@ -33,11 +34,11 @@ const MAX_BYTES_CORPO = 32 * 1024;
  * exatamente `application/json` (`text/plain` é "simples" e dispensa preflight no CORS) e
  * o corpo é lido com teto de tamanho: acima disso responde 413 sem carregar tudo na memória.
  */
-export async function lerJson(request: Request): Promise<unknown> {
+export async function lerJson(request: Request, maxBytes = MAX_BYTES_CORPO): Promise<unknown> {
   const tipo = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   if (tipo !== "application/json") return undefined;
 
-  const corpo = await lerBytes(request, MAX_BYTES_CORPO, "Corpo da requisição grande demais.");
+  const corpo = await lerBytes(request, maxBytes, "Corpo da requisição grande demais.");
   if (!corpo) return undefined;
   try {
     return JSON.parse(corpo.toString("utf8"));
@@ -103,9 +104,12 @@ type CorpoLido<S extends z.ZodType> =
   | { ok: true; dados: z.output<S> }
   | { ok: false; resposta: Response };
 
-/** Lê o JSON e valida com zod; em caso de erro já devolve a resposta 400 pronta. */
-export async function lerCorpo<S extends z.ZodType>(request: Request, schema: S): Promise<CorpoLido<S>> {
-  const bruto = await lerJson(request);
+/**
+ * Lê o JSON e valida com zod; em caso de erro já devolve a resposta 400 pronta. `maxBytes` aumenta o teto
+ * de 32 KB só nas rotas de lote (planilha); acima dele, 413.
+ */
+export async function lerCorpo<S extends z.ZodType>(request: Request, schema: S, opcoes: { maxBytes?: number } = {}): Promise<CorpoLido<S>> {
+  const bruto = await lerJson(request, opcoes.maxBytes);
   if (bruto === undefined) {
     return { ok: false, resposta: erro(400, "Envie um corpo JSON (Content-Type: application/json).") };
   }
@@ -209,7 +213,7 @@ export function comTratamento<A extends unknown[]>(
       // Sinais internos do Next (rota dinâmica por usar cookies(), redirect, notFound) NÃO são
       // falhas: se forem engolidos aqui, o build imprime erros e a rota pode ser mal classificada.
       unstable_rethrow(e);
-      if (e instanceof ErroNegocio) return marcar(erro(e.status, e.message, e.detalhes));
+      if (e instanceof ErroNegocio) return marcar(erro(e.status, e.message, e.detalhes, e.codigo));
       registrarErro(rotulo, e);
       if (e instanceof Prisma.PrismaClientKnownRequestError && (e.code === "P2002" || e.code === "P2003")) {
         return marcar(erro(409, "Conflito com dados existentes. Atualize a página e tente de novo."));
