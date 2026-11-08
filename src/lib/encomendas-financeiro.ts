@@ -194,27 +194,41 @@ export async function liquidoLembrancinhasDoMes(inicio: Date, fim: Date): Promis
   return [...porMes.values()].reduce((s, v) => s + v, 0);
 }
 
+/**
+ * O dinheiro dos mimos entre dois instantes [inicio, fim), uma linha por movimento, com as MESMAS regras do
+ * resumo acima (é a definição que o Financeiro, as Despesas e a planilha usam: src/lib/planilha/livro.ts):
+ * parcela paga pelo site (APROVADO ou ESTORNADO, pela `aprovado_em`), entrada e restante recebidos fora do
+ * site (pela data do registro) e devolução FEITA (valor negativo, pela `feita_em`).
+ * Colunas: `origem` ('mimos-entrada' | 'mimos-restante' | 'mimos-devolucao'), `instante` (timestamp UTC),
+ * `valor` (numeric em reais, com sinal), `ref_id` (id do pagamento, "<encomenda>-entrada"/"-restante" ou da
+ * devolução) e `encomenda_id`. `inicio` e `fim` são expressões SQL de instante (timestamp sem fuso, em UTC).
+ */
+export function movimentosMimosSql(inicio: Prisma.Sql, fim: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+      SELECT CASE p.parcela WHEN 'ENTRADA' THEN 'mimos-entrada' ELSE 'mimos-restante' END AS origem,
+             p.aprovado_em AS instante, p.valor AS valor, p.id AS ref_id, p.encomenda_id AS encomenda_id
+      FROM pagamentos p
+      WHERE p.encomenda_id IS NOT NULL AND p.status IN ('APROVADO', 'ESTORNADO') AND p.aprovado_em >= ${inicio} AND p.aprovado_em < ${fim}
+      UNION ALL
+      SELECT 'mimos-entrada', e.entrada_paga_em, e.valor_entrada, e.id || '-entrada', e.id
+      FROM encomendas e
+      WHERE e.entrada_fora_do_site AND e.entrada_paga_em >= ${inicio} AND e.entrada_paga_em < ${fim}
+      UNION ALL
+      SELECT 'mimos-restante', e.restante_pago_em, e.valor_restante, e.id || '-restante', e.id
+      FROM encomendas e
+      WHERE e.restante_fora_do_site AND e.restante_pago_em >= ${inicio} AND e.restante_pago_em < ${fim}
+      UNION ALL
+      SELECT 'mimos-devolucao', d.feita_em, -d.valor, d.id, d.encomenda_id
+      FROM encomenda_devolucoes d
+      WHERE d.status = 'FEITA' AND d.feita_em >= ${inicio} AND d.feita_em < ${fim}`;
+}
+
 /** Líquido dos mimos por mês da loja ("AAAA-MM") entre dois instantes (gráfico de evolução). */
 export async function liquidoLembrancinhasPorMes(inicio: Date, fim: Date): Promise<Map<string, number>> {
-  const mes = (coluna: Prisma.Sql) => Prisma.sql`to_char(date_trunc('month', (${coluna} AT TIME ZONE 'UTC') AT TIME ZONE ${FUSO_LOJA}), 'YYYY-MM')`;
   const linhas = await db.$queryRaw<{ mes: string; liquido: unknown }[]>`
-    SELECT mes, SUM(v) AS liquido FROM (
-      SELECT ${mes(Prisma.raw("aprovado_em"))} AS mes, valor AS v
-      FROM pagamentos
-      WHERE encomenda_id IS NOT NULL AND status IN ('APROVADO', 'ESTORNADO') AND aprovado_em >= ${inicio} AND aprovado_em < ${fim}
-      UNION ALL
-      SELECT ${mes(Prisma.raw("entrada_paga_em"))}, valor_entrada
-      FROM encomendas
-      WHERE entrada_fora_do_site AND entrada_paga_em >= ${inicio} AND entrada_paga_em < ${fim}
-      UNION ALL
-      SELECT ${mes(Prisma.raw("restante_pago_em"))}, valor_restante
-      FROM encomendas
-      WHERE restante_fora_do_site AND restante_pago_em >= ${inicio} AND restante_pago_em < ${fim}
-      UNION ALL
-      SELECT ${mes(Prisma.raw("feita_em"))}, -valor
-      FROM encomenda_devolucoes
-      WHERE status = 'FEITA' AND feita_em >= ${inicio} AND feita_em < ${fim}
-    ) x
-    GROUP BY mes`;
+    SELECT to_char(date_trunc('month', (x.instante AT TIME ZONE 'UTC') AT TIME ZONE ${FUSO_LOJA}), 'YYYY-MM') AS mes,
+           SUM(x.valor) AS liquido
+    FROM (${movimentosMimosSql(Prisma.sql`${inicio}`, Prisma.sql`${fim}`)}) x
+    GROUP BY 1`;
   return new Map(linhas.map((l) => [l.mes, SOMA(l.liquido)]));
 }
