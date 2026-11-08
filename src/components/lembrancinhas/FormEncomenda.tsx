@@ -6,6 +6,8 @@ import { Campo, OpcaoDeEntrega, Secao } from "@/components/checkout/PartesDoForm
 import { novaChave } from "@/components/checkout/novaChave";
 import { FotoDoPote } from "@/components/FotoDoPote";
 import { diaComSemana } from "@/components/lembrancinhas/datas";
+import { ImagemDoAdicional } from "@/components/lembrancinhas/ImagemDoAdicional";
+import { listaDeNomes, rotuloDoPrecoAdicional, totalDosAdicionais } from "@/lib/adicionais-regras";
 import { calcularEntrega, mascararCep, type ResultadoEntrega } from "@/lib/carrinho/entrega";
 import { formatarDia } from "@/lib/despesas";
 import { formatarBRL } from "@/lib/dinheiro";
@@ -62,7 +64,8 @@ type Props = {
 
 /**
  * Solicitação de mimos (minis de 40 ml), pensada primeiro para o celular. Na ordem: data da
- * festa, sabores (20 a 50 potinhos), entrega ou retirada e o dia, WhatsApp e observação, e o resumo
+ * festa, sabores (20 a 50 potinhos), itens adicionais (opcionais; valem para todos os potinhos, com o
+ * preço por potinho do servidor), entrega ou retirada e o dia, WhatsApp e observação, e o resumo
  * com a política de desistência (as datas e valores desta encomenda) e o aceite.
  *
  * As contas são as de `encomendas-regras` (as mesmas do servidor, em centavos): o total que a cliente
@@ -80,6 +83,9 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
   const [politica, setPolitica] = useState({ versao: config.politicaVersao, percentualRetido: config.percentualRetido });
 
   const [quantidades, setQuantidades] = useState<Record<string, number>>({});
+  // Itens adicionais: o catálogo (com os preços que o servidor pode atualizar no 409) e os ids marcados.
+  const [catalogoAdicionais, setCatalogoAdicionais] = useState(config.adicionais);
+  const [adicionaisMarcados, setAdicionaisMarcados] = useState<string[]>([]);
   const [dataFesta, setDataFesta] = useState("");
   const [dataEntrega, setDataEntrega] = useState("");
   const [modo, setModo] = useState<ModoEntrega>("ENTREGA");
@@ -121,6 +127,19 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
     const limitado = Math.max(0, Math.min(valor, maxPotinhos - outros));
     setQuantidades((q) => ({ ...q, [productId]: limitado }));
     limparErro("itens");
+  }
+
+  // --- itens adicionais ---------------------------------------------------------------------------
+  const temAdicionais = catalogoAdicionais.length > 0;
+  // Na ordem do catálogo (a mesma do servidor), só os que ainda existem.
+  const adicionaisEscolhidos = catalogoAdicionais.filter((a) => adicionaisMarcados.includes(a.id));
+  const adicionaisCentavos = total > 0 ? totalDosAdicionais(adicionaisEscolhidos, total) : 0;
+  // Os números das seções seguem a ordem da página (sem a de adicionais, se a dona desativou todos).
+  const deslocamento = temAdicionais ? 1 : 0;
+
+  function alternarAdicional(id: string, marcado: boolean) {
+    setAdicionaisMarcados((atuais) => (marcado ? [...new Set([...atuais, id])] : atuais.filter((x) => x !== id)));
+    limparErro("adicionais");
   }
 
   // --- datas ---------------------------------------------------------------------------------------
@@ -199,7 +218,8 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
 
   // --- valores e prazos (centavos, a conta do servidor) ---------------------------------------------
   const freteCentavos = retirada ? 0 : entregaPronta ? taxaCentavos : null;
-  const contas = total > 0 && precoCentavos > 0 ? calcularValores({ subtotalCentavos: total * precoCentavos, freteCentavos: freteCentavos ?? 0 }) : null;
+  const contas =
+    total > 0 && precoCentavos > 0 ? calcularValores({ subtotalCentavos: total * precoCentavos, adicionaisCentavos, freteCentavos: freteCentavos ?? 0 }) : null;
   const totalCentavos = contas && freteCentavos !== null ? contas.total : null;
   const corteEm = datasOk ? corteDaEntrega(dataEntrega) : null;
   const responderAte = datasOk ? prazosDaEncomenda(meioDia(hoje), dataEntrega).responderAte : null;
@@ -249,6 +269,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
     const itens = escolhidos.map((s) => ({ productId: s.productId, quantidade: quantidades[s.productId] }));
     const conteudo = {
       itens,
+      adicionais: adicionaisEscolhidos.map((a) => a.id),
       dataFesta,
       dataEntrega,
       modoEntrega: modo,
@@ -320,6 +341,17 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
         router.refresh();
         return;
       }
+      if (resposta.status === 422 && Array.isArray(detalhes?.adicionaisIndisponiveis)) {
+        const ids: string[] = detalhes.adicionaisIndisponiveis;
+        const nomes = ids.map((id) => catalogoAdicionais.find((a) => a.id === id)?.nome ?? "um item");
+        setAdicionaisMarcados((atuais) => atuais.filter((id) => !ids.includes(id)));
+        setCatalogoAdicionais((atuais) => atuais.filter((a) => !ids.includes(a.id)));
+        setErro(
+          `${listaDeNomes(nomes)} ${ids.length === 1 ? "não está mais disponível e saiu" : "não estão mais disponíveis e saíram"} da sua escolha. Confira o resumo e envie de novo.`,
+        );
+        router.refresh();
+        return;
+      }
       if (resposta.status === 409 && detalhes && typeof detalhes.politicaVersao === "string") {
         setPolitica({ versao: detalhes.politicaVersao, percentualRetido: Number(detalhes.percentualRetido) || 0 });
         setAceite(false);
@@ -328,6 +360,14 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
       }
       if (resposta.status === 409 && detalhes && typeof detalhes.total === "number") {
         if (typeof detalhes.precoPotinho === "number") setPrecoCentavos(Math.round(detalhes.precoPotinho * 100));
+        if (Array.isArray(detalhes.adicionaisPorPotinho)) {
+          const novos = new Map<string, number>(
+            (detalhes.adicionaisPorPotinho as { id: string; precoCentavos: number }[]).map((a) => [a.id, a.precoCentavos]),
+          );
+          setCatalogoAdicionais((atuais) =>
+            atuais.map((a) => (novos.has(a.id) ? { ...a, precoCentavos: novos.get(a.id)!, precoPorPotinho: novos.get(a.id)! / 100 } : a)),
+          );
+        }
         if (!retirada && typeof detalhes.frete === "number") setTaxaCentavos(Math.round(detalhes.frete * 100));
         setErro(`Os valores mudaram desde que você abriu a página. O novo total é ${formatarBRL(detalhes.total)}: confira o resumo e envie de novo.`);
         return;
@@ -456,8 +496,60 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
         </div>
       </Secao>
 
-      {/* 3. Entrega ou retirada */}
-      <Secao numero={3} titulo="Entrega ou retirada">
+      {/* 3. Itens adicionais (opcional) */}
+      {temAdicionais && (
+        <Secao numero={3} titulo="Itens adicionais (opcional)">
+          <p className="mb-4 text-sm text-primaria/85">
+            Quer caprichar nos potinhos? Marque os itens que desejar: <strong className="font-semibold">cada item vale para todos os potinhos</strong>{" "}
+            da encomenda, e o valor é o preço por potinho vezes a quantidade de potinhos. Se não quiser nenhum, é só deixar sem marcar.
+          </p>
+          <ul className="flex flex-col gap-3" aria-describedby={`${uid}-adicionais-aviso`}>
+            {catalogoAdicionais.map((a) => {
+              const marcado = adicionaisMarcados.includes(a.id);
+              const idItem = `${uid}-adic-${a.id}`;
+              return (
+                <li key={a.id}>
+                  <label
+                    htmlFor={idItem}
+                    className={`grid cursor-pointer grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-3 rounded-md border p-2.5 motion-safe:transition-colors ${
+                      marcado ? "border-2 border-secundaria bg-accent1/25" : "border-accent2/60 bg-white/70"
+                    }`}
+                  >
+                    <input
+                      id={idItem}
+                      type="checkbox"
+                      className="size-5 shrink-0 accent-secundaria"
+                      checked={marcado}
+                      onChange={(e) => alternarAdicional(a.id, e.target.checked)}
+                    />
+                    <ImagemDoAdicional adicional={a} className="size-20" sizes="80px" />
+                    <span className="min-w-0 text-sm leading-snug">
+                      <span className="block font-titulos text-lg font-semibold">{a.nome}</span>
+                      <span className="block text-primaria/85">{a.descricao}</span>
+                      <span className="mt-1 block font-semibold tabular-nums">
+                        {rotuloDoPrecoAdicional(a.precoCentavos)}
+                        {a.precoCentavos > 0 && total > 0 ? ` · ${brl(a.precoCentavos * total)} nos ${potinhos(total)}` : ""}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <p id={`${uid}-adicionais-aviso`} className="mt-3 text-xs text-primaria/80" role="status" aria-live="polite">
+            {adicionaisEscolhidos.length > 0
+              ? `Escolhido: ${listaDeNomes(adicionaisEscolhidos.map((a) => a.nome))}${
+                  total > 0 ? ` (${adicionaisCentavos > 0 ? brl(adicionaisCentavos) : "sem custo"} nos ${potinhos(total)})` : ""
+                }. `
+              : "Nenhum item adicional escolhido. "}
+            As imagens são ilustrativas: o acabamento de cada item pode variar um pouco.
+          </p>
+          {errosCampo.adicionais?.[0] && <p className="mt-1 text-xs font-medium text-secundaria">{errosCampo.adicionais[0]}</p>}
+        </Secao>
+      )}
+
+      {/* Entrega ou retirada */}
+      <Secao numero={3 + deslocamento} titulo="Entrega ou retirada">
         <fieldset className="mb-5 grid gap-3 sm:grid-cols-2">
           <legend className="mb-2 text-sm font-semibold">Como você quer receber?</legend>
           <OpcaoDeEntrega
@@ -594,7 +686,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
       </Secao>
 
       {/* 4. Contato */}
-      <Secao numero={4} titulo="Seu WhatsApp">
+      <Secao numero={4 + deslocamento} titulo="Seu WhatsApp">
         <div className="max-w-sm">
           <label htmlFor={idTelefone} className="mb-1 block text-sm font-semibold">
             WhatsApp com DDD
@@ -645,12 +737,18 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
       </Secao>
 
       {/* 5. Resumo, política e envio */}
-      <Secao numero={5} titulo="Resumo e envio" id="resumo">
+      <Secao numero={5 + deslocamento} titulo="Resumo e envio" id="resumo">
         {escolhidos.length > 0 && (
           <p className="mb-3 text-sm text-primaria/85">{escolhidos.map((s) => `${s.sabor} × ${quantidades[s.productId]}`).join(" · ")}</p>
         )}
         <dl className="flex flex-col gap-1.5 text-sm">
           <Linha rotulo={`${potinhos(total)} × ${brl(precoCentavos)}`} valor={brl(total * precoCentavos)} />
+          {adicionaisEscolhidos.length > 0 && (
+            <Linha
+              rotulo={`Itens adicionais (${listaDeNomes(adicionaisEscolhidos.map((a) => a.nome))})`}
+              valor={adicionaisCentavos > 0 ? brl(adicionaisCentavos) : "sem custo"}
+            />
+          )}
           <Linha
             rotulo={retirada ? "Retirada na loja" : "Taxa de entrega"}
             valor={retirada ? "Grátis" : freteCentavos !== null ? brl(freteCentavos) : foraDaArea ? "fora de Teresina" : "informe o endereço"}
@@ -666,7 +764,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
         <ol className="mt-2 flex flex-col gap-2 text-sm">
           <li className="flex items-baseline justify-between gap-4 rounded-md border border-accent2/60 bg-white/70 p-3">
             <span>
-              <strong className="font-semibold">Entrada (50% dos potinhos)</strong>
+              <strong className="font-semibold">Entrada (50% dos potinhos{adicionaisCentavos > 0 ? " e adicionais" : ""})</strong>
               <span className="block text-primaria/80">Depois que a Geleiô aprovar, em até {HORAS_PARA_PAGAR_ENTRADA} horas, pelo site (PIX ou cartão).</span>
             </span>
             <span className="shrink-0 font-semibold tabular-nums">{contas ? brl(contas.entrada) : "—"}</span>

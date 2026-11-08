@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { AdicionaisAdmin } from "@/components/admin/encomendas/AdicionaisAdmin";
 import { ConfigLembrancinhasAdmin } from "@/components/admin/encomendas/ConfigLembrancinhasAdmin";
 import { RolarParaSecao } from "@/components/admin/menu/RolarParaSecao";
 import { EncomendasAdmin } from "@/components/admin/encomendas/EncomendasAdmin";
 import { CarregandoAdmin, GuardaAdmin } from "@/components/admin/GuardaAdmin";
 import { VISOES_ENCOMENDAS, obterConfigLembrancinhasAdmin, type VisaoEncomendas } from "@/lib/encomendas-admin";
+import { listarAdicionaisAdmin } from "@/lib/mimos-adicionais-admin";
 
 export const metadata: Metadata = { title: "Encomendas" };
 
@@ -22,7 +24,7 @@ export default function PaginaEncomendasAdmin({ searchParams }: Props) {
 
 /** A configuração é lida do banco a cada visita (não do cache da loja); as listas vêm da API. */
 async function Conteudo({ searchParams }: Pick<Props, "searchParams">) {
-  const [busca, config] = await Promise.all([searchParams, obterConfigLembrancinhasAdmin()]);
+  const [busca, config, adicionais] = await Promise.all([searchParams, obterConfigLembrancinhasAdmin(), listarAdicionaisAdmin()]);
   const pedida = typeof busca.visao === "string" ? busca.visao : "";
   const visao: VisaoEncomendas = (VISOES_ENCOMENDAS as readonly string[]).includes(pedida) ? (pedida as VisaoEncomendas) : "responder";
   return (
@@ -34,6 +36,9 @@ async function Conteudo({ searchParams }: Pick<Props, "searchParams">) {
       <RolarParaSecao />
       <div id="secao-configuracao" tabIndex={-1} className="scroll-mt-20 outline-none print:hidden lg:scroll-mt-6">
         <ConfigLembrancinhasAdmin inicial={config} />
+      </div>
+      <div id="secao-adicionais" tabIndex={-1} className="scroll-mt-20 outline-none print:hidden lg:scroll-mt-6">
+        <AdicionaisAdmin inicial={adicionais} />
       </div>
       <EncomendasAdmin visaoInicial={visao} />
     </div>

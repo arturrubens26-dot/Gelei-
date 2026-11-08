@@ -8,6 +8,7 @@ import { FormEncomenda } from "@/components/lembrancinhas/FormEncomenda";
 import { Ornamento } from "@/components/marca/Ornamento";
 import { getUsuarioAtual } from "@/lib/auth/dal";
 import { hojeNaLoja } from "@/lib/despesas";
+import { listaDeNomes } from "@/lib/adicionais-regras";
 import { formatarBRL } from "@/lib/dinheiro";
 import { ANTECEDENCIA_MIN_DIAS, DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
 import { listarEnderecos } from "@/lib/enderecos";
@@ -66,6 +67,12 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
         Potinhos de geleia de 40 ml para seus convidados levarem para casa. Você escolhe os sabores e a quantidade; a gente prepara tudo
         para o dia da festa.
       </p>
+      {config.adicionais.length > 0 && (
+        <p className="mx-auto mt-3 max-w-prose text-center text-primaria/85">
+          Para caprichar, você ainda pode escolher itens adicionais: {listaDeNomes(config.adicionais.map((a) => a.nome.toLocaleLowerCase("pt-BR")))}. Eles
+          aparecem no formulário, com imagens ilustrativas.
+        </p>
+      )}
 
       {fotos.length > 0 && (
         <ul aria-label="Sabores disponíveis em mini" className="mt-6 flex flex-wrap justify-center gap-3">
@@ -99,7 +106,7 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
             Conferimos a agenda e respondemos até o dia seguinte. Você acompanha tudo em Minhas encomendas.
           </Passo>
           <Passo numero={3} titulo="Você paga a entrada">
-            50% do valor dos potinhos, em até {HORAS_PARA_PAGAR_ENTRADA} horas depois da aprovação, com PIX ou cartão. Aí a encomenda está confirmada.
+            50% do valor dos potinhos e dos itens adicionais, em até {HORAS_PARA_PAGAR_ENTRADA} horas depois da aprovação, com PIX ou cartão. Aí a encomenda está confirmada.
           </Passo>
           <Passo numero={4} titulo="Preparo e entrega">
             Entregamos apenas em Teresina-PI; de outro lugar, é só retirar na loja. O restante é pago até o dia da entrega ou da retirada. Você pode desistir antes de receber e até {DIAS_DESISTENCIA_APOS_RECEBER}{" "}

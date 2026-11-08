@@ -65,12 +65,12 @@ function cliente() {
         method: metodo,
         redirect: seguir ? "follow" : "manual",
         headers: {
-          ...(corpo !== undefined ? { "Content-Type": "application/json" } : {}),
+          ...(corpo !== undefined && !(corpo instanceof FormData) ? { "Content-Type": "application/json" } : {}),
           ...(cookie ? { Cookie: cookie } : {}),
           "X-Forwarded-For": ip,
           ...cabecalhos,
         },
-        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+        body: corpo === undefined ? undefined : corpo instanceof FormData ? corpo : JSON.stringify(corpo),
       });
       for (const c of r.headers.getSetCookie?.() ?? []) {
         const [par] = c.split(";");
@@ -1088,6 +1088,135 @@ async function main() {
         confere(lista.json?.encomendas?.some((e) => e.id === encCriada?.id), "GET /api/encomendas lista a nova");
         const idor = await b.req("GET", `/api/encomendas/${encCriada?.id}`);
         confere(idor.status === 404, "outra conta → 404", idor.status);
+
+        console.log("37. Itens adicionais: cadastro no painel, preço do servidor, snapshot, rateio e imagem");
+        const originais = await sql("select id, nome, descricao, preco_por_potinho::text as preco, ativo, ordem, imagem_url from mimo_adicionais order by id");
+        try {
+          // Conta própria: a solicitação de encomenda tem limite de 10 por hora por conta (a conta "a" já usou várias).
+          const cAdic = await novaConta("adic");
+          const cria = (c, extra = {}, k = chave) => cAdic.req("POST", "/api/encomendas", { corpo: { ...corpo, ...c }, cabecalhos: { "Idempotency-Key": k, ...extra } });
+          const lista = await admin.req("GET", "/api/admin/lembrancinhas/adicionais");
+          const idsPadrao = ["florzinhas", "paninho-na-tampa", "caixinha", "colherzinha"];
+          confere(lista.status === 200 && idsPadrao.every((id) => lista.json?.adicionais?.some((x) => x.id === id)), "o painel lista os 4 itens que vieram da migração", lista.json);
+          confere((await a.req("GET", "/api/admin/lembrancinhas/adicionais")).status === 403, "cliente comum não vê o cadastro (403)");
+          const formDe = (x) => {
+            const f = new FormData();
+            for (const [k, v] of Object.entries(x)) f.set(k, String(v));
+            return f;
+          };
+          const edita = (id, campos) => admin.req("PATCH", `/api/admin/lembrancinhas/adicionais/${id}`, { corpo: formDe(campos) });
+          const baseDe = (id) => originais.find((o) => o.id === id);
+          const campos = (id, mudancas) => ({ nome: baseDe(id).nome, descricao: baseDe(id).descricao, precoCentavos: 0, ativo: true, ordem: baseDe(id).ordem, ...mudancas });
+          confere((await b.req("PATCH", "/api/admin/lembrancinhas/adicionais/florzinhas", { corpo: formDe(campos("florzinhas", {})) })).status === 403, "cliente comum não edita (403)");
+          const semAuth = await cliente().req("PATCH", "/api/admin/lembrancinhas/adicionais/florzinhas", { corpo: formDe(campos("florzinhas", {})) });
+          confere(semAuth.status === 401, "sem login não edita (401)", semAuth.status);
+          const negativo = await edita("florzinhas", campos("florzinhas", { precoCentavos: -5 }));
+          confere(negativo.status === 400 && negativo.json?.detalhes?.precoCentavos, "preço negativo → 400 em precoCentavos", negativo.json);
+          const inexistente = await edita("nao-existe", campos("florzinhas", { precoCentavos: 10 }));
+          confere(inexistente.status === 404, "item que não existe → 404", inexistente.json);
+          // Preços: florzinhas 0,50 · paninho 1,20 · caixinha 0,00 (sem custo) · colherzinha escondida.
+          const r1 = await edita("florzinhas", campos("florzinhas", { precoCentavos: 50, ordem: 1 }));
+          const r2 = await edita("paninho-na-tampa", campos("paninho-na-tampa", { precoCentavos: 120, ordem: 2 }));
+          const r3 = await edita("caixinha", campos("caixinha", { precoCentavos: 0, ordem: 3 }));
+          const r4 = await edita("colherzinha", campos("colherzinha", { precoCentavos: 30, ordem: 4, ativo: false }));
+          confere([r1, r2, r3, r4].every((r) => r.status === 200) && r1.json.adicional.precoCentavos === 50 && r4.json.adicional.ativo === false, "painel salva preço (0,50 · 1,20 · 0,00) e esconde a colherzinha", [r1.json, r4.json]);
+
+          const base = 20 * cfgAntes.precoPotinhoCentavos;
+          const extras = 20 * (50 + 120);
+          const chaveAdic = `${chave}-adic`;
+          const comAdic = { itens: [{ productId: produto, quantidade: 20 }], adicionais: ["paninho-na-tampa", "florzinhas"] };
+          // O cliente tenta pagar menos: total esperado sem os adicionais (ou com o preço antigo) → 409 com os preços do servidor.
+          const barato = await cria({ ...comAdic, totalEsperadoCentavos: base }, {}, chaveAdic);
+          confere(
+            barato.status === 409 && barato.json?.detalhes?.adicionais === extras / 100 && barato.json.detalhes.total === (base + extras) / 100,
+            "total sem os adicionais → 409 com o valor dos adicionais e o total do servidor",
+            barato.json,
+          );
+          const indisp = await cria({ ...comAdic, adicionais: ["florzinhas", "colherzinha"], totalEsperadoCentavos: base }, {}, `${chaveAdic}-i`);
+          confere(indisp.status === 422 && indisp.json?.detalhes?.adicionaisIndisponiveis?.[0] === "colherzinha", "item desativado → 422 com o id", indisp.json);
+          const inventado = await cria({ ...comAdic, adicionais: ["inventado"], totalEsperadoCentavos: base }, {}, `${chaveAdic}-v`);
+          confere(inventado.status === 422 && inventado.json?.detalhes?.adicionaisIndisponiveis?.[0] === "inventado", "item desconhecido → 422", inventado.json);
+          const repetido = await cria({ ...comAdic, adicionais: ["florzinhas", "florzinhas"], totalEsperadoCentavos: base }, {}, `${chaveAdic}-d`);
+          confere(repetido.status === 400 && repetido.json?.detalhes?.adicionais, "item repetido → 400 em adicionais", repetido.json);
+
+          const criada = await cria({ ...comAdic, totalEsperadoCentavos: base + extras }, {}, chaveAdic);
+          const e = criada.json?.encomenda;
+          if (e?.id) encomendas.push(e.id);
+          const entradaEsperada = Math.ceil((base + extras) / 2);
+          confere(
+            criada.status === 201 && e?.adicionaisTotal === extras / 100 && e.total === (base + extras) / 100 && e.entrada === entradaEsperada / 100 &&
+              Math.round(e.entrada * 100) + Math.round(e.restante * 100) === base + extras && e.subtotal === base / 100,
+            "201: adicionais = (0,50 + 1,20) × 20 potinhos, somados ao total e rateados na entrada (50%) e no restante",
+            e,
+          );
+          confere(
+            e?.adicionais?.length === 2 && e.adicionais.map((x) => x.nome).join("|") === "Florzinhas|Paninho na tampa" && e.adicionais.every((x) => x.total === (x.precoPorPotinho * 20)),
+            "o DTO traz nome, preço por potinho e total de cada item",
+            e?.adicionais,
+          );
+          const [linha] = await sql("select adicionais::text a, total::text t, subtotal::text s from encomendas where id = $1", [e?.id]);
+          const linhasAdic = await sql("select adicional_id, nome, preco_por_potinho::text p from encomenda_adicionais where encomenda_id = $1 order by adicional_id", [e?.id]);
+          confere(
+            Number(linha?.a) === extras / 100 && linhasAdic.length === 2 && linhasAdic[0].adicional_id === "florzinhas" && Number(linhasAdic[0].p) === 0.5,
+            "banco: valor dos adicionais e a cópia (nome e preço por potinho) gravados",
+            { linha, linhasAdic },
+          );
+          // Snapshot: a dona sobe a florzinha para R$ 0,90 e some com o paninho; a encomenda feita não muda.
+          await edita("florzinhas", campos("florzinhas", { precoCentavos: 90, ordem: 1 }));
+          await edita("paninho-na-tampa", campos("paninho-na-tampa", { precoCentavos: 120, ordem: 2, ativo: false }));
+          const depois = await cAdic.req("GET", `/api/encomendas/${e?.id}`);
+          confere(
+            depois.json?.encomenda?.adicionaisTotal === extras / 100 && depois.json.encomenda.total === e?.total && depois.json.encomenda.adicionais.find((x) => x.adicionalId === "florzinhas")?.precoPorPotinho === 0.5,
+            "snapshot: mudar o preço e esconder o item não altera a encomenda já feita",
+            depois.json?.encomenda,
+          );
+          const ficha = await admin.req("GET", `/api/admin/encomendas/${e?.id}`);
+          confere(ficha.json?.encomenda?.adicionais?.length === 2 && ficha.json.encomenda.adicionaisTotal === extras / 100, "a ficha do painel mostra os itens a preparar", ficha.json?.encomenda?.adicionais);
+          const mesma = await cria({ ...comAdic, totalEsperadoCentavos: base + extras }, {}, chaveAdic);
+          confere(mesma.status === 200 && mesma.json?.encomenda?.id === e?.id, "mesma chave e mesmos itens → 200, a mesma encomenda (mesmo com preço e cadastro diferentes)", mesma.json);
+          const outros = await cria({ ...comAdic, adicionais: ["florzinhas"], totalEsperadoCentavos: base + 20 * 90 }, {}, chaveAdic);
+          confere(outros.status === 422, "mesma chave com outros itens → 422", outros.json);
+          const semAdic = await cria({ totalEsperadoCentavos: base }, {}, `${chaveAdic}-s`);
+          if (semAdic.json?.encomenda?.id) encomendas.push(semAdic.json.encomenda.id);
+          confere(semAdic.status === 201 && semAdic.json?.encomenda?.adicionaisTotal === 0 && semAdic.json.encomenda.adicionais.length === 0, "sem adicionais: tudo como antes (adicionais = 0)", semAdic.json?.encomenda);
+
+          // Imagem: o painel envia um PNG; /fotos/<id> o serve (a rota dos produtos continua servindo as fotos de produto).
+          const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+          const comFoto = formDe(campos("caixinha", { precoCentavos: 0, ordem: 3 }));
+          comFoto.set("foto", new Blob([png], { type: "image/png" }), "caixinha.png");
+          const up = await admin.req("PATCH", "/api/admin/lembrancinhas/adicionais/caixinha", { corpo: comFoto });
+          const url = up.json?.adicional?.imagemUrl;
+          confere(up.status === 200 && /^\/fotos\/[a-f0-9]{32}$/.test(url ?? ""), "imagem enviada: o item passa a apontar para /fotos/<id>", up.json);
+          const foto = url ? await fetch(BASE + url) : null;
+          confere(
+            foto?.status === 200 && foto.headers.get("content-type") === "image/png" && /immutable/.test(foto.headers.get("cache-control") ?? "") && (await foto.arrayBuffer()).byteLength === png.length,
+            "GET /fotos/<id> serve a imagem do item (PNG, cache permanente)",
+          );
+          const textoFalso = formDe(campos("caixinha", { precoCentavos: 0, ordem: 3 }));
+          textoFalso.set("foto", new Blob(["isto não é imagem"], { type: "image/png" }), "x.png");
+          const recusa = await admin.req("PATCH", "/api/admin/lembrancinhas/adicionais/caixinha", { corpo: textoFalso });
+          confere(recusa.status === 400 && recusa.json?.detalhes?.foto, "arquivo que não é imagem → 400 (confere os bytes, não o nome)", recusa.json);
+          const [fotoDeProduto] = await sql("select id from produto_fotos limit 1");
+          if (fotoDeProduto) confere((await fetch(`${BASE}/fotos/${fotoDeProduto.id}`)).status === 200, "as fotos de produto continuam sendo servidas pela mesma rota");
+          const tira = formDe({ ...campos("caixinha", { precoCentavos: 0, ordem: 3 }), removerFoto: true });
+          const semFoto = await admin.req("PATCH", "/api/admin/lembrancinhas/adicionais/caixinha", { corpo: tira });
+          confere(semFoto.status === 200 && semFoto.json?.adicional?.imagemUrl === null, "voltar à ilustração padrão apaga a imagem", semFoto.json);
+          confere((await sql("select 1 from mimo_adicional_fotos where adicional_id = 'caixinha'")).length === 0, "a foto antiga sai do banco");
+
+          const agenda = await admin.req("GET", "/api/admin/encomendas?visao=agenda");
+          confere(agenda.status === 200 && Array.isArray(agenda.json?.agenda), "a agenda de produção responde (com os itens adicionais por dia)", agenda.status);
+          const mes = new Date().toISOString().slice(0, 7);
+          const fin = await admin.req("GET", `/api/admin/financial-stats?mes=${mes}`);
+          confere(fin.status === 200 && Array.isArray(fin.json?.entradas?.lembrancinhas?.adicionaisEntregues), "o Financeiro traz os itens adicionais entregues", fin.status);
+        } finally {
+          for (const o of originais) {
+            await sql(
+              "update mimo_adicionais set nome = $2, descricao = $3, preco_por_potinho = $4, ativo = $5, ordem = $6, imagem_url = $7 where id = $1",
+              [o.id, o.nome, o.descricao, o.preco, o.ativo, o.ordem, o.imagem_url],
+            );
+          }
+          await sql("delete from mimo_adicional_fotos where adicional_id = any($1) and ('/fotos/' || id) <> all($2)", [originais.map((o) => o.id), originais.map((o) => o.imagem_url ?? "")]);
+        }
       } finally {
         await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: { ativo: cfgAntes.ativo } });
         await sql("update products set disponivel_em_mini = $2 where id = $1", [produto, miniAntes]);

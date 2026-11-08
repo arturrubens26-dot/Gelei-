@@ -7,6 +7,7 @@ import { EXPLICACAO_ALERTA_ENCOMENDA, ROTULO_ALERTA_ENCOMENDA, SeloAlerta } from
 import { LinkWhatsApp } from "@/components/admin/LinkWhatsApp";
 import { diaComSemana } from "@/components/lembrancinhas/datas";
 import { SeloDaEncomenda } from "@/components/lembrancinhas/SeloDaEncomenda";
+import { rotuloDoPrecoAdicional } from "@/lib/adicionais-regras";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { DevolucaoDaEncomendaDTO, EncomendaAdminDetalheDTO, PagamentoDaEncomendaDTO } from "@/lib/encomendas-admin";
 import { DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, fimDaDesistenciaAposReceber, formatarPrazo, marcadasQueSeguemPendentes, prazoDaEntrada, retemEntradaNaDesistencia, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
@@ -362,8 +363,37 @@ export function FichaEncomenda({ id }: { id: string }) {
               ))}
             </tbody>
           </table>
+          {e.adicionais.length > 0 && (
+            <div className="mt-4 border-t-2 border-accent2/60 pt-3">
+              <h3 className="text-base font-bold">Itens adicionais a preparar</h3>
+              <p className="text-xs text-primaria/80">Cada item vale para todos os {e.potinhos} potinhos desta encomenda.</p>
+              <table className="mt-2 w-full text-left text-sm">
+                <caption className="sr-only">Itens adicionais da encomenda</caption>
+                <thead className="border-b-2 border-accent2/60">
+                  <tr>
+                    <th scope="col" className="py-1.5 pr-3 font-semibold">Item</th>
+                    <th scope="col" className="px-3 py-1.5 text-right font-semibold">Unidades</th>
+                    <th scope="col" className="py-1.5 pl-3 text-right font-semibold">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-accent1/70">
+                  {e.adicionais.map((a) => (
+                    <tr key={a.adicionalId}>
+                      <th scope="row" className="py-1.5 pr-3 font-medium">
+                        {a.nome}
+                        <span className="block text-xs font-normal text-primaria/80">{rotuloDoPrecoAdicional(Math.round(a.precoPorPotinho * 100))}</span>
+                      </th>
+                      <td className="px-3 py-1.5 text-right text-base font-bold tabular-nums">{e.potinhos}</td>
+                      <td className="py-1.5 pl-3 text-right tabular-nums">{a.total > 0 ? formatarBRL(a.total) : "sem custo"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <dl className="mt-3 flex flex-col gap-1 border-t-2 border-accent2/60 pt-3 text-sm">
             <Linha rotulo="Potinhos" valor={formatarBRL(e.subtotal)} />
+            {e.adicionais.length > 0 && <Linha rotulo="Itens adicionais" valor={e.adicionaisTotal > 0 ? formatarBRL(e.adicionaisTotal) : "sem custo"} />}
             <Linha rotulo={e.modoEntrega === "RETIRADA" ? "Retirada" : "Entrega"} valor={e.frete > 0 ? formatarBRL(e.frete) : "Grátis"} />
             <Linha rotulo="Total" valor={formatarBRL(e.total)} forte />
             <Linha rotulo={`Entrada${e.entradaPagaEm ? ` (${e.entradaForaDoSite ? "recebida na loja" : "paga"} em ${formatarDataHora(e.entradaPagaEm)})` : ""}`} valor={formatarBRL(e.entrada)} />
@@ -504,6 +534,9 @@ export function FichaEncomenda({ id }: { id: string }) {
                 {d.potinhos} potinhos em {d.encomendas} {d.encomendas === 1 ? "encomenda" : "encomendas"}
                 {d.aguardandoEntrada > 0 && ` (+${d.potinhosAguardando} aguardando entrada)`}
                 {d.porSabor.length > 0 && <span className="block text-xs text-primaria/80">{d.porSabor.map((s) => `${s.sabor} ${s.potinhos}`).join(" · ")}</span>}
+                {d.porAdicional.length > 0 && (
+                  <span className="block text-xs text-primaria/80">Adicionais: {d.porAdicional.map((a) => `${a.nome} ${a.unidades}`).join(" · ")}</span>
+                )}
               </li>
             ))}
           </ul>

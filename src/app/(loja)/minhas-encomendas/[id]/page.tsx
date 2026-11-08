@@ -13,11 +13,12 @@ import { SeloDaEncomenda } from "@/components/lembrancinhas/SeloDaEncomenda";
 import { situacaoDaEncomenda } from "@/components/lembrancinhas/situacao";
 import { exigirUsuario } from "@/lib/auth/dal";
 import { dadosLoja } from "@/lib/dados-loja";
+import { rotuloDoPrecoAdicional } from "@/lib/adicionais-regras";
 import { formatarBRL } from "@/lib/dinheiro";
 import { buscarEncomendaDoUsuario, expirarVencidas } from "@/lib/encomendas";
 import { situacaoDaParcela } from "@/lib/encomendas-pagamentos";
 import { DIAS_DESISTENCIA_APOS_RECEBER, formatarPrazo, palavraDoModo, retemEntradaNaDesistencia, statusFinal } from "@/lib/encomendas-regras";
-import { enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
+import { AVISO_SO_TERESINA, enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 
 export const metadata: Metadata = { title: "Encomenda de mimos" };
@@ -115,7 +116,7 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
               valor={e.entrada}
               situacaoInicial={entrada}
               pagarAte={e.prazos.entradaAte}
-              descricao="50% do valor dos potinhos, para confirmar a encomenda."
+              descricao={`50% do valor dos potinhos${e.adicionaisTotal > 0 ? " e dos itens adicionais" : ""}, para confirmar a encomenda.`}
               horasParaPagar={e.prazos.horasParaPagarEntrada}
               restanteForaDoSite={false}
             />
@@ -148,14 +149,32 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
             </li>
           ))}
         </ul>
+        {e.adicionais.length > 0 && (
+          <div className="mt-4 border-t-2 border-accent2/60 pt-4">
+            <h3 className="text-lg font-bold">Itens adicionais</h3>
+            <p className="text-xs text-primaria/80">Valem para todos os {e.potinhos} potinhos da encomenda.</p>
+            <ul className="mt-2 divide-y divide-accent1/70">
+              {e.adicionais.map((a) => (
+                <li key={a.adicionalId} className="flex items-baseline justify-between gap-4 py-2 text-sm">
+                  <span>
+                    {a.nome}
+                    <span className="block text-primaria/80">{rotuloDoPrecoAdicional(Math.round(a.precoPorPotinho * 100))}</span>
+                  </span>
+                  <span className="shrink-0 font-semibold tabular-nums">{a.total > 0 ? formatarBRL(a.total) : "sem custo"}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <dl className="mt-4 flex flex-col gap-1.5 border-t-2 border-accent2/60 pt-4 text-sm">
           <Linha rotulo={`${e.potinhos} potinhos`} valor={formatarBRL(e.subtotal)} />
+          {e.adicionais.length > 0 && <Linha rotulo="Itens adicionais" valor={e.adicionaisTotal > 0 ? formatarBRL(e.adicionaisTotal) : "sem custo"} />}
           <Linha rotulo={e.modoEntrega === "RETIRADA" ? "Retirada na loja" : "Taxa de entrega"} valor={e.frete > 0 ? formatarBRL(e.frete) : "Grátis"} />
           <div className="flex justify-between pt-1 text-xl font-bold">
             <dt>Total</dt>
             <dd className="tabular-nums">{formatarBRL(e.total)}</dd>
           </div>
-          <Linha rotulo="Entrada (50% dos potinhos)" valor={formatarBRL(e.entrada)} />
+          <Linha rotulo={`Entrada (50% dos potinhos${e.adicionaisTotal > 0 ? " e adicionais" : ""})`} valor={formatarBRL(e.entrada)} />
           <Linha rotulo={`Restante${e.frete > 0 ? " (com a entrega)" : ""}`} valor={formatarBRL(e.restante)} />
         </dl>
       </section>
@@ -179,6 +198,7 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
               <address className="not-italic">{enderecoDeRetirada()}</address>
             )}
           </Item>
+          <Item rotulo="Área de entrega">{AVISO_SO_TERESINA} Fora de Teresina, só a retirada na loja.</Item>
           <Item rotulo="WhatsApp">{formatarTelefone(e.telefone)}</Item>
           {e.observacao && <Item rotulo="Observação">{e.observacao}</Item>}
           <Item rotulo="Desistência">

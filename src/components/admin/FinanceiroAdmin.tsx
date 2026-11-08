@@ -247,7 +247,7 @@ function Entradas({ dados }: { dados: FinanceiroDoMes }) {
           />
         )}
       </dl>
-      {(lembrancinhas.liquido !== 0 || lembrancinhas.encomendas > 0 || lembrancinhas.potinhosEntregues.length > 0) && (
+      {(lembrancinhas.liquido !== 0 || lembrancinhas.encomendas > 0 || lembrancinhas.potinhosEntregues.length > 0 || lembrancinhas.adicionaisEntregues.length > 0) && (
         <Lembrancinhas dados={lembrancinhas} />
       )}
       <div>
@@ -322,6 +322,29 @@ function Lembrancinhas({ dados: l }: { dados: FinanceiroDoMes["entradas"]["lembr
                 <th scope="row" className="py-2 pr-3 font-medium">{s.nome}</th>
                 <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{s.potinhos}</td>
                 <td className="py-2 pl-3 text-right tabular-nums">{formatarBRL(s.valor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {l.adicionaisEntregues.length > 0 && (
+        <table className="mt-3 w-full text-left text-sm">
+          <caption className="mb-1 text-left text-xs font-semibold text-primaria/85">
+            Itens adicionais entregues no mês (já estão no dinheiro acima; o valor é o preço por potinho vezes os potinhos)
+          </caption>
+          <thead className="border-b-2 border-accent2/60">
+            <tr>
+              <th scope="col" className="py-2 pr-3 font-semibold">Item</th>
+              <th scope="col" className="px-2 py-2 sm:px-3 text-right font-semibold">Unidades</th>
+              <th scope="col" className="py-2 pl-3 text-right font-semibold">Valor</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-accent1/70">
+            {l.adicionaisEntregues.map((a) => (
+              <tr key={a.adicionalId}>
+                <th scope="row" className="py-2 pr-3 font-medium">{a.nome}</th>
+                <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{a.unidades}</td>
+                <td className="py-2 pl-3 text-right tabular-nums">{a.valor > 0 ? formatarBRL(a.valor) : "sem custo"}</td>
               </tr>
             ))}
           </tbody>

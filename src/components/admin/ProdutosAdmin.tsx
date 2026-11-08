@@ -4,13 +4,12 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { CampoForm } from "@/components/admin/CampoForm";
+import { prepararFoto } from "@/components/admin/prepararFoto";
 import { FotoComVerso } from "@/components/FotoComVerso";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { ProdutoAdminDTO } from "@/lib/produtos-admin";
 import {
   AVISO_ALEGACAO,
-  LADO_FOTO,
-  MAX_BYTES_FOTO,
   MAX_CARACTERES_DESTAQUE,
   MAX_CARACTERES_HARMONIZACAO,
   MAX_DESTAQUES,
@@ -214,23 +213,6 @@ type Form = {
   harmonizacoes: string;
   destaques: string;
 };
-
-/** Reduz a foto no navegador: recorte quadrado no centro, até 800×800, em JPEG (~100 KB). */
-async function prepararFoto(arquivo: File): Promise<Blob> {
-  const imagem = await createImageBitmap(arquivo);
-  const lado = Math.min(imagem.width, imagem.height);
-  const saida = Math.min(LADO_FOTO, lado);
-  const canvas = document.createElement("canvas");
-  canvas.width = saida;
-  canvas.height = saida;
-  const contexto = canvas.getContext("2d");
-  if (!contexto) throw new Error("sem canvas");
-  contexto.drawImage(imagem, (imagem.width - lado) / 2, (imagem.height - lado) / 2, lado, lado, 0, 0, saida, saida);
-  imagem.close();
-  const blob = await new Promise<Blob | null>((pronto) => canvas.toBlob(pronto, "image/jpeg", 0.85));
-  if (!blob || blob.size > MAX_BYTES_FOTO) throw new Error("foto inválida");
-  return blob;
-}
 
 function FormularioProduto({
   produto,

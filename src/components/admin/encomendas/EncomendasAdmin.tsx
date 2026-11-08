@@ -254,6 +254,27 @@ function Agenda({ dados, agora }: { dados: ListaEncomendasAdminDTO; agora: numbe
               </tbody>
             </table>
           )}
+          {d.porAdicional.length > 0 && (
+            <table className="mt-3 w-full max-w-md text-left text-sm">
+              <caption className="sr-only">Itens adicionais a preparar em {diaComSemana(d.dia)}</caption>
+              <thead className="border-b-2 border-accent2/60">
+                <tr>
+                  <th scope="col" className="py-1.5 pr-3 font-semibold">Item adicional</th>
+                  <th scope="col" className="px-3 py-1.5 text-right font-semibold">Encomendas</th>
+                  <th scope="col" className="py-1.5 text-right font-semibold">Unidades</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-accent1/70">
+                {d.porAdicional.map((a) => (
+                  <tr key={a.adicionalId}>
+                    <th scope="row" className="py-1.5 pr-3 font-medium">{a.nome}</th>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{a.encomendas}</td>
+                    <td className="py-1.5 text-right text-base font-bold tabular-nums">{a.unidades}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <ul className="mt-3 flex flex-col gap-2">
             {d.ids.map((id) => {
               const e = porId.get(id);
