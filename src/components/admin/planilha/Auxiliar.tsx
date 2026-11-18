@@ -204,13 +204,19 @@ function ListaCategorias({
                     type="checkbox"
                     className="size-5 accent-secundaria"
                     checked={c.foraDoResultado}
-                    disabled={ocupado === c.id}
+                    disabled={ocupado === c.id || c.linhas > 0}
+                    aria-describedby={c.linhas > 0 ? `fora-travado-${c.id}` : undefined}
                     onChange={(e) =>
                       mudar(c, { foraDoResultado: e.target.checked }, e.target.checked ? `“${c.nome}” agora fica fora do lucro.` : `“${c.nome}” volta a contar no lucro.`)
                     }
                   />
                   Fora do lucro <span className="text-primaria/80">(aporte, retirada)</span>
                 </label>
+                {c.linhas > 0 && (
+                  <p id={`fora-travado-${c.id}`} className="basis-full text-xs text-primaria/80">
+                    Já tem lançamentos: mudar isso alteraria o lucro dos meses passados. Para outra regra, crie uma nova categoria.
+                  </p>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {c.ativo && (

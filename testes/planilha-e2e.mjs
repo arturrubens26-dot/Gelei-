@@ -311,6 +311,10 @@ async function main() {
     const grupo = await admin.req("PATCH", `/api/admin/planilha/categorias/${cat1.json.id}`, { corpo: { grupo: "EMBALAGENS" } });
     const [bdGrupo] = await sql("select categoria from expenses where id = $1", [botijao?.id]);
     confere(grupo.status === 200 && grupo.json.grupo === "EMBALAGENS" && grupo.json.linhas === 1 && bdGrupo?.categoria === "EMBALAGENS", "mudar o grupo atualiza o grupo das despesas dela", [grupo.json, bdGrupo]);
+    const foraComLinha = await admin.req("PATCH", `/api/admin/planilha/categorias/${cat1.json.id}`, { corpo: { foraDoResultado: true } });
+    confere(foraComLinha.status === 409 && foraComLinha.json?.codigo === "categoria-em-uso" && /lucro dos meses passados/.test(foraComLinha.json.erro ?? foraComLinha.json.mensagem ?? JSON.stringify(foraComLinha.json)), "mudar 'fora do lucro' com lançamentos → 409", foraComLinha.json);
+    const foraSemLinha = await admin.req("PATCH", `/api/admin/planilha/categorias/${outroTipo.json.id}`, { corpo: { foraDoResultado: true } });
+    confere(foraSemLinha.status === 200 && foraSemLinha.json.foraDoResultado === true, "sem lançamentos, 'fora do lucro' pode mudar", foraSemLinha.json);
     const exUso = await admin.req("DELETE", `/api/admin/planilha/categorias/${cat1.json.id}`);
     confere(exUso.status === 409 && exUso.json?.codigo === "categoria-em-uso", "excluir com lançamentos → 409 categoria-em-uso", exUso.json);
     const exPadrao = await admin.req("DELETE", "/api/admin/planilha/categorias/saida-outros");

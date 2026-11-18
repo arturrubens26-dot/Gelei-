@@ -116,6 +116,18 @@ export async function alterarCategoria(id: string, e: z.output<typeof alterarCat
       if (e.grupo !== undefined && e.grupo !== atual.grupo && IDS_PADRAO.has(id)) {
         throw new ErroNegocio(409, "Esta categoria é a padrão do grupo e não muda de grupo. Crie outra categoria.", undefined, "categoria-padrao");
       }
+      if (e.foraDoResultado !== undefined && e.foraDoResultado !== atual.foraDoResultado) {
+        // Mudar isso reescreveria o lucro dos meses passados: só vale para categoria ainda sem lançamentos.
+        const { linhas } = await paraDTO(tx, atual);
+        if (linhas > 0) {
+          throw new ErroNegocio(
+            409,
+            "Esta categoria já tem lançamentos; mudar isso alteraria o lucro dos meses passados. Crie outra categoria com a opção desejada e use-a daqui para frente.",
+            { linhas },
+            "categoria-em-uso",
+          );
+        }
+      }
       if (e.nome !== undefined && e.nome.toLowerCase() !== atual.nome.toLowerCase()) await conferirNomeLivre(tx, atual.tipo, e.nome, id);
       const gravada = await tx.categoriaFinanceira.update({
         where: { id },
