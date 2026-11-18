@@ -88,6 +88,8 @@ export type DespesaDTO = {
   quantidadeBase: number | null;
   /** Categoria editável da planilha ("saida-ingredientes" ou uma criada pela dona). */
   categoriaId: string | null;
+  /** Retirada da dona, aporte etc.: aparece na lista, mas não entra no total nem no lucro. */
+  foraDoResultado: boolean;
   /** Trava otimista: mande de volta no PATCH para não sobrescrever a alteração de outro admin. */
   versao: number;
 };

@@ -16,7 +16,10 @@ import type { DespesaEntrada } from "@/lib/validacao";
 const MAX_LISTA_MES = 500;
 
 /** Junto da despesa vem o insumo (compra que entrou no estoque da Produção). */
-const comInsumo = { insumo: { select: { id: true, nome: true, unidade: true } } } satisfies Prisma.ExpenseInclude;
+const comInsumo = {
+  insumo: { select: { id: true, nome: true, unidade: true } },
+  categoriaFin: { select: { foraDoResultado: true } },
+} satisfies Prisma.ExpenseInclude;
 type DespesaDoBanco = Prisma.ExpenseGetPayload<{ include: typeof comInsumo }>;
 
 function paraDTO(d: DespesaDoBanco): DespesaDTO {
@@ -34,6 +37,7 @@ function paraDTO(d: DespesaDoBanco): DespesaDTO {
     insumo: d.insumo,
     quantidadeBase: d.quantidadeBase ? d.quantidadeBase.toNumber() : null,
     categoriaId: d.categoriaId,
+    foraDoResultado: d.categoriaFin?.foraDoResultado ?? false,
     versao: d.versao,
   };
 }

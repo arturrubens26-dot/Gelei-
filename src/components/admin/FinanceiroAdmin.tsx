@@ -452,7 +452,12 @@ function Movimentacoes({ dados }: { dados: FinanceiroDoMes }) {
                     </span>
                   </td>
                   <td className="px-2 py-2 sm:px-3">{m.descricao}</td>
-                  <td className="px-2 py-2 sm:px-3 text-primaria/85">{m.detalhe}</td>
+                  <td className="px-2 py-2 sm:px-3 text-primaria/85">
+                    {m.detalhe}
+                    {m.foraDoResultado && (
+                      <span className="ml-2 inline-block rounded-full border border-primaria/30 px-2 py-0.5 text-xs font-normal text-primaria/80">não entra no lucro</span>
+                    )}
+                  </td>
                   <td className={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums ${m.tipo !== "entrada" ? "text-secundaria" : ""}`}>
                     {m.tipo !== "entrada" ? "− " : "+ "}
                     {formatarBRL(m.valor)}

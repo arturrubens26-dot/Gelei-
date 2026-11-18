@@ -221,6 +221,8 @@ export type MovimentacaoDTO = {
   /** Entrada: canal (Site / Feira ou balcão). Saída: categoria da despesa. */
   detalhe: string;
   valor: number;
+  /** Retirada da dona, aporte etc.: aparece na lista, mas não entra no total nem no lucro. */
+  foraDoResultado?: boolean;
 };
 
 /**
@@ -382,7 +384,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       where: despesasDoMes,
       orderBy: [{ data: "desc" }, { createdAt: "desc" }, { id: "desc" }],
       take: MAX_MOVIMENTACOES + 1,
-      select: { id: true, data: true, descricao: true, categoria: true, valorTotal: true, createdAt: true, categoriaFin: { select: { nome: true } } },
+      select: { id: true, data: true, descricao: true, categoria: true, valorTotal: true, createdAt: true, categoriaFin: { select: { nome: true, foraDoResultado: true } } },
     }),
     lembrancinhasDoMes(limites.inicio, limites.fim),
     db.$queryRaw<{ categoriaId: string; nome: string; centavos: bigint; lancamentos: number }[]>`
@@ -396,7 +398,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
       where: entradasManuaisDoMes,
       orderBy: [{ data: "desc" }, { criadoEm: "desc" }, { id: "desc" }],
       take: MAX_MOVIMENTACOES + 1,
-      select: { id: true, data: true, descricao: true, valor: true, criadoEm: true, categoria: { select: { id: true, nome: true } } },
+      select: { id: true, data: true, descricao: true, valor: true, criadoEm: true, categoria: { select: { id: true, nome: true, foraDoResultado: true } } },
     }),
   ]);
 
@@ -438,6 +440,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
         descricao: m.descricao,
         detalhe: m.categoria.nome,
         valor: m.valor.toNumber(),
+        foraDoResultado: m.categoria.foraDoResultado,
       },
     })),
     ...despesas.map((d) => ({
@@ -449,6 +452,7 @@ export async function financeiroDoMes(mesPedido?: string): Promise<FinanceiroDoM
         descricao: d.descricao,
         detalhe: d.categoriaFin?.nome ?? ROTULO_CATEGORIA[d.categoria],
         valor: d.valorTotal.toNumber(),
+        foraDoResultado: d.categoriaFin?.foraDoResultado ?? false,
       },
     })),
   ].sort((a, b) => (a.linha.dia === b.linha.dia ? b.ordem - a.ordem : a.linha.dia < b.linha.dia ? 1 : -1));

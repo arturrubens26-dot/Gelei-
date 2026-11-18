@@ -808,6 +808,7 @@ export function DespesasAdmin() {
                   </div>
                   <p className="text-xs text-primaria/80">
                     {formatarDia(d.data)} · {ROTULO_CATEGORIA[d.categoria]}
+                    {d.foraDoResultado && <EtiquetaFora />}
                   </p>
                   <p className="text-xs tabular-nums text-primaria/80">
                     {formatarQuantidade(d.quantidade, d.unidade)} · {formatarCustoUnitario(d.valorTotal, d.quantidade)} / {SIGLA_UNIDADE[d.unidade]}
@@ -855,7 +856,10 @@ export function DespesasAdmin() {
                         )}
                         {d.observacao && <span className="block text-xs italic text-primaria/75">{d.observacao}</span>}
                       </td>
-                      <td className="px-3 py-2">{ROTULO_CATEGORIA[d.categoria]}</td>
+                      <td className="px-3 py-2">
+                        {ROTULO_CATEGORIA[d.categoria]}
+                        {d.foraDoResultado && <EtiquetaFora />}
+                      </td>
                       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatarQuantidade(d.quantidade, d.unidade)}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                         {formatarCustoUnitario(d.valorTotal, d.quantidade)}
@@ -884,6 +888,11 @@ export function DespesasAdmin() {
       </section>
     </div>
   );
+}
+
+/** Etiqueta discreta: a linha aparece na lista, mas fica fora do total e do lucro. */
+function EtiquetaFora() {
+  return <span className="ml-2 inline-block rounded-full border border-primaria/30 px-2 py-0.5 text-xs font-normal text-primaria/80">não entra no lucro</span>;
 }
 
 /** Editar e Excluir de uma linha. aria-disabled (não disabled) para o foco não se perder se der erro. */
