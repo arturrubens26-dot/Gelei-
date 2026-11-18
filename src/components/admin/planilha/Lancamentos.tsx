@@ -337,7 +337,7 @@ export function Lancamentos({ ativa }: { ativa: boolean }) {
           <Perguntas linhas={foto.linhas} fila={fila} numeros={numeros} />
           {dados.truncado && (
             <p className="rounded-md border border-primaria/40 bg-white p-3 text-sm">
-              Este período tem mais de 5.000 lançamentos: a lista foi cortada (os totais do servidor contam tudo). Escolha um período menor.
+              Este período tem mais de 5.000 lançamentos: a lista foi cortada, então os agrupamentos por dia podem estar parciais (os totais do servidor contam tudo e estão certos). Escolha um período menor.
             </p>
           )}
 

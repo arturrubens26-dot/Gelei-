@@ -144,7 +144,7 @@ export function FichaEncomenda({ id }: { id: string }) {
     }
     const perguntas: Partial<Record<AcaoAdmin, string>> = {
       aprovar: `Aprovar a encomenda ${e.codigo}? A cliente terá até ${formatarPrazo(prazoDaEntrada(new Date(), new Date(e.prazos.corteEm)))} para pagar a entrada de ${formatarBRL(e.entrada)}.`,
-      "marcar-entregue": `Confirmar que a encomenda ${e.codigo} foi ${e.modoEntrega === "RETIRADA" ? "retirada" : "entregue"}?`,
+      "marcar-entregue": `Confirmar que a encomenda ${e.codigo} foi ${e.modoEntrega === "RETIRADA" ? "retirada" : "entregue"}?\n\nMarque no dia em que a cliente de fato receber: a partir desta data ela tem 7 dias para desistir da compra.`,
       "iniciar-producao": a.aviso ? `${a.aviso} Iniciar a produção mesmo assim?` : undefined,
     };
     const pergunta = perguntas[a.acao];
