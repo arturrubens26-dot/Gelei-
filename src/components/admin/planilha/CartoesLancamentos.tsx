@@ -97,9 +97,6 @@ export function CartoesLancamentos(p: Props) {
         <button type="button" className="btn-secundario" onClick={() => setFiltrosAbertos(true)}>
           Filtrar{nFiltros ? ` (${nFiltros})` : ""}
         </button>
-        <button type="button" className="btn-secundario" disabled={!p.fila.ler().podeDesfazer} onClick={() => p.fila.desfazer() && p.avisar("Desfeito.")}>
-          Desfazer
-        </button>
       </div>
 
       {dias.length === 0 && <p className="py-10 text-center text-base">Nenhum lançamento neste período. Toque em “+ Lançamento” para começar.</p>}

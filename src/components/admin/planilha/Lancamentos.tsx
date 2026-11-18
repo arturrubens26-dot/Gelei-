@@ -100,6 +100,19 @@ export function Lancamentos({ ativa }: { ativa: boolean }) {
   useEffect(() => {
     ultimaCarga.current = Date.now();
   }, [carga]);
+  // A aba fica montada (escondida) enquanto ela olha o Auxiliar: ao voltar, recarrega, porque lá ela pode
+  // ter mudado o saldo inicial ou as categorias. O que está por salvar aqui é preservado pela carga.
+  const saiu = useRef(false);
+  useEffect(() => {
+    if (!ativa) {
+      saiu.current = true;
+      return;
+    }
+    if (saiu.current) {
+      saiu.current = false;
+      setRecarga((n) => n + 1);
+    }
+  }, [ativa]);
   useEffect(() => {
     if (!ativa) return;
     const aoVoltar = () => {

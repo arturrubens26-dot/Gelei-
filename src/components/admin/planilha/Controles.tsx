@@ -239,7 +239,7 @@ export function BarraDeFiltros(p: {
         Ordenar por
         <select
           id={`${id}-ordem`}
-          className="campo mt-1 w-60"
+          className="campo mt-1 w-72"
           value={chaveDaOrdem(p.ordem)}
           onChange={(e) => {
             const o = ordemDaChave(e.target.value);
