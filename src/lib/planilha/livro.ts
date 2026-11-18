@@ -270,11 +270,13 @@ function linhaAutomatica(l: LinhaAutomaticaSql, nomes: boolean): LinhaPlanilhaDT
 }
 
 /** Linhas automáticas de [de, ate], mais recentes primeiro (até MAX_LINHAS_PERIODO + 1, para saber se cortou). */
-async function linhasAutomaticas(de: string, ate: string): Promise<LinhaAutomaticaSql[]> {
+async function linhasAutomaticas(de: string, ate: string, nomes: boolean): Promise<LinhaAutomaticaSql[]> {
+  // LGPD (minimização): o nome do cliente só sai do banco quando a tela pediu `nomes`.
+  const colunaCliente = nomes ? Prisma.sql`COALESCE(u.nome, o.cliente_nome, ue.nome)` : Prisma.sql`NULL::text`;
   return db.$queryRaw<LinhaAutomaticaSql[]>`
     SELECT mov.origem, mov.dia, mov.centavos, mov.ref_id, mov.alvo_id, mov.instante,
            o.forma_pagamento AS forma,
-           COALESCE(u.nome, o.cliente_nome, ue.nome) AS cliente
+           ${colunaCliente} AS cliente
     FROM (${movimentosSql(diaSql(de), diaSql(ate), { manuais: false })}) mov
     LEFT JOIN orders o ON mov.origem IN ('site', 'presencial') AND o.id = mov.alvo_id
     LEFT JOIN users u ON u.id = o.user_id
@@ -315,7 +317,7 @@ export async function lancamentosDoPeriodo(de: string, ate: string, opcoes: { no
   const [despesas, entradas, automaticas, totais, config, movimentoAteOFim, categorias, descricoes] = await Promise.all([
     db.expense.findMany({ where: doPeriodo, orderBy: ordem, take: MAX_LINHAS_PERIODO + 1, include: incluirDespesa }),
     db.entradaManual.findMany({ where: doPeriodo, orderBy: ordem, take: MAX_LINHAS_PERIODO + 1, include: incluirEntrada }),
-    linhasAutomaticas(de, ate),
+    linhasAutomaticas(de, ate, opcoes.nomes === true),
     totaisDoPeriodo(de, ate),
     db.configFinanceiro.findUnique({ where: { id: 1 } }),
     // Saldo no fim = saldo inicial + tudo o que entrou e saiu do dia do saldo inicial até `ate`.
