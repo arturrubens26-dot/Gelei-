@@ -37,7 +37,7 @@
     "cep-promise": "^4.4.1",
     "framer-motion": "13.4.6",
     "jose": "^6.2.12",
-    "next": "16.4.2",
+    "next": "16.4.6",
     "nodemailer": "^10.2.0",
     "pg": "^8.23.1",
     "react": "19.3.0",
