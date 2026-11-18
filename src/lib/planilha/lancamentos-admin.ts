@@ -360,7 +360,16 @@ export async function executarLote(operacoes: Operacao[], adminId: string): Prom
   try {
     return await rodar();
   } catch (e) {
-    if (ehChaveRepetida(e) && criacoes.length) return rodar();
+    if (!(ehChaveRepetida(e) && criacoes.length)) throw e;
+  }
+  // Duas requisições com a mesma chave ao mesmo tempo: roda de novo, e a segunda vez enxerga a linha da primeira.
+  try {
+    return await rodar();
+  } catch (e) {
+    // Se o P2002 voltar, é a mesma chave com conteúdo diferente (ou outra corrida): erro de quem enviou, não 500.
+    if (ehChaveRepetida(e)) {
+      throw new ErroNegocio(422, "Esta chave já foi usada para outro lançamento. Recarregue a planilha.", undefined, "chave-repetida");
+    }
     throw e;
   }
 }
