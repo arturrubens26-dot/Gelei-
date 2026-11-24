@@ -6,16 +6,22 @@
  *
  * - v1 ("2026-11-v1", antiga): devolução integral até o corte e, depois, retinha parte da entrada.
  *   Não vale mais para encomendas novas (retenção não cabe em compra pela internet).
- * - v2 ("2026-11-v2", atual): direito de arrependimento do art. 49 do CDC por inteiro: desistir antes da
+ * - v2 ("2026-11-v2"): direito de arrependimento do art. 49 do CDC por inteiro: desistir antes da
  *   entrega e até 7 dias depois de receber, com devolução de TUDO o que foi pago, sem retenção nem taxa.
+ *   Continua valendo para as encomendas que a aceitaram.
+ * - v3 ("2026-11-v3", atual; decisão da dona, 2026-11-24): desistir até 3 dias depois de pagar a entrada,
+ *   com devolução de tudo o que foi pago; depois disso, sem desistência pelo site e sem devolução.
  *
  * Não é parecer jurídico: a dona valida o texto com um advogado ou com o Procon-PI antes de ativar.
  */
 import { formatarBRL } from "@/lib/dinheiro";
 import {
   DIAS_CORTE_ANTES_DA_ENTREGA,
+  DIAS_DESISTENCIA_APOS_ENTRADA,
   DIAS_DESISTENCIA_APOS_RECEBER,
+  VERSAO_POLITICA_ART49,
   VERSAO_POLITICA_COM_RETENCAO,
+  VERSAO_POLITICA_TRES_DIAS,
   formatarPrazo,
   palavraDoModo,
   valorRetidoDaEntrada,
@@ -23,16 +29,16 @@ import {
 } from "@/lib/encomendas-regras";
 import { AVISO_SO_TERESINA } from "@/lib/entrega-regras";
 
-export const POLITICA_VERSAO = "2026-11-v2";
+export const POLITICA_VERSAO = VERSAO_POLITICA_TRES_DIAS;
 
 /** Prazo prometido para devolver o dinheiro na política v1 (D16). A v2 promete devolução imediata. */
 export const PRAZO_DEVOLUCAO_DIAS_UTEIS = 2;
 
 /** Aviso do painel (não bloqueia): o texto da política precisa de validação jurídica. */
 export const AVISO_JURIDICO =
-  "A política segue o direito de arrependimento do Código de Defesa do Consumidor (art. 49): a cliente pode desistir até 7 dias depois de receber, " +
-  "com devolução integral e sem retenção. Isso significa que a Geleiô arca com as desistências, inclusive depois de produzir os potinhos. " +
-  "Valide o texto da política com um advogado ou com o Procon-PI antes de abrir as encomendas.";
+  `A política atual deixa a cliente desistir só até ${DIAS_DESISTENCIA_APOS_ENTRADA} dias depois de pagar a entrada, com devolução de tudo; depois disso, não há devolução. ` +
+  "Atenção: em compra pela internet, o art. 49 do Código de Defesa do Consumidor garante desistir até 7 dias depois de receber, com devolução integral, " +
+  "e uma regra mais curta pode ser contestada no Procon ou na Justiça. Valide o texto da política com um advogado ou com o Procon-PI antes de abrir as encomendas.";
 
 export type DadosDaPolitica = {
   /** Corte da desistência na v1 (00:00 de E−2, mostrado como 23h59 de E−3). A v2 não usa. */
@@ -45,7 +51,7 @@ export type DadosDaPolitica = {
   percentualRetido: number;
 };
 
-const VERSOES = new Set([VERSAO_POLITICA_COM_RETENCAO, POLITICA_VERSAO]);
+const VERSOES = new Set([VERSAO_POLITICA_COM_RETENCAO, VERSAO_POLITICA_ART49, VERSAO_POLITICA_TRES_DIAS]);
 
 export function versaoDaPoliticaConhecida(versao: string): boolean {
   return VERSOES.has(versao);
@@ -59,7 +65,21 @@ const brl = (centavos: number) => formatarBRL(centavos / 100);
  */
 export function textosDaPolitica(versao: string, d: DadosDaPolitica): string[] {
   if (!versaoDaPoliticaConhecida(versao)) throw new RangeError(`Versão de política desconhecida: ${versao}`);
-  return versao === VERSAO_POLITICA_COM_RETENCAO ? textosDaPoliticaV1(d) : textosDaPoliticaV2(d);
+  if (versao === VERSAO_POLITICA_COM_RETENCAO) return textosDaPoliticaV1(d);
+  return versao === VERSAO_POLITICA_ART49 ? textosDaPoliticaV2(d) : textosDaPoliticaV3(d);
+}
+
+function textosDaPoliticaV3(d: DadosDaPolitica): string[] {
+  const palavra = palavraDoModo(d.modo);
+  const dias = DIAS_DESISTENCIA_APOS_ENTRADA;
+  return [
+    "Sua solicitação só vira encomenda quando a Geleiô aprova e você paga a entrada (50% do valor dos potinhos e dos itens adicionais, se você escolher algum). Antes disso nada é cobrado e você pode desistir quando quiser.",
+    `Depois de pagar a entrada, você tem ${dias} dias para desistir aqui no site, em Minhas encomendas: até as 23h59 do ${dias}º dia depois do pagamento (horário de Teresina). Nesse prazo, devolvemos 100% do que você pagou (a entrada de ${brl(d.entradaCentavos)}, e o restante se já tiver pago), pelo mesmo meio do pagamento.`,
+    `Passados os ${dias} dias, os potinhos já estão sendo preparados especialmente para você: não é mais possível desistir, e o valor pago não é devolvido.`,
+    "Se a Geleiô não puder fazer a encomenda, devolvemos tudo.",
+    `O restante (${brl(d.restanteCentavos)}${d.freteCentavos > 0 ? ", com o frete" : ""}) é pago até a ${palavra}, aqui no site (PIX ou cartão) ou combinado direto com a Geleiô; a encomenda só sai quitada. ${AVISO_SO_TERESINA} Para outros lugares, a opção é a retirada na loja, sem custo.`,
+    "Esta política não exclui nem limita os direitos previstos no Código de Defesa do Consumidor.",
+  ];
 }
 
 function textosDaPoliticaV2(d: DadosDaPolitica): string[] {

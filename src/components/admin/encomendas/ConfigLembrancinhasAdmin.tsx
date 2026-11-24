@@ -7,9 +7,10 @@ import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro"
 import type { ConfigLembrancinhasAdminDTO } from "@/lib/encomendas-admin";
 import { formatarDataHora } from "@/lib/formatacao";
 
-type Campos = { preco: string; pesoPotinho: string; pesoEmbalagem: string };
+type Campos = { precoPoucos: string; preco: string; pesoPotinho: string; pesoEmbalagem: string };
 
 const camposDe = (c: ConfigLembrancinhasAdminDTO): Campos => ({
+  precoPoucos: valorParaCampo(c.precoPotinhoPoucosCentavos / 100),
   preco: valorParaCampo(c.precoPotinhoCentavos / 100),
   pesoPotinho: String(c.pesoPotinhoGramas),
   pesoEmbalagem: String(c.pesoEmbalagemGramas),
@@ -18,14 +19,16 @@ const camposDe = (c: ConfigLembrancinhasAdminDTO): Campos => ({
 /** Os erros do 400 vêm pelo nome do campo na API. */
 const CAMPO_DA_API: Record<string, keyof Campos> = {
   precoPotinhoCentavos: "preco",
+  precoPotinhoPoucosCentavos: "precoPoucos",
   pesoPotinhoGramas: "pesoPotinho",
   pesoEmbalagemGramas: "pesoEmbalagem",
 };
 
 /**
  * Configuração dos mimos no painel (GET/PATCH /api/admin/lembrancinhas): abrir ou fechar as
- * encomendas (bloqueado enquanto faltar CNPJ/CPF ou e-mail da loja, D13), preço do potinho, pesos para
- * o frete. Não há mais percentual retido: a política v2 devolve tudo na desistência (art. 49 do CDC).
+ * encomendas (bloqueado enquanto faltar CNPJ/CPF ou e-mail da loja, D13), os dois preços do potinho (de 10 a
+ * 19 e de 20 em diante), pesos para o frete. Não há percentual retido: a política v3 devolve tudo até 3 dias
+ * depois da entrada paga e nada depois disso.
  * As encomendas já feitas não mudam: preço e política ficam congelados nelas.
  */
 export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembrancinhasAdminDTO }) {
@@ -88,6 +91,8 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
     const novos: Partial<Record<keyof Campos, string>> = {};
     const preco = lerValorEmCentavos(campos.preco);
     if (preco === null || preco < 1) novos.preco = "Informe o preço (ex.: 6,00).";
+    const precoPoucos = lerValorEmCentavos(campos.precoPoucos);
+    if (precoPoucos === null || precoPoucos < 1) novos.precoPoucos = "Informe o preço (ex.: 7,00).";
     const inteiro = (t: string) => (/^\d+$/.test(t.trim()) ? Number(t.trim()) : NaN);
     const pesoPotinho = inteiro(campos.pesoPotinho);
     const pesoEmbalagem = inteiro(campos.pesoEmbalagem);
@@ -96,7 +101,7 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
     setErros(novos);
     if (Object.keys(novos).length > 0) return;
     const nova = await enviar(
-      { ativo: config.ativo, precoPotinhoCentavos: preco, pesoPotinhoGramas: pesoPotinho, pesoEmbalagemGramas: pesoEmbalagem },
+      { ativo: config.ativo, precoPotinhoCentavos: preco, precoPotinhoPoucosCentavos: precoPoucos, pesoPotinhoGramas: pesoPotinho, pesoEmbalagemGramas: pesoEmbalagem },
       "valores",
     );
     if (nova) {
@@ -166,10 +171,14 @@ export function ConfigLembrancinhasAdmin({ inicial }: { inicial: ConfigLembranci
 
       <details className="rounded-lg border border-accent2/60 bg-white/60 p-3 open:pb-4">
         <summary className="min-h-11 cursor-pointer content-center font-semibold">
-          Preço, pesos e política ({formatarBRL(config.precoPotinhoCentavos / 100)} o potinho · desistência com devolução integral)
+          Preços, pesos e política ({formatarBRL(config.precoPotinhoPoucosCentavos / 100)} de 10 a 19 · {formatarBRL(config.precoPotinhoCentavos / 100)} de 20
+          em diante · desistência até 3 dias depois da entrada)
         </summary>
         <form onSubmit={salvar} noValidate className="mt-3 grid gap-4 sm:grid-cols-2">
-          <CampoForm id={campo("preco")} rotulo="Preço do potinho (R$)" erro={erros.preco} dica="Preço único, para todos os sabores.">
+          <CampoForm id={campo("precoPoucos")} rotulo="Preço do potinho, de 10 a 19 (R$)" erro={erros.precoPoucos} dica="Encomendas de um sabor só.">
+            <input className="campo" inputMode="decimal" maxLength={10} value={campos.precoPoucos} onChange={mudar("precoPoucos")} {...aria("precoPoucos")} />
+          </CampoForm>
+          <CampoForm id={campo("preco")} rotulo="Preço do potinho, de 20 em diante (R$)" erro={erros.preco} dica="Encomendas com até 2 sabores.">
             <input className="campo" inputMode="decimal" maxLength={10} value={campos.preco} onChange={mudar("preco")} {...aria("preco")} />
           </CampoForm>
           <CampoForm id={campo("pesoPotinho")} rotulo="Peso do potinho cheio (g)" erro={erros.pesoPotinho} dica="Para o cálculo da entrega.">

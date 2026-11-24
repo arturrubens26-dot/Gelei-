@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { FotoDoPote } from "@/components/FotoDoPote";
 import { formatarBRL } from "@/lib/dinheiro";
-import { ANTECEDENCIA_MIN_DIAS } from "@/lib/encomendas-regras";
+import { ANTECEDENCIA_MIN_DIAS, MAX_SABORES_FAIXA_MAIOR } from "@/lib/encomendas-regras";
 import type { LembrancinhasDTO } from "@/lib/lembrancinhas";
 
 /**
@@ -18,8 +18,9 @@ export function ChamadaLembrancinhas({ config }: { config: LembrancinhasDTO }) {
             Mimos para a sua festa
           </h2>
           <p className="mt-3 text-primaria/85">
-            Potinhos de geleia de 40 ml para os convidados levarem para casa: de {config.minPotinhos} a {config.maxPotinhos} potinhos, nos
-            sabores que você escolher, a {formatarBRL(config.precoPotinho)} cada. Encomende com pelo menos {ANTECEDENCIA_MIN_DIAS} dias de antecedência. Entregamos apenas em Teresina-PI (ou você retira na loja).
+            Potinhos de geleia de 40 ml para os convidados levarem para casa: de {config.minPotinhos} a {config.potinhosFaixaMaior - 1} potinhos
+            de um sabor, a {formatarBRL(config.precoPotinhoPoucos)} cada, ou de {config.potinhosFaixaMaior} a {config.maxPotinhos} potinhos com até{" "}
+            {MAX_SABORES_FAIXA_MAIOR} sabores, a {formatarBRL(config.precoPotinho)} cada. Encomende com pelo menos {ANTECEDENCIA_MIN_DIAS} dias de antecedência. Entregamos apenas em Teresina-PI (ou você retira na loja).
           </p>
           <Link href="/mimos" className="btn-primario mt-5">
             Encomendar mimos

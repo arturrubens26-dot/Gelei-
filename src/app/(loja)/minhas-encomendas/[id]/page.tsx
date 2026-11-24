@@ -17,7 +17,15 @@ import { rotuloDoPrecoAdicional } from "@/lib/adicionais-regras";
 import { formatarBRL } from "@/lib/dinheiro";
 import { buscarEncomendaDoUsuario, expirarVencidas } from "@/lib/encomendas";
 import { situacaoDaParcela } from "@/lib/encomendas-pagamentos";
-import { DIAS_DESISTENCIA_APOS_RECEBER, formatarPrazo, palavraDoModo, retemEntradaNaDesistencia, statusFinal } from "@/lib/encomendas-regras";
+import {
+  DIAS_DESISTENCIA_APOS_ENTRADA,
+  DIAS_DESISTENCIA_APOS_RECEBER,
+  VERSAO_POLITICA_TRES_DIAS,
+  formatarPrazo,
+  palavraDoModo,
+  retemEntradaNaDesistencia,
+  statusFinal,
+} from "@/lib/encomendas-regras";
 import { AVISO_SO_TERESINA, enderecoDeRetirada, formatarTelefone } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 
@@ -66,7 +74,9 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
   const Palavra = palavra[0].toUpperCase() + palavra.slice(1);
   const corte = formatarPrazo(new Date(e.prazos.corteEm));
   // Política v2 (art. 49): nada é retido e não existe "prazo da devolução integral"; só a v1 (antiga) usa o corte.
+  // A v3 (atual): até 3 dias depois de pagar a entrada, com devolução de tudo; depois, sem devolução.
   const semRetencao = !retemEntradaNaDesistencia(e.politica.versao);
+  const tresDias = e.politica.versao === VERSAO_POLITICA_TRES_DIAS;
 
   return (
     <div className="flex flex-col gap-6">
@@ -202,7 +212,13 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
           <Item rotulo="WhatsApp">{formatarTelefone(e.telefone)}</Item>
           {e.observacao && <Item rotulo="Observação">{e.observacao}</Item>}
           <Item rotulo="Desistência">
-            {semRetencao
+            {tresDias
+              ? e.acoes.desistirAte
+                ? `Até ${formatarPrazo(new Date(e.acoes.desistirAte))} (${DIAS_DESISTENCIA_APOS_ENTRADA} dias depois de pagar a entrada), com devolução de tudo o que você pagou. Depois disso, não há devolução.`
+                : e.acoes.desistir
+                  ? `Antes de pagar a entrada, a qualquer momento. Depois de pagar, você tem ${DIAS_DESISTENCIA_APOS_ENTRADA} dias para desistir e receber tudo de volta.`
+                  : `O prazo de ${DIAS_DESISTENCIA_APOS_ENTRADA} dias depois de pagar a entrada terminou: não é mais possível desistir.`
+              : semRetencao
               ? e.acoes.desistirAte
                 ? `Até ${formatarPrazo(new Date(e.acoes.desistirAte))} (${DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber), com devolução de tudo o que você pagou.`
                 : e.statusEfetivo === "ENTREGUE"
@@ -218,6 +234,7 @@ async function DadosDaEncomenda({ params, searchParams }: Pick<Props, "params" |
           encomendaId={e.id}
           previaInicial={e.acoes.desistir}
           semRetencao={semRetencao}
+          tresDias={tresDias}
           desistirAte={e.acoes.desistirAte ? formatarPrazo(new Date(e.acoes.desistirAte)) : null}
           corte={corte}
           depoisDoCorte={agora.getTime() >= new Date(e.prazos.corteEm).getTime()}

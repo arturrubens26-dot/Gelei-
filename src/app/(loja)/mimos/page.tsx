@@ -10,7 +10,14 @@ import { getUsuarioAtual } from "@/lib/auth/dal";
 import { hojeNaLoja } from "@/lib/despesas";
 import { listaDeNomes } from "@/lib/adicionais-regras";
 import { formatarBRL } from "@/lib/dinheiro";
-import { ANTECEDENCIA_MIN_DIAS, DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
+import {
+  ANTECEDENCIA_MIN_DIAS,
+  DIAS_DESISTENCIA_APOS_ENTRADA,
+  HORAS_PARA_PAGAR_ENTRADA,
+  MAX_POTINHOS,
+  MAX_SABORES_FAIXA_MAIOR,
+  MIN_POTINHOS,
+} from "@/lib/encomendas-regras";
 import { listarEnderecos } from "@/lib/enderecos";
 import { obterTaxaDeEntregaCentavos } from "@/lib/entrega";
 import { obterLembrancinhas, type LembrancinhasDTO } from "@/lib/lembrancinhas";
@@ -18,7 +25,7 @@ import { telefoneDoCliente } from "@/lib/pedidos";
 
 export const metadata: Metadata = {
   title: "Mimos",
-  description: `Potinhos de geleia de 40 ml para o mimo da sua festa: de ${MIN_POTINHOS} a ${MAX_POTINHOS} potinhos, nos sabores que você escolher. Entregamos apenas em Teresina-PI, ou você retira na loja.`,
+  description: `Potinhos de geleia de 40 ml para o mimo da sua festa: de ${MIN_POTINHOS} a ${MAX_POTINHOS} potinhos, com 1 ou ${MAX_SABORES_FAIXA_MAIOR} sabores. Entregamos apenas em Teresina-PI, ou você retira na loja.`,
 };
 
 /**
@@ -88,8 +95,14 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
       )}
 
       <dl className="mt-8 grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
-        <Fato rotulo="cada potinho" valor={config.precoPotinho > 0 ? formatarBRL(config.precoPotinho) : "—"} />
-        <Fato rotulo="potinhos por encomenda" valor={`${config.minPotinhos} a ${config.maxPotinhos}`} />
+        <Fato
+          rotulo={`cada potinho, de ${config.minPotinhos} a ${config.potinhosFaixaMaior - 1} (um sabor só)`}
+          valor={config.precoPotinhoPoucos > 0 ? formatarBRL(config.precoPotinhoPoucos) : "—"}
+        />
+        <Fato
+          rotulo={`cada potinho, de ${config.potinhosFaixaMaior} a ${config.maxPotinhos} (até ${MAX_SABORES_FAIXA_MAIOR} sabores)`}
+          valor={config.precoPotinho > 0 ? formatarBRL(config.precoPotinho) : "—"}
+        />
         <Fato rotulo="de antecedência, no mínimo" valor={`${ANTECEDENCIA_MIN_DIAS} dias`} />
         <Fato rotulo="ou retirada na loja, sem custo" valor="Entregamos apenas em Teresina-PI" />
       </dl>
@@ -109,8 +122,9 @@ function Apresentacao({ config }: { config: LembrancinhasDTO }) {
             50% do valor dos potinhos e dos itens adicionais, em até {HORAS_PARA_PAGAR_ENTRADA} horas depois da aprovação, com PIX ou cartão. Aí a encomenda está confirmada.
           </Passo>
           <Passo numero={4} titulo="Preparo e entrega">
-            Entregamos apenas em Teresina-PI; de outro lugar, é só retirar na loja. O restante é pago até o dia da entrega ou da retirada. Você pode desistir antes de receber e até {DIAS_DESISTENCIA_APOS_RECEBER}{" "}
-            dias depois, e devolvemos tudo o que pagou.
+            Entregamos apenas em Teresina-PI; de outro lugar, é só retirar na loja. O restante é pago até o dia da entrega ou da retirada. Depois de
+            pagar a entrada, você tem {DIAS_DESISTENCIA_APOS_ENTRADA} dias para desistir e receber tudo de volta; passado esse prazo, não há
+            devolução.
           </Passo>
         </ol>
       </section>

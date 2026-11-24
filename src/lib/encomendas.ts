@@ -10,11 +10,13 @@ import { POLITICA_VERSAO, textosDaPolitica, versaoDaPoliticaConhecida } from "@/
 import {
   ROTULO_STATUS_ENCOMENDA,
   STATUS_CONFIRMADOS,
+  precoDoPotinhoCentavos,
+  statusConfirmado,
   acoesDaCliente,
   calcularValores,
   conferirPotinhos,
   FOLGA_DA_ENTRADA_MS,
-  desistenciaAposReceberAberta,
+  desistenciaDaClienteAberta,
   devolucaoNaDesistencia,
   entradaEmFolgaAgora,
   horasParaPagarEntrada,
@@ -527,7 +529,7 @@ const whereAbertas = (userId: string, agora: Date): Prisma.EncomendaWhereInput =
  * - 503 recurso desativado, CNPJ/CPF ou e-mail da loja pendentes (D13) ou pagamento pelo site
  *   indisponível (nada é gravado);
  * - 400 datas (por campo, contra o "hoje" da loja no SERVIDOR); 422 sabor indisponível em mini;
- *   400 potinhos fora de 20–50 (em `itens`); 400 itens adicionais repetidos (em `adicionais`, no schema);
+ *   400 potinhos fora de 10–50 ou sabores demais para a faixa (em `itens`); 400 itens adicionais repetidos (em `adicionais`, no schema);
  *   422 item adicional desconhecido ou desativado (`detalhes.adicionaisIndisponiveis`);
  * - 409 política mudou (`politicaVersao`/`percentualRetido` diferentes dos atuais);
  * - 404 endereço salvo de outra pessoa; 422 CEP inválido ou que não bate com a cidade (`endereco.cep`);
@@ -615,9 +617,13 @@ export async function criarEncomenda(
     }
   }
 
-  // Preço único por potinho (congelado na encomenda) e a MESMA regra de entrega dos pedidos (D3 e
-  // decisão da dona de 2026-10-21): só Teresina, com a taxa fixa do painel; retirada sem frete.
-  const precoPotinhoCentavos = centavos(config.precoPotinho);
+  // Preço por potinho pela faixa (10 a 19 ou 20 em diante, decisão da dona de 2026-11-24), congelado na
+  // encomenda, e a MESMA regra de entrega dos pedidos (D3 e decisão de 2026-10-21): só Teresina, com a taxa
+  // fixa do painel; retirada sem frete.
+  const precoPotinhoCentavos = precoDoPotinhoCentavos(potinhos.total, {
+    poucosCentavos: centavos(config.precoPotinhoPoucos),
+    muitosCentavos: centavos(config.precoPotinho),
+  });
   const pesoTotalGramas = pesoDaEncomenda(potinhos.total, config.pesoPotinhoGramas, config.pesoEmbalagemGramas);
   const taxaCentavos = entrada.modoEntrega === "ENTREGA" ? await taxaDeEntregaAtualCentavos() : 0;
   const frete = calcularFrete({ modo: entrada.modoEntrega, cep, taxaCentavos });
@@ -739,12 +745,13 @@ export async function desistirDaEncomenda(
   let e = await ler();
   if (!e) throw new ErroNegocio(404, "Encomenda não encontrada.");
 
-  const desistivel: StatusEncomenda[] = ["SOLICITADA", "AGUARDANDO_ENTRADA", ...STATUS_CONFIRMADOS];
-  const podeDesistir = (x: EncomendaCompleta) => desistivel.includes(x.status) || desistenciaAposReceberAberta(x, agora);
+  // Pela política que a cliente aceitou: v3, até 3 dias depois de pagar a entrada; v2, aberta ou até 7 dias
+  // depois de receber; v1, aberta.
+  const podeDesistir = (x: EncomendaCompleta) => desistenciaDaClienteAberta(x, agora);
   if (!podeDesistir(e)) {
     throw new ErroNegocio(
       409,
-      e.status === "ENTREGUE"
+      e.status === "ENTREGUE" || statusConfirmado(e.status)
         ? "O prazo para desistir pelo site terminou. Fale com a Geleiô no Instagram @ge.leio."
         : "Esta encomenda já foi encerrada.",
       { statusAtual: e.status },
@@ -774,6 +781,7 @@ export async function desistirDaEncomenda(
     quem: "CLIENTE",
     percentualRetido: e.percentualRetido,
     politicaVersao: e.politicaVersao,
+    entradaPagaEm: e.entradaPagaEm,
   });
   if (previa.devolucao !== devolucaoEsperadaCentavos) {
     throw new ErroNegocio(409, "O valor da devolução mudou. Confira antes de desistir.", {

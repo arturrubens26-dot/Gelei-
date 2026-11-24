@@ -767,8 +767,12 @@ enum DevolucaoMotivo {
 model ConfigLembrancinhas {
   id                  String   @id
   ativo               Boolean  @default(false)
-  /// Preço de UM potinho, em reais (único para todos os sabores na v1).
+  /// Preço de UM potinho, em reais, nas encomendas de 20 potinhos ou mais (até 2 sabores). O mesmo para
+  /// todos os sabores.
   precoPotinho        Decimal  @map("preco_potinho") @db.Decimal(10, 2)
+  /// Preço de UM potinho, em reais, nas encomendas de 10 a 19 potinhos (um sabor só). Decisão da dona,
+  /// 2026-11-24: R$ 7,00 (e R$ 6,00 de 20 em diante).
+  precoPotinhoPoucos  Decimal  @default(7.00) @map("preco_potinho_poucos") @db.Decimal(10, 2)
   /// Peso do potinho cheio (geleia + vidro + tampa), para o frete.
   pesoPotinhoGramas   Int      @map("peso_potinho_gramas")
   /// Peso da embalagem da encomenda inteira, somado ao dos potinhos no frete.

@@ -38,16 +38,17 @@ const catalogo: AdicionalDoCatalogo[] = [
   { id: "colherzinha", nome: "Colherzinha pequena", precoCentavos: 30 },
 ];
 
-describe("limites da encomenda: de 20 a 50 potinhos, 10 dias de antecedência", () => {
+describe("limites da encomenda: de 10 a 50 potinhos, 10 dias de antecedência", () => {
   const mini = new Set(["morango"]);
   it("as constantes", () => {
-    assert.equal(MIN_POTINHOS, 20);
+    assert.equal(MIN_POTINHOS, 10);
     assert.equal(MAX_POTINHOS, 50);
     assert.equal(ANTECEDENCIA_MIN_DIAS, 10);
   });
-  it("19 recusado (com a mensagem); 20 e 50 aceitos; 51 recusado", () => {
-    const poucos = conferirPotinhos([{ productId: "morango", quantidade: 19 }], mini);
-    assert.equal(!poucos.ok && poucos.mensagem, "Mínimo de 20 potinhos; você escolheu 19.");
+  it("9 recusado (com a mensagem); 10, 20 e 50 aceitos; 51 recusado", () => {
+    const poucos = conferirPotinhos([{ productId: "morango", quantidade: 9 }], mini);
+    assert.equal(!poucos.ok && poucos.mensagem, "Mínimo de 10 potinhos; você escolheu 9.");
+    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 10 }], mini).ok, true);
     assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 20 }], mini).ok, true);
     assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 50 }], mini).ok, true);
     const muitos = conferirPotinhos([{ productId: "morango", quantidade: 51 }], mini);

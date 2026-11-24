@@ -6,7 +6,7 @@ import { pendenciasLegais } from "@/lib/dados-loja";
 import { origemDaApiDeTeste } from "@/lib/infinitepay";
 import { db } from "@/lib/db";
 import { POLITICA_VERSAO } from "@/lib/encomendas-politica";
-import { MAX_POTINHOS, MIN_POTINHOS } from "@/lib/encomendas-regras";
+import { MAX_POTINHOS, MIN_POTINHOS, POTINHOS_FAIXA_MAIOR } from "@/lib/encomendas-regras";
 import { paraAdicionalPublico, type AdicionalPublicoDTO } from "@/lib/mimos-adicionais";
 import { pagamentoOnlineDisponivel } from "@/lib/pagamentos";
 import { separarNome } from "@/lib/produtos-regras";
@@ -24,16 +24,22 @@ export type LembrancinhasDTO = {
    */
   aceitandoSolicitacoes: boolean;
   motivoFechado: string | null;
+  /** Preço de cada potinho de 20 em diante (até 2 sabores). */
   precoPotinho: number;
   precoPotinhoCentavos: number;
+  /** Preço de cada potinho de 10 a 19 (um sabor só). */
+  precoPotinhoPoucos: number;
+  precoPotinhoPoucosCentavos: number;
   pesoPotinhoGramas: number;
   pesoEmbalagemGramas: number;
-  /** Sempre 0 (política v2: nada é retido; a coluna da configuração é ignorada). Vai no POST como aceite. */
+  /** Sempre 0 (as políticas v2 e v3 não usam percentual; a coluna da configuração é ignorada). Vai no POST como aceite. */
   percentualRetido: number;
   /** Versão do texto da política que a cliente lê e aceita (volta no POST, com o percentual). */
   politicaVersao: string;
   minPotinhos: number;
   maxPotinhos: number;
+  /** A partir de quantos potinhos vale o preço `precoPotinho` e a escolha de 2 sabores. */
+  potinhosFaixaMaior: number;
   /** Sabores à venda E marcados "disponível em mini", em ordem alfabética. */
   sabores: { productId: string; sabor: string; imagemUrl: string }[];
   /** Itens adicionais ATIVOS (florzinhas, paninho, caixinha, colherzinha), na ordem do painel. Preço por potinho. */
@@ -104,18 +110,22 @@ export async function obterLembrancinhas(): Promise<LembrancinhasDTO> {
     pagamentoDisponivel: pagamentoOnlineDisponivel(), sabores: sabores.length });
   // Centavos inteiros a partir do Decimal (sem passar por float).
   const precoPotinhoCentavos = config ? config.precoPotinho.mul(100).toNumber() : 0;
+  const precoPotinhoPoucosCentavos = config ? config.precoPotinhoPoucos.mul(100).toNumber() : 0;
   return {
     ativo,
     aceitandoSolicitacoes: motivoFechado === null,
     motivoFechado,
     precoPotinho: precoPotinhoCentavos / 100,
     precoPotinhoCentavos,
+    precoPotinhoPoucos: precoPotinhoPoucosCentavos / 100,
+    precoPotinhoPoucosCentavos,
     pesoPotinhoGramas: config?.pesoPotinhoGramas ?? 0,
     pesoEmbalagemGramas: config?.pesoEmbalagemGramas ?? 0,
     percentualRetido: 0,
     politicaVersao: POLITICA_VERSAO,
     minPotinhos: MIN_POTINHOS,
     maxPotinhos: MAX_POTINHOS,
+    potinhosFaixaMaior: POTINHOS_FAIXA_MAIOR,
     sabores,
     adicionais: adicionais.map(paraAdicionalPublico),
   };

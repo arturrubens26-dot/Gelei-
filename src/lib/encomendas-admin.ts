@@ -750,7 +750,10 @@ export async function executarAcaoAdmin(
 
 export type ConfigLembrancinhasAdminDTO = {
   ativo: boolean;
+  /** Preço de cada potinho de 20 em diante. */
   precoPotinhoCentavos: number;
+  /** Preço de cada potinho de 10 a 19 (um sabor só). */
+  precoPotinhoPoucosCentavos: number;
   pesoPotinhoGramas: number;
   pesoEmbalagemGramas: number;
   /** Sempre 0: a política v2 (art. 49) não retém nada da entrada. Mantido na API só por compatibilidade. */
@@ -778,6 +781,7 @@ export async function obterConfigLembrancinhasAdmin(): Promise<ConfigLembrancinh
   return {
     ativo: config?.ativo ?? false,
     precoPotinhoCentavos: config ? centavos(config.precoPotinho) : 600,
+    precoPotinhoPoucosCentavos: config ? centavos(config.precoPotinhoPoucos) : 700,
     pesoPotinhoGramas: config?.pesoPotinhoGramas ?? 110,
     pesoEmbalagemGramas: config?.pesoEmbalagemGramas ?? 300,
     percentualRetido: 0,
@@ -805,6 +809,7 @@ export async function salvarConfigLembrancinhas(
     "precoPotinhoCentavos" in entrada
       ? {
           precoPotinho: reaisDe(entrada.precoPotinhoCentavos),
+          precoPotinhoPoucos: reaisDe(entrada.precoPotinhoPoucosCentavos),
           pesoPotinhoGramas: entrada.pesoPotinhoGramas,
           pesoEmbalagemGramas: entrada.pesoEmbalagemGramas,
         }
@@ -817,6 +822,7 @@ export async function salvarConfigLembrancinhas(
       id: ID_CONFIG_LEMBRANCINHAS,
       ativo: entrada.ativo,
       precoPotinho: reaisDe(600),
+      precoPotinhoPoucos: reaisDe(700),
       pesoPotinhoGramas: 110,
       pesoEmbalagemGramas: 300,
       percentualRetido: 0,

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { formatarBRL } from "@/lib/dinheiro";
 import { PRAZO_DEVOLUCAO_DIAS_UTEIS } from "@/lib/encomendas-politica";
-import { DIAS_DESISTENCIA_APOS_RECEBER } from "@/lib/encomendas-regras";
+import { DIAS_DESISTENCIA_APOS_ENTRADA, DIAS_DESISTENCIA_APOS_RECEBER } from "@/lib/encomendas-regras";
 
 type Previa = { devolucao: number; retido: number; devolucaoCentavos: number };
 
@@ -13,7 +13,12 @@ type Props = {
   previaInicial: Previa;
   /** Política v2 (art. 49): nada é retido; desiste antes da entrega e até 7 dias depois de receber. */
   semRetencao: boolean;
-  /** v2, já recebida: "quarta-feira, 11/11/2026, às 23h59", o fim da desistência pelo site. */
+  /** Política v3 (atual): desiste até 3 dias depois de pagar a entrada, com devolução de tudo. */
+  tresDias: boolean;
+  /**
+   * "quarta-feira, 11/11/2026, às 23h59", o fim da desistência pelo site: v3 com a entrada paga (3 dias
+   * depois dela) ou v2 já recebida (7 dias depois de receber).
+   */
   desistirAte: string | null;
   /** v1 (antiga): "quarta-feira, 11/11/2026, às 23h59", até quando a desistência devolve tudo. */
   corte: string;
@@ -29,7 +34,7 @@ type Props = {
  * viu: se o corte passou entre a tela e o clique, o servidor responde 409 com a nova prévia, a tela a
  * mostra e pede para confirmar de novo.
  */
-export function DesistirDaEncomenda({ encomendaId, previaInicial, semRetencao, desistirAte, corte, depoisDoCorte, temPagamento }: Props) {
+export function DesistirDaEncomenda({ encomendaId, previaInicial, semRetencao, tresDias, desistirAte, corte, depoisDoCorte, temPagamento }: Props) {
   const router = useRouter();
   const [previa, setPrevia] = useState(previaInicial);
   const [confirmando, setConfirmando] = useState(false);
@@ -91,7 +96,7 @@ export function DesistirDaEncomenda({ encomendaId, previaInicial, semRetencao, d
     ? "Nada foi cobrado, então não há o que devolver."
     : semRetencao
       ? `Devolvemos ${formatarBRL(previa.devolucao)}, tudo o que você pagou, de imediato e pelo mesmo meio do pagamento (no cartão, o estorno aparece na fatura conforme o prazo do banco).${
-          desistirAte ? " Combinamos com você a devolução dos potinhos, que devem estar lacrados e sem uso; o custo do retorno é da Geleiô." : ""
+          desistirAte && !tresDias ? " Combinamos com você a devolução dos potinhos, que devem estar lacrados e sem uso; o custo do retorno é da Geleiô." : ""
         }`
       : `Devolvemos ${formatarBRL(previa.devolucao)}, pelo mesmo meio do pagamento, em até ${PRAZO_DEVOLUCAO_DIAS_UTEIS} dias úteis.${
           previa.retido > 0 ? ` Ficam com a Geleiô ${formatarBRL(previa.retido)} da entrada, como diz a política.` : ""
@@ -103,7 +108,13 @@ export function DesistirDaEncomenda({ encomendaId, previaInicial, semRetencao, d
         Desistir da encomenda
       </h2>
       <p className="mt-2 text-sm leading-relaxed">
-        {semRetencao ? (
+        {tresDias ? (
+          desistirAte ? (
+            `Você pode desistir aqui até ${desistirAte} (${DIAS_DESISTENCIA_APOS_ENTRADA} dias depois de pagar a entrada), e devolvemos tudo o que pagou. Depois disso, não é mais possível desistir.`
+          ) : (
+            `Você ainda não pagou a entrada: pode desistir quando quiser. Depois de pagar, terá ${DIAS_DESISTENCIA_APOS_ENTRADA} dias para desistir com devolução de tudo.`
+          )
+        ) : semRetencao ? (
           desistirAte ? (
             `Você pode desistir aqui até ${desistirAte} (${DIAS_DESISTENCIA_APOS_RECEBER} dias depois de receber, art. 49 do Código de Defesa do Consumidor), e devolvemos tudo o que pagou, sem taxa.`
           ) : (

@@ -14,7 +14,15 @@ import {
   FOLGA_DA_ENTRADA_MS,
   MAX_POTINHOS,
   MIN_POTINHOS,
+  POTINHOS_FAIXA_MAIOR,
   ROTULO_STATUS_ENCOMENDA,
+  VERSAO_POLITICA_ART49,
+  VERSAO_POLITICA_TRES_DIAS,
+  desistenciaDaClienteAberta,
+  fimDaDesistenciaAposEntrada,
+  maxSaboresPara,
+  prazoDaDesistencia,
+  precoDoPotinhoCentavos,
   STATUS_ENCOMENDA,
   STATUS_FINAIS,
   acaoAdminSchema,
@@ -239,17 +247,41 @@ describe("validade do link (valid_until)", () => {
 
 describe("potinhos", () => {
   const mini = new Set(["morango", "maracuja", "pimenta"]);
-  it("19 abaixo do mínimo; 20 e 50 passam; 51 acima", () => {
-    assert.equal(MIN_POTINHOS, 20);
+  it("9 abaixo do mínimo; 10, 19, 20 e 50 passam; 51 acima", () => {
+    assert.equal(MIN_POTINHOS, 10);
     assert.equal(MAX_POTINHOS, 50);
-    const abaixo = conferirPotinhos([{ productId: "morango", quantidade: 19 }], mini);
-    assert.deepEqual(abaixo.ok ? null : [abaixo.motivo, abaixo.mensagem], ["abaixo-do-minimo", "Mínimo de 20 potinhos; você escolheu 19."]);
-    // Os 15 de antes não valem mais.
-    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 15 }], mini).ok, false);
+    const abaixo = conferirPotinhos([{ productId: "morango", quantidade: 9 }], mini);
+    assert.deepEqual(abaixo.ok ? null : [abaixo.motivo, abaixo.mensagem], ["abaixo-do-minimo", "Mínimo de 10 potinhos; você escolheu 9."]);
+    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 19 }], mini).ok, true);
+    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 20 }], mini).ok, true);
     assert.equal(conferirPotinhos([{ productId: "morango", quantidade: MIN_POTINHOS }], mini).ok, true);
     assert.equal(conferirPotinhos([{ productId: "morango", quantidade: MAX_POTINHOS }], mini).ok, true);
     const acima = conferirPotinhos([{ productId: "morango", quantidade: 51 }], mini);
     assert.deepEqual(acima.ok ? null : [acima.motivo, acima.mensagem], ["acima-do-maximo", "Máximo de 50 potinhos; você escolheu 51."]);
+  });
+  it("de 10 a 19 é um sabor só; de 20 em diante, até 2; 3 sabores nunca", () => {
+    assert.equal(POTINHOS_FAIXA_MAIOR, 20);
+    assert.deepEqual([9, 10, 19, 20, 50].map(maxSaboresPara), [1, 1, 1, 2, 2]);
+    const doisCom19 = conferirPotinhos([{ productId: "morango", quantidade: 10 }, { productId: "maracuja", quantidade: 9 }], mini);
+    assert.deepEqual(doisCom19.ok ? null : [doisCom19.motivo, doisCom19.mensagem], [
+      "sabores-demais",
+      "De 10 a 19 potinhos, é um sabor só. Com 20 ou mais, você pode escolher 2 sabores.",
+    ]);
+    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 10 }, { productId: "maracuja", quantidade: 10 }], mini).ok, true);
+    const tres = conferirPotinhos(
+      [{ productId: "morango", quantidade: 10 }, { productId: "maracuja", quantidade: 10 }, { productId: "pimenta", quantidade: 10 }],
+      mini,
+    );
+    assert.deepEqual(tres.ok ? null : [tres.motivo, tres.mensagem], ["sabores-demais", "Com 20 potinhos ou mais, escolha no máximo 2 sabores."]);
+    // O mesmo sabor repetido conta como um só.
+    assert.equal(conferirPotinhos([{ productId: "morango", quantidade: 5 }, { productId: "morango", quantidade: 6 }], mini).ok, true);
+  });
+  it("preço pela faixa: 10 a 19 com o preço da faixa menor, 20 em diante com o da maior", () => {
+    const precos = { poucosCentavos: 700, muitosCentavos: 600 };
+    assert.deepEqual([10, 19, 20, 50].map((n) => precoDoPotinhoCentavos(n, precos)), [700, 700, 600, 600]);
+    // 10 × R$ 7,00 = R$ 70,00 (entrada R$ 35,00); 20 × R$ 6,00 = R$ 120,00 (entrada R$ 60,00).
+    assert.deepEqual(calcularValores({ subtotalCentavos: 10 * precoDoPotinhoCentavos(10, precos), freteCentavos: 0 }).entrada, 3500);
+    assert.deepEqual(calcularValores({ subtotalCentavos: 20 * precoDoPotinhoCentavos(20, precos), freteCentavos: 0 }).entrada, 6000);
   });
   it("Morango ×13 + Maracujá ×10 = 23", () => {
     const r = conferirPotinhos([{ productId: "morango", quantidade: 13 }, { productId: "maracuja", quantidade: 10 }], mini);
@@ -318,7 +350,7 @@ describe("valores (centavos)", () => {
 
 describe("devolução na desistência", () => {
   const corteEm = new Date("2026-11-12T03:00:00Z");
-  const base = { corteEm, entradaPaga: 6900, restantePago: 9900, percentualRetido: 100, politicaVersao: "2026-11-v1" };
+  const base = { corteEm, entradaPaga: 6900, restantePago: 9900, percentualRetido: 100, politicaVersao: "2026-11-v1", entradaPagaEm: null };
   it("cliente 1 ms antes do corte: devolve tudo", () => {
     assert.deepEqual(devolucaoNaDesistencia({ ...base, agora: new Date(corteEm.getTime() - 1), quem: "CLIENTE" }), { devolucao: 16800, retido: 0 });
   });
@@ -336,7 +368,7 @@ describe("devolução na desistência", () => {
     assert.deepEqual(devolucaoNaDesistencia({ ...base, percentualRetido: 0, agora: corteEm, quem: "CLIENTE" }), { devolucao: 16800, retido: 0 });
     // 33% de 4493 = 1482,69 → retém 1482.
     assert.deepEqual(
-      devolucaoNaDesistencia({ corteEm, entradaPaga: 4493, restantePago: 0, percentualRetido: 33, politicaVersao: "2026-11-v1", agora: corteEm, quem: "CLIENTE" }),
+      devolucaoNaDesistencia({ corteEm, entradaPaga: 4493, restantePago: 0, percentualRetido: 33, politicaVersao: "2026-11-v1", entradaPagaEm: null, agora: corteEm, quem: "CLIENTE" }),
       { devolucao: 3011, retido: 1482 },
     );
   });
@@ -344,13 +376,56 @@ describe("devolução na desistência", () => {
     assert.deepEqual(devolucaoNaDesistencia({ ...base, restantePago: 0, agora: corteEm, quem: "CLIENTE" }), { devolucao: 0, retido: 6900 });
   });
   it("v2 (art. 49): a cliente desiste a qualquer momento e recebe TUDO, mesmo com percentual 100 e depois do corte", () => {
-    const v2 = { ...base, politicaVersao: POLITICA_VERSAO };
-    assert.equal(retemEntradaNaDesistencia(POLITICA_VERSAO), false);
+    const v2 = { ...base, politicaVersao: VERSAO_POLITICA_ART49 };
+    assert.equal(retemEntradaNaDesistencia(VERSAO_POLITICA_ART49), false);
     assert.equal(retemEntradaNaDesistencia("2026-11-v1"), true);
     for (const agora of [new Date(corteEm.getTime() - 1), corteEm, new Date(corteEm.getTime() + 40 * HORA)]) {
       assert.deepEqual(devolucaoNaDesistencia({ ...v2, agora, quem: "CLIENTE" }), { devolucao: 16800, retido: 0 });
     }
     assert.deepEqual(devolucaoNaDesistencia({ ...v2, restantePago: 0, agora: corteEm, quem: "CLIENTE" }), { devolucao: 6900, retido: 0 });
+  });
+});
+
+describe("desistência até 3 dias depois da entrada (v3)", () => {
+  const entradaPagaEm = new Date("2026-11-24T15:00:00Z"); // 24/11, 12h em Teresina
+  // 27/11 23h59 em Teresina = 28/11 02:59Z; o fim é 28/11 03:00Z (00:00 de 28/11 local).
+  const fim = new Date("2026-11-28T03:00:00Z");
+  const v3 = { politicaVersao: VERSAO_POLITICA_TRES_DIAS, entradaPagaEm, entregueEm: null };
+  const pago = { corteEm: new Date("2026-12-10T03:00:00Z"), entradaPaga: 3500, restantePago: 0, percentualRetido: 0, politicaVersao: VERSAO_POLITICA_TRES_DIAS, entradaPagaEm };
+  it("a janela vai até 23h59 do 3º dia depois do dia em que a entrada foi paga (horário de Teresina)", () => {
+    assert.equal(fimDaDesistenciaAposEntrada(entradaPagaEm).getTime(), fim.getTime());
+    // Paga às 23h30 de 24/11 em Teresina (25/11 02:30Z): o dia que conta é 24/11.
+    assert.equal(fimDaDesistenciaAposEntrada(new Date("2026-11-25T02:30:00Z")).getTime(), fim.getTime());
+  });
+  it("antes de pagar a entrada, desiste quando quiser; depois, só dentro dos 3 dias", () => {
+    for (const status of ["SOLICITADA", "AGUARDANDO_ENTRADA"] as const) {
+      assert.equal(desistenciaDaClienteAberta({ ...v3, status, entradaPagaEm: null }, new Date("2027-01-01T00:00:00Z")), true, status);
+    }
+    for (const status of ["CONFIRMADA", "EM_PRODUCAO", "PRONTA"] as const) {
+      assert.equal(desistenciaDaClienteAberta({ ...v3, status }, new Date(fim.getTime() - 1)), true, status);
+      assert.equal(desistenciaDaClienteAberta({ ...v3, status }, fim), false, status);
+    }
+    // Entregue ou encerrada: nunca (a v3 não tem os 7 dias depois de receber).
+    assert.equal(desistenciaDaClienteAberta({ ...v3, status: "ENTREGUE", entregueEm: entradaPagaEm }, new Date(entradaPagaEm.getTime() + HORA)), false);
+    assert.equal(desistenciaDaClienteAberta({ ...v3, status: "CANCELADA" }, entradaPagaEm), false);
+  });
+  it("o prazo a mostrar é o fim dos 3 dias, só com a entrada paga e a janela aberta", () => {
+    assert.equal(prazoDaDesistencia({ ...v3, status: "CONFIRMADA" }, entradaPagaEm)?.getTime(), fim.getTime());
+    assert.equal(prazoDaDesistencia({ ...v3, status: "CONFIRMADA" }, fim), null);
+    assert.equal(prazoDaDesistencia({ ...v3, status: "AGUARDANDO_ENTRADA", entradaPagaEm: null }, entradaPagaEm), null);
+  });
+  it("dentro do prazo devolve tudo; depois, nada volta para a cliente; a loja cancelando devolve tudo sempre", () => {
+    assert.deepEqual(devolucaoNaDesistencia({ ...pago, agora: new Date(fim.getTime() - 1), quem: "CLIENTE" }), { devolucao: 3500, retido: 0 });
+    assert.deepEqual(devolucaoNaDesistencia({ ...pago, restantePago: 3500, agora: new Date(fim.getTime() - 1), quem: "CLIENTE" }), { devolucao: 7000, retido: 0 });
+    assert.deepEqual(devolucaoNaDesistencia({ ...pago, agora: fim, quem: "CLIENTE" }), { devolucao: 0, retido: 3500 });
+    assert.deepEqual(devolucaoNaDesistencia({ ...pago, agora: fim, quem: "LOJA" }), { devolucao: 3500, retido: 0 });
+    // Sem a entrada paga, nada foi cobrado.
+    assert.deepEqual(devolucaoNaDesistencia({ ...pago, entradaPaga: 0, entradaPagaEm: null, agora: fim, quem: "CLIENTE" }), { devolucao: 0, retido: 0 });
+  });
+  it("a v2 continua com os 7 dias depois de receber (encomendas antigas não mudam)", () => {
+    const v2 = { politicaVersao: VERSAO_POLITICA_ART49, entradaPagaEm, entregueEm: entradaPagaEm };
+    assert.equal(desistenciaDaClienteAberta({ ...v2, status: "CONFIRMADA" }, new Date("2027-01-01T00:00:00Z")), true);
+    assert.equal(desistenciaDaClienteAberta({ ...v2, status: "ENTREGUE" }, new Date(entradaPagaEm.getTime() + 2 * 24 * HORA)), true);
   });
 });
 
@@ -360,7 +435,7 @@ describe("desistência depois de receber (v2, art. 49)", () => {
     // 21/11 23h59 em Teresina = 22/11 02:59Z; o fim é 22/11 03:00Z (00:00 de 22/11 local).
     assert.equal(fimDaDesistenciaAposReceber(entregueEm).toISOString(), "2026-11-22T03:00:00.000Z");
   });
-  const entregue = { status: "ENTREGUE" as const, politicaVersao: POLITICA_VERSAO, entregueEm };
+  const entregue = { status: "ENTREGUE" as const, politicaVersao: VERSAO_POLITICA_ART49, entregueEm };
   it("aberta até o fim da janela; fechada depois, na v1 e sem data de entrega", () => {
     assert.equal(desistenciaAposReceberAberta(entregue, new Date("2026-11-22T02:59:59Z")), true);
     assert.equal(desistenciaAposReceberAberta(entregue, new Date("2026-11-22T03:00:00Z")), false);
@@ -371,7 +446,7 @@ describe("desistência depois de receber (v2, art. 49)", () => {
   it("acoesDaCliente: ENTREGUE v2 dentro da janela devolve tudo; fora dela e na v1, nada", () => {
     const e = encomenda({
       status: "ENTREGUE",
-      politicaVersao: POLITICA_VERSAO,
+      politicaVersao: VERSAO_POLITICA_ART49,
       entregueEm,
       entradaPagaEm: new Date("2026-11-11T13:00:00Z"),
       restantePagoEm: new Date("2026-11-12T13:00:00Z"),
@@ -517,7 +592,7 @@ describe("status efetivo e ações", () => {
     assert.equal(acoesDaCliente(quitada, entradaAte).pagarRestante, false);
     assert.equal(acoesDaCliente(encomenda({ status: "ENTREGUE" }), entradaAte).desistir, null);
     // v2: depois do corte nada fica retido.
-    assert.deepEqual(acoesDaCliente({ ...confirmada, politicaVersao: POLITICA_VERSAO }, entradaAte).desistir, { devolucao: 6900, retido: 0 });
+    assert.deepEqual(acoesDaCliente({ ...confirmada, politicaVersao: VERSAO_POLITICA_ART49 }, entradaAte).desistir, { devolucao: 6900, retido: 0 });
   });
   it("loja: aprovar na SOLICITADA; produção antes do corte avisa; entregar sem quitação fica bloqueado", () => {
     const agora = new Date("2026-11-11T12:00:00Z");
@@ -529,7 +604,7 @@ describe("status efetivo e ações", () => {
     );
     assert.match(confirmada.find((a) => a.acao === "iniciar-producao")!.aviso ?? "", /ainda pode desistir com devolução integral até quarta-feira, 11\/11\/2026, às 23h59/);
     const confirmadaV2 = acoesDaLoja(
-      { ...encomenda({ status: "CONFIRMADA", entradaPagaEm: agora, politicaVersao: POLITICA_VERSAO }), devolucaoPendente: false, modo: "ENTREGA" },
+      { ...encomenda({ status: "CONFIRMADA", entradaPagaEm: agora, politicaVersao: VERSAO_POLITICA_ART49 }), devolucaoPendente: false, modo: "ENTREGA" },
       agora,
     );
     assert.match(confirmadaV2.find((a) => a.acao === "iniciar-producao")!.aviso ?? "", /art\. 49/);
@@ -791,7 +866,7 @@ describe("schemas", () => {
     modoEntrega: "RETIRADA",
     telefone: "(86) 99999-1234",
     aceitePolitica: true,
-    politicaVersao: POLITICA_VERSAO,
+    politicaVersao: VERSAO_POLITICA_ART49,
     percentualRetido: 100,
     totalEsperadoCentavos: 9000,
   };
@@ -835,11 +910,13 @@ describe("schemas", () => {
   it("desistência e configuração", () => {
     assert.equal(desistenciaSchema.safeParse({ devolucaoEsperadaCentavos: 6900 }).success, true);
     assert.equal(desistenciaSchema.safeParse({ devolucaoEsperadaCentavos: 69.5 }).success, false);
-    const cfg = { precoPotinhoCentavos: "600", pesoPotinhoGramas: 110, pesoEmbalagemGramas: 300, ativo: false };
+    const cfg = { precoPotinhoCentavos: "600", precoPotinhoPoucosCentavos: 700, pesoPotinhoGramas: 110, pesoEmbalagemGramas: 300, ativo: false };
     assert.equal(configLembrancinhasSchema.parse(cfg).precoPotinhoCentavos, 600);
     // O percentual retido não existe mais: se vier (painel antigo), é descartado, nunca gravado.
     assert.equal("percentualRetido" in configLembrancinhasSchema.parse({ ...cfg, percentualRetido: 100 }), false);
     assert.equal(configLembrancinhasSchema.safeParse({ ...cfg, precoPotinhoCentavos: 0 }).success, false);
+    assert.equal(configLembrancinhasSchema.parse(cfg).precoPotinhoPoucosCentavos, 700);
+    assert.equal(configLembrancinhasSchema.safeParse({ ...cfg, precoPotinhoPoucosCentavos: undefined }).success, false);
   });
 });
 
@@ -990,13 +1067,27 @@ describe("política de desistência", () => {
     assert.match(textos[2], /também devolvemos 100% do valor da encomenda/);
     assert.doesNotMatch(textos[4], /frete/);
   });
-  it("a versão atual é a v2 e as duas versões são conhecidas", () => {
-    assert.equal(POLITICA_VERSAO, "2026-11-v2");
+  it("a versão atual é a v3 e as três versões são conhecidas", () => {
+    assert.equal(POLITICA_VERSAO, "2026-11-v3");
+    assert.equal(POLITICA_VERSAO, VERSAO_POLITICA_TRES_DIAS);
+    assert.equal(VERSAO_POLITICA_ART49, "2026-11-v2");
     assert.equal(versaoDaPoliticaConhecida(V1), true);
+    assert.equal(versaoDaPoliticaConhecida(VERSAO_POLITICA_ART49), true);
+    assert.equal(versaoDaPoliticaConhecida(VERSAO_POLITICA_TRES_DIAS), true);
+  });
+  it("v3: 3 dias depois de pagar a entrada, devolve tudo nesse prazo e nada depois", () => {
+    const textos = textosDaPolitica(VERSAO_POLITICA_TRES_DIAS, { ...dados, percentualRetido: 100 });
+    const todo = textos.join("\n").replace(/\u00a0/g, " ");
+    assert.match(todo, /você tem 3 dias para desistir aqui no site/);
+    assert.match(todo, /23h59 do 3º dia depois do pagamento/);
+    assert.match(todo, /devolvemos 100% do que você pagou \(a entrada de R\$ 69,00/);
+    assert.match(todo, /não é mais possível desistir, e o valor pago não é devolvido/);
+    assert.match(todo, /Entregamos apenas em Teresina-PI/);
+    assert.doesNotMatch(todo, /7 dias|art\. 49/);
   });
   it("v2: art. 49, 7 dias depois de receber, devolve tudo, sem retenção, e IGNORA o percentual", () => {
     for (const percentualRetido of [0, 50, 100]) {
-      const textos = textosDaPolitica(POLITICA_VERSAO, { ...dados, percentualRetido });
+      const textos = textosDaPolitica(VERSAO_POLITICA_ART49, { ...dados, percentualRetido });
       const todo = textos.join("\n").replace(/\u00a0/g, " ");
       assert.equal(textos.length, 7);
       assert.match(todo, /art\. 49 do Código de Defesa do Consumidor/);
@@ -1011,16 +1102,16 @@ describe("política de desistência", () => {
       assert.doesNotMatch(todo, /fica com a Geleiô|ficam com a Geleiô|retém|retida|retido|retenção|3 dias antes|23h59/);
     }
     // Idêntico para qualquer percentual: o texto não muda.
-    assert.deepEqual(textosDaPolitica(POLITICA_VERSAO, { ...dados, percentualRetido: 0 }), textosDaPolitica(POLITICA_VERSAO, { ...dados, percentualRetido: 100 }));
-    assert.doesNotMatch(textosDaPolitica(POLITICA_VERSAO, { ...dados, freteCentavos: 0 }).join(" "), /frete/);
+    assert.deepEqual(textosDaPolitica(VERSAO_POLITICA_ART49, { ...dados, percentualRetido: 0 }), textosDaPolitica(VERSAO_POLITICA_ART49, { ...dados, percentualRetido: 100 }));
+    assert.doesNotMatch(textosDaPolitica(VERSAO_POLITICA_ART49, { ...dados, freteCentavos: 0 }).join(" "), /frete/);
   });
-  it("o aviso jurídico fala em arcar com as desistências, não em reter a entrada", () => {
+  it("o aviso jurídico explica a regra dos 3 dias e o risco frente ao art. 49", () => {
+    assert.match(AVISO_JURIDICO, /3 dias depois de pagar a entrada/);
     assert.match(AVISO_JURIDICO, /art\. 49/);
-    assert.match(AVISO_JURIDICO, /arca com as desistências/);
-    assert.doesNotMatch(AVISO_JURIDICO, /reter parte da entrada/i);
+    assert.match(AVISO_JURIDICO, /contestada no Procon/);
   });
   it("versão desconhecida é recusada", () => {
-    assert.equal(versaoDaPoliticaConhecida(POLITICA_VERSAO), true);
+    assert.equal(versaoDaPoliticaConhecida(VERSAO_POLITICA_ART49), true);
     assert.equal(versaoDaPoliticaConhecida("2020-01-v0"), false);
     assert.throws(() => textosDaPolitica("2020-01-v0", dados), RangeError);
     assert.match(AVISO_JURIDICO, /Procon-PI/);
@@ -1198,7 +1289,7 @@ describe("tela da cliente: expirada com pagamento tardio e pagamento em conferê
     assert.doesNotMatch(s.texto, /nada foi cobrado/);
   });
   it("v2: CANCELADA com devolução pendente promete devolução imediata, nunca 'ficou com a Geleiô'", () => {
-    const v2 = { ...base, politica: { ...base.politica, versao: POLITICA_VERSAO, percentualAceito: 0, percentualRetido: 0 } };
+    const v2 = { ...base, politica: { ...base.politica, versao: VERSAO_POLITICA_ART49, percentualAceito: 0, percentualRetido: 0 } };
     const pago = {
       ...v2,
       statusEfetivo: "CANCELADA" as StatusEncomenda,
@@ -1221,7 +1312,7 @@ describe("tela da cliente: expirada com pagamento tardio e pagamento em conferê
     const entregue = {
       ...base,
       statusEfetivo: "ENTREGUE" as StatusEncomenda,
-      politica: { ...base.politica, versao: POLITICA_VERSAO },
+      politica: { ...base.politica, versao: VERSAO_POLITICA_ART49 },
       acoes: { ...base.acoes, desistirAte: "2026-11-22T03:00:00.000Z" },
     };
     assert.match(situacaoDaEncomenda(entregue).texto, /você pode desistir aqui no site até sábado, 21\/11\/2026, às 23h59 \(7 dias depois de receber\): devolvemos tudo o que você pagou/);

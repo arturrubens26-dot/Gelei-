@@ -15,16 +15,20 @@ import { textosDaPolitica } from "@/lib/encomendas-politica";
 import {
   ANTECEDENCIA_MIN_DIAS,
   HORAS_PARA_PAGAR_ENTRADA,
+  MAX_SABORES_FAIXA_MAIOR,
   TAMANHO_MAX_TEXTO,
   calcularValores,
   corteDaEntrega,
   diaValido,
   faixaDeDatas,
   formatarPrazo,
+  maxSaboresPara,
   meioDia,
+  mensagemSaboresDemais,
   palavraDoModo,
   pesoDaEncomenda,
   prazosDaEncomenda,
+  precoDoPotinhoCentavos,
   validarDatas,
 } from "@/lib/encomendas-regras";
 import type { EnderecoSalvo } from "@/lib/enderecos";
@@ -64,7 +68,7 @@ type Props = {
 
 /**
  * Solicitação de mimos (minis de 40 ml), pensada primeiro para o celular. Na ordem: data da
- * festa, sabores (20 a 50 potinhos), itens adicionais (opcionais; valem para todos os potinhos, com o
+ * festa, sabores (10 a 19 potinhos de um sabor, ou 20 a 50 com até 2 sabores, cada faixa com o seu preço), itens adicionais (opcionais; valem para todos os potinhos, com o
  * preço por potinho do servidor), entrega ou retirada e o dia, WhatsApp e observação, e o resumo
  * com a política de desistência (as datas e valores desta encomenda) e o aceite.
  *
@@ -75,10 +79,11 @@ type Props = {
 export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneInicial, taxaEntregaCentavos }: Props) {
   const router = useRouter();
   const uid = useId();
-  const { minPotinhos, maxPotinhos } = config;
+  const { minPotinhos, maxPotinhos, potinhosFaixaMaior } = config;
 
-  // Valores que o servidor pode atualizar (409) sem recarregar a página.
-  const [precoCentavos, setPrecoCentavos] = useState(config.precoPotinhoCentavos);
+  // Valores que o servidor pode atualizar (409) sem recarregar a página. Os dois preços do painel: de 10 a
+  // 19 potinhos (`poucosCentavos`) e de 20 em diante (`muitosCentavos`).
+  const [precos, setPrecos] = useState({ poucosCentavos: config.precoPotinhoPoucosCentavos, muitosCentavos: config.precoPotinhoCentavos });
   const [taxaCentavos, setTaxaCentavos] = useState(taxaEntregaCentavos);
   const [politica, setPolitica] = useState({ versao: config.politicaVersao, percentualRetido: config.percentualRetido });
 
@@ -119,8 +124,14 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
   const porId = new Map(sabores.map((s) => [s.productId, s]));
   const escolhidos = sabores.filter((s) => (quantidades[s.productId] ?? 0) > 0);
   const total = escolhidos.reduce((soma, s) => soma + quantidades[s.productId], 0);
-  const potinhosOk = total >= minPotinhos && total <= maxPotinhos;
+  const quantidadeOk = total >= minPotinhos && total <= maxPotinhos;
+  // De 10 a 19 potinhos é um sabor só; de 20 em diante, até 2 (a mesma regra do servidor).
+  const saboresOk = escolhidos.length <= maxSaboresPara(total);
+  const potinhosOk = quantidadeOk && saboresOk;
   const cheio = total >= maxPotinhos;
+  // Mais de 2 sabores nunca vale: o terceiro sabor nem começa.
+  const saboresNoTeto = escolhidos.length >= MAX_SABORES_FAIXA_MAIOR;
+  const precoCentavos = precoDoPotinhoCentavos(Math.max(total, minPotinhos), precos);
 
   function definirQuantidade(productId: string, valor: number) {
     const outros = total - (quantidades[productId] ?? 0);
@@ -238,8 +249,10 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
   function pendencias(): string[] {
     const faltas: string[] = [];
     if (!datasOk) faltas.push(dataFesta ? "Confira as datas." : "Escolha a data da festa.");
-    if (!potinhosOk) {
+    if (!quantidadeOk) {
       faltas.push(total < minPotinhos ? `Escolha pelo menos ${minPotinhos} potinhos (agora: ${total}).` : `No máximo ${maxPotinhos} potinhos.`);
+    } else if (!saboresOk) {
+      faltas.push(mensagemSaboresDemais(total));
     }
     if (!retirada && foraDaArea) faltas.push(`${AVISO_SO_TERESINA} Escolha a retirada na loja ou um endereço de Teresina.`);
     else if (!entregaPronta) faltas.push("Complete o endereço de entrega.");
@@ -359,7 +372,11 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
         return;
       }
       if (resposta.status === 409 && detalhes && typeof detalhes.total === "number") {
-        if (typeof detalhes.precoPotinho === "number") setPrecoCentavos(Math.round(detalhes.precoPotinho * 100));
+        // O preço que voltou é o da faixa desta encomenda (10 a 19 ou 20 em diante).
+        if (typeof detalhes.precoPotinho === "number") {
+          const novo = Math.round(detalhes.precoPotinho * 100);
+          setPrecos((p) => (total >= potinhosFaixaMaior ? { ...p, muitosCentavos: novo } : { ...p, poucosCentavos: novo }));
+        }
         if (Array.isArray(detalhes.adicionaisPorPotinho)) {
           const novos = new Map<string, number>(
             (detalhes.adicionaisPorPotinho as { id: string; precoCentavos: number }[]).map((a) => [a.id, a.precoCentavos]),
@@ -410,7 +427,14 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
   const idTelefone = `${uid}-telefone`;
   const idObs = `${uid}-obs`;
   const idAceite = `${uid}-aceite`;
-  const erroItens = errosCampo.itens?.[0] ?? (tentouEnviar && !potinhosOk ? `Escolha de ${minPotinhos} a ${maxPotinhos} potinhos; você escolheu ${total}.` : undefined);
+  const erroItens =
+    errosCampo.itens?.[0] ??
+    (tentouEnviar && !quantidadeOk
+      ? `Escolha de ${minPotinhos} a ${maxPotinhos} potinhos; você escolheu ${total}.`
+      : // A regra dos sabores aparece logo, sem esperar o envio: é a dúvida de quem acabou de marcar o 2º sabor.
+        !saboresOk && total > 0
+        ? mensagemSaboresDemais(total)
+        : undefined);
   const erroAceite = errosCampo.aceitePolitica?.[0] ?? (tentouEnviar && !aceite ? "Marque o aceite para enviar." : undefined);
   const taxa = taxaCentavos > 0 ? brl(taxaCentavos) : "Grátis";
   const progresso = Math.min(100, (total / maxPotinhos) * 100);
@@ -452,9 +476,18 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
       {/* 2. Sabores */}
       <Secao numero={2} titulo="Sabores e quantidades">
         <p className="mb-4 text-sm text-primaria/85">
-          Potinhos de 40 ml a <strong className="font-semibold">{brl(precoCentavos)}</strong> cada. Misture os sabores como quiser: de{" "}
-          {minPotinhos} a {maxPotinhos} potinhos no total.
+          Potinhos de 40 ml, em duas faixas:
         </p>
+        <ul className="mb-4 flex flex-col gap-1.5 text-sm text-primaria/85">
+          <li className={total > 0 && total < potinhosFaixaMaior ? "font-semibold text-primaria" : undefined}>
+            De {minPotinhos} a {potinhosFaixaMaior - 1} potinhos: <strong className="font-semibold">um sabor só</strong>, a{" "}
+            <strong className="font-semibold">{brl(precos.poucosCentavos)}</strong> cada.
+          </li>
+          <li className={total >= potinhosFaixaMaior ? "font-semibold text-primaria" : undefined}>
+            De {potinhosFaixaMaior} a {maxPotinhos} potinhos: <strong className="font-semibold">até {MAX_SABORES_FAIXA_MAIOR} sabores</strong>, a{" "}
+            <strong className="font-semibold">{brl(precos.muitosCentavos)}</strong> cada.
+          </li>
+        </ul>
         <ul className="@container flex flex-col gap-3" aria-describedby={`${uid}-contagem`}>
           {sabores.map((s) => {
             const qtd = quantidades[s.productId] ?? 0;
@@ -473,7 +506,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
                 <Contador
                   sabor={s.sabor}
                   valor={qtd}
-                  cheio={cheio}
+                  cheio={cheio || (qtd === 0 && saboresNoTeto)}
                   aoMudar={(v) => definirQuantidade(s.productId, v)}
                 />
               </li>
@@ -491,6 +524,7 @@ export function FormEncomenda({ config, hoje, nomeUsuario, enderecos, telefoneIn
           </div>
           <p id={`${uid}-contagem`} className="mt-2 text-sm font-semibold" role="status" aria-live="polite">
             {potinhos(total)}; mínimo {minPotinhos}, máximo {maxPotinhos}
+            {total > 0 && saboresOk ? ` · ${brl(precoCentavos)} cada` : ""}
           </p>
           {erroItens && <p className="mt-1 text-xs font-medium text-secundaria">{erroItens}</p>}
         </div>

@@ -67,8 +67,29 @@ export const palavraDoModo = (modo: ModoEntrega | undefined) =>
 
 // --- limites e prazos (decisões da dona, 2026-10-21) ----------------------------------------------
 
-export const MIN_POTINHOS = 20;
+/**
+ * Faixas da dona (2026-11-24): de 10 a 19 potinhos é UM sabor só, com o preço da faixa menor (painel,
+ * `precoPotinhoPoucos`, padrão R$ 7,00); de 20 a 50, até DOIS sabores, com o preço `precoPotinho` (padrão
+ * R$ 6,00). Antes eram 20 a 50 com sabores livres e preço único.
+ */
+export const MIN_POTINHOS = 10;
 export const MAX_POTINHOS = 50;
+/** A partir de quantos potinhos vale o preço menor e a escolha de 2 sabores. */
+export const POTINHOS_FAIXA_MAIOR = 20;
+export const MAX_SABORES_FAIXA_MENOR = 1;
+export const MAX_SABORES_FAIXA_MAIOR = 2;
+
+/** Quantos sabores diferentes cabem neste total de potinhos (1 abaixo de 20, 2 a partir de 20). */
+export const maxSaboresPara = (totalPotinhos: number): number =>
+  totalPotinhos >= POTINHOS_FAIXA_MAIOR ? MAX_SABORES_FAIXA_MAIOR : MAX_SABORES_FAIXA_MENOR;
+
+/** Os dois preços do painel, em centavos. */
+export type PrecosDoPotinho = { poucosCentavos: number; muitosCentavos: number };
+
+/** Preço de UM potinho (centavos) para este total: o da faixa menor abaixo de 20, o da maior a partir de 20. */
+export function precoDoPotinhoCentavos(totalPotinhos: number, precos: PrecosDoPotinho): number {
+  return totalPotinhos >= POTINHOS_FAIXA_MAIOR ? precos.muitosCentavos : precos.poucosCentavos;
+}
 /** Sabores diferentes numa encomenda (teto da validação de entrada). */
 export const MAX_SABORES = 20;
 /**
@@ -93,6 +114,16 @@ export const HORAS_PARA_PAGAR_ENTRADA = 24;
 
 /** Art. 49 do CDC: a cliente desiste até 7 dias depois de RECEBER (contados do dia em que a loja marcou a entrega). */
 export const DIAS_DESISTENCIA_APOS_RECEBER = 7;
+
+/**
+ * Política v3 (decisão da dona, 2026-11-24): a cliente desiste pelo site até 3 dias depois de a ENTRADA ser
+ * paga (até 23h59 do 3º dia, horário da loja) e recebe tudo o que pagou; depois disso não há desistência
+ * pelo site nem devolução. Antes de pagar a entrada, desiste quando quiser (nada foi cobrado).
+ */
+export const DIAS_DESISTENCIA_APOS_ENTRADA = 3;
+export const VERSAO_POLITICA_TRES_DIAS = "2026-11-v3";
+/** A v2 (art. 49 por inteiro): desiste antes de receber e até 7 dias depois, sempre com devolução de tudo. */
+export const VERSAO_POLITICA_ART49 = "2026-11-v2";
 
 /** Só a política v1 (antiga) retém parte da entrada na desistência; qualquer outra versão devolve tudo. */
 export const VERSAO_POLITICA_COM_RETENCAO = "2026-11-v1";
@@ -313,7 +344,14 @@ export function formatarPrazo(instante: Date): string {
 
 // --- potinhos e valores ---------------------------------------------------------------------------
 
-export type MotivoPotinhos = "abaixo-do-minimo" | "acima-do-maximo" | "quantidade-invalida" | "indisponivel";
+export type MotivoPotinhos = "abaixo-do-minimo" | "acima-do-maximo" | "quantidade-invalida" | "indisponivel" | "sabores-demais";
+
+/** A frase da regra dos sabores para este total (a mesma no 400 e na tela). */
+export function mensagemSaboresDemais(totalPotinhos: number): string {
+  return totalPotinhos >= POTINHOS_FAIXA_MAIOR
+    ? `Com ${POTINHOS_FAIXA_MAIOR} potinhos ou mais, escolha no máximo ${MAX_SABORES_FAIXA_MAIOR} sabores.`
+    : `De ${MIN_POTINHOS} a ${POTINHOS_FAIXA_MAIOR - 1} potinhos, é um sabor só. Com ${POTINHOS_FAIXA_MAIOR} ou mais, você pode escolher ${MAX_SABORES_FAIXA_MAIOR} sabores.`;
+}
 
 export type ResultadoPotinhos<I extends SaborNoKit> =
   | { ok: true; total: number; itens: I[] }
@@ -321,8 +359,9 @@ export type ResultadoPotinhos<I extends SaborNoKit> =
 
 /**
  * Junta o mesmo sabor repetido (a mesma regra dos kits) e confere: quantidades inteiras ≥ 1, todo
- * sabor disponível em mini (`saboresMini`: à venda E marcados "disponível em mini") e o total entre
- * 20 e 50 potinhos. A mensagem é a do 400 em `itens`: "Mínimo de 20 potinhos; você escolheu 12."
+ * sabor disponível em mini (`saboresMini`: à venda E marcados "disponível em mini"), o total entre
+ * 10 e 50 potinhos e os sabores da faixa (1 de 10 a 19; até 2 de 20 em diante, `maxSaboresPara`).
+ * A mensagem é a do 400 em `itens`: "Mínimo de 10 potinhos; você escolheu 8."
  */
 export function conferirPotinhos<I extends SaborNoKit>(itens: readonly I[], saboresMini: ReadonlySet<string>): ResultadoPotinhos<I> {
   if (itens.some((i) => !Number.isInteger(i.quantidade) || i.quantidade < 1)) {
@@ -345,6 +384,9 @@ export function conferirPotinhos<I extends SaborNoKit>(itens: readonly I[], sabo
   }
   if (total > MAX_POTINHOS) {
     return { ok: false, motivo: "acima-do-maximo", mensagem: `Máximo de ${MAX_POTINHOS} potinhos; você escolheu ${total}.`, total, indisponiveis };
+  }
+  if (normalizados.length > maxSaboresPara(total)) {
+    return { ok: false, motivo: "sabores-demais", mensagem: mensagemSaboresDemais(total), total, indisponiveis };
   }
   return { ok: true, total, itens: normalizados };
 }
@@ -397,17 +439,58 @@ export function fimDaDesistenciaAposReceber(entregueEm: Date): Date {
 export function desistenciaAposReceberAberta(e: { status: StatusEncomenda; politicaVersao: string; entregueEm: Date | null }, agora: Date): boolean {
   return (
     e.status === "ENTREGUE" &&
-    !retemEntradaNaDesistencia(e.politicaVersao) &&
+    e.politicaVersao === VERSAO_POLITICA_ART49 &&
     e.entregueEm !== null &&
     agora.getTime() < fimDaDesistenciaAposReceber(e.entregueEm).getTime()
   );
 }
 
+/** Política v3: fim da desistência, 23h59 do 3º dia (horário da loja) depois do dia em que a entrada foi paga. */
+export function fimDaDesistenciaAposEntrada(entradaPagaEm: Date): Date {
+  return inicioDoDia(somarDias(diaDaLoja(entradaPagaEm), DIAS_DESISTENCIA_APOS_ENTRADA + 1));
+}
+
+/**
+ * Política v3: a cliente ainda pode desistir pelo site? Antes da entrada paga (SOLICITADA, AGUARDANDO_ENTRADA),
+ * sempre; com a entrada paga (CONFIRMADA, EM_PRODUCAO, PRONTA), só até `fimDaDesistenciaAposEntrada`; entregue
+ * ou encerrada, nunca. `status` é o efetivo (`statusEfetivo`).
+ */
+export function desistenciaTresDiasAberta(e: { status: StatusEncomenda; entradaPagaEm: Date | null }, agora: Date): boolean {
+  if (e.status === "SOLICITADA" || e.status === "AGUARDANDO_ENTRADA") return true;
+  if (!statusConfirmado(e.status)) return false;
+  return e.entradaPagaEm !== null && agora.getTime() < fimDaDesistenciaAposEntrada(e.entradaPagaEm).getTime();
+}
+
+/**
+ * A cliente pode desistir pelo site agora, pela política que ELA aceitou? v3: `desistenciaTresDiasAberta`;
+ * v1 e v2: encomenda aberta, ou (v2) entregue há 7 dias ou menos.
+ */
+export function desistenciaDaClienteAberta(
+  e: { status: StatusEncomenda; politicaVersao: string; entradaPagaEm: Date | null; entregueEm: Date | null },
+  agora: Date,
+): boolean {
+  if (e.politicaVersao === VERSAO_POLITICA_TRES_DIAS) return desistenciaTresDiasAberta(e, agora);
+  return (STATUS_ABERTOS as readonly StatusEncomenda[]).includes(e.status) || desistenciaAposReceberAberta(e, agora);
+}
+
+/** Até quando a cliente desiste pelo site (só quando há um prazo a mostrar): v3 com a entrada paga, ou v2 já recebida. */
+export function prazoDaDesistencia(
+  e: { status: StatusEncomenda; politicaVersao: string; entradaPagaEm: Date | null; entregueEm: Date | null },
+  agora: Date,
+): Date | null {
+  if (e.politicaVersao === VERSAO_POLITICA_TRES_DIAS) {
+    return statusConfirmado(e.status) && e.entradaPagaEm && desistenciaTresDiasAberta(e, agora) ? fimDaDesistenciaAposEntrada(e.entradaPagaEm) : null;
+  }
+  return desistenciaAposReceberAberta(e, agora) && e.entregueEm ? fimDaDesistenciaAposReceber(e.entregueEm) : null;
+}
+
 /**
  * Quanto volta para a cliente se a encomenda for encerrada agora (centavos):
  * - a LOJA cancelou: devolve tudo o que foi pago;
- * - política v2 (e qualquer versão que não seja a v1): a CLIENTE desiste e recebe TUDO o que pagou,
- *   a qualquer momento, sem retenção nem taxa (art. 49 do CDC);
+ * - política v3: a CLIENTE desiste até 3 dias depois de pagar a entrada e recebe TUDO; depois disso nada volta
+ *   (a desistência pelo site fecha; se a loja cancelar a pedido dela, o mínimo é 0 e a dona decide);
+ * - política v2: a CLIENTE desiste e recebe TUDO o que pagou, a qualquer momento, sem retenção nem taxa
+ *   (art. 49 do CDC);
  * - v1, a CLIENTE desistiu antes do corte: tudo;
  * - v1, a CLIENTE desistiu do corte em diante: `percentualRetido`% da entrada fica com a loja (arredondado
  *   para baixo, a favor da cliente) e o resto volta, inclusive o restante já pago.
@@ -420,9 +503,15 @@ export function devolucaoNaDesistencia(entrada: {
   quem: "CLIENTE" | "LOJA";
   percentualRetido: number;
   politicaVersao: string;
+  /** Quando a entrada foi paga (a janela da v3 conta daqui). */
+  entradaPagaEm: Date | null;
 }): { devolucao: number; retido: number } {
   const { entradaPaga, restantePago } = entrada;
   const pago = entradaPaga + restantePago;
+  if (entrada.politicaVersao === VERSAO_POLITICA_TRES_DIAS) {
+    const dentroDoPrazo = entrada.entradaPagaEm === null || entrada.agora.getTime() < fimDaDesistenciaAposEntrada(entrada.entradaPagaEm).getTime();
+    return entrada.quem === "LOJA" || dentroDoPrazo ? { devolucao: pago, retido: 0 } : { devolucao: 0, retido: pago };
+  }
   if (!retemEntradaNaDesistencia(entrada.politicaVersao)) return { devolucao: pago, retido: 0 };
   if (entrada.quem === "LOJA" || entrada.agora.getTime() < entrada.corteEm.getTime()) return { devolucao: pago, retido: 0 };
   const percentual = Math.min(100, Math.max(0, Math.trunc(entrada.percentualRetido)));
@@ -624,7 +713,10 @@ export type AcoesDaCliente = {
   pagarRestante: boolean;
   /** Prévia da desistência agora (centavos), ou `null` se não dá para desistir. */
   desistir: { devolucao: number; retido: number } | null;
-  /** v2, já recebida: até quando a desistência pelo site vale (7 dias depois de receber); senão `null`. */
+  /**
+   * Até quando a desistência pelo site vale, quando há um prazo a mostrar (`prazoDaDesistencia`): v3 com a
+   * entrada paga (3 dias depois dela) ou v2 já recebida (7 dias depois de receber); senão `null`.
+   */
   desistirAte: Date | null;
   /**
    * Há pagamento em conferência (entrada ou restante): o POST de desistência responderia 409 "aguarde".
@@ -635,8 +727,8 @@ export type AcoesDaCliente = {
 
 export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCliente {
   const status = statusEfetivo(enc, agora);
-  const aberta = (STATUS_ABERTOS as readonly StatusEncomenda[]).includes(status);
-  const aposReceber = desistenciaAposReceberAberta({ status, politicaVersao: enc.politicaVersao, entregueEm: enc.entregueEm }, agora);
+  const paraDesistir = { status, politicaVersao: enc.politicaVersao, entradaPagaEm: enc.entradaPagaEm, entregueEm: enc.entregueEm };
+  const podeDesistir = desistenciaDaClienteAberta(paraDesistir, agora);
   return {
     // Só quando o POST abriria o link: com menos de 5 min até o prazo da entrada (validadeDoLink), ou com
     // pagamento em conferência, o POST responde 409 e o botão não aparece.
@@ -646,12 +738,19 @@ export function acoesDaCliente(enc: EncomendaParaRegras, agora: Date): AcoesDaCl
       validadeDoLink(agora, enc.entradaAte) !== null &&
       !enc.entradaEmConfirmacao,
     pagarRestante: statusConfirmado(status) && enc.restantePagoEm === null && !enc.restanteEmConfirmacao,
-    desistir:
-      aberta || aposReceber
-        ? devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pagoEmCentavos(enc), quem: "CLIENTE", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao })
-        : null,
-    desistirAte: aposReceber && enc.entregueEm ? fimDaDesistenciaAposReceber(enc.entregueEm) : null,
-    desistirBloqueado: (aberta || aposReceber) && Boolean(enc.entradaEmConfirmacao || enc.restanteEmConfirmacao),
+    desistir: podeDesistir
+      ? devolucaoNaDesistencia({
+          agora,
+          corteEm: enc.corteEm,
+          ...pagoEmCentavos(enc),
+          quem: "CLIENTE",
+          percentualRetido: enc.percentualRetido,
+          politicaVersao: enc.politicaVersao,
+          entradaPagaEm: enc.entradaPagaEm,
+        })
+      : null,
+    desistirAte: prazoDaDesistencia(paraDesistir, agora),
+    desistirBloqueado: podeDesistir && Boolean(enc.entradaEmConfirmacao || enc.restanteEmConfirmacao),
   };
 }
 
@@ -809,8 +908,8 @@ export function valoresDoCancelamento(enc: EncomendaParaRegras, agora: Date) {
   const totalPago = pago.entradaPaga + pago.restantePago;
   return {
     totalPago,
-    pelaLoja: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "LOJA", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao }),
-    aPedidoDaCliente: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "CLIENTE", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao }),
+    pelaLoja: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "LOJA", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao, entradaPagaEm: enc.entradaPagaEm }),
+    aPedidoDaCliente: devolucaoNaDesistencia({ agora, corteEm: enc.corteEm, ...pago, quem: "CLIENTE", percentualRetido: enc.percentualRetido, politicaVersao: enc.politicaVersao, entradaPagaEm: enc.entradaPagaEm }),
   };
 }
 
@@ -904,11 +1003,16 @@ export function acoesDaLoja(enc: EncomendaParaRegras & { devolucaoPendente: bool
     case "CONFIRMADA":
       lista.push(
         acao("iniciar-producao", "Iniciar produção", {
-          aviso: retemEntradaNaDesistencia(enc.politicaVersao)
-            ? antesDoCorte
-              ? `A cliente ainda pode desistir com devolução integral até ${formatarPrazo(enc.corteEm)}.`
-              : null
-            : "Lembre: pelo art. 49 do CDC a cliente pode desistir a qualquer momento, até 7 dias depois de receber, e você devolve tudo o que ela pagou.",
+          aviso:
+            enc.politicaVersao === VERSAO_POLITICA_TRES_DIAS
+              ? enc.entradaPagaEm && agora.getTime() < fimDaDesistenciaAposEntrada(enc.entradaPagaEm).getTime()
+                ? `A cliente ainda pode desistir pelo site, com devolução de tudo o que pagou, até ${formatarPrazo(fimDaDesistenciaAposEntrada(enc.entradaPagaEm))}.`
+                : null
+              : retemEntradaNaDesistencia(enc.politicaVersao)
+                ? antesDoCorte
+                  ? `A cliente ainda pode desistir com devolução integral até ${formatarPrazo(enc.corteEm)}.`
+                  : null
+                : "Lembre: pelo art. 49 do CDC a cliente pode desistir a qualquer momento, até 7 dias depois de receber, e você devolve tudo o que ela pagou.",
         }),
         acao("marcar-pronta", "Marcar como pronta"),
         ...restante(),
@@ -1145,14 +1249,20 @@ const numeroDoCampo = <T extends z.ZodType>(schema: T) =>
   z.preprocess((v) => (typeof v === "string" && v.trim() !== "" ? Number(v.trim()) : v), schema);
 
 /** PATCH /api/admin/lembrancinhas: edição completa (o preço viaja em centavos inteiros). */
-export const configLembrancinhasSchema = z.object({
-  precoPotinhoCentavos: numeroDoCampo(
+const precoDoCampo = (falta: string) =>
+  numeroDoCampo(
     z
-      .number("Informe o preço do potinho.")
+      .number(falta)
       .int("Preço inválido.")
-      .min(1, "Informe o preço do potinho.")
+      .min(1, falta)
       .max(MAX_PRECO_UNITARIO_CENTAVOS, `Preço máximo: ${formatarBRL(MAX_PRECO_UNITARIO_CENTAVOS / 100)}.`),
-  ),
+  );
+
+export const configLembrancinhasSchema = z.object({
+  /** Preço de cada potinho de 20 potinhos em diante. */
+  precoPotinhoCentavos: precoDoCampo(`Informe o preço do potinho a partir de ${POTINHOS_FAIXA_MAIOR}.`),
+  /** Preço de cada potinho de 10 a 19 potinhos. */
+  precoPotinhoPoucosCentavos: precoDoCampo(`Informe o preço do potinho de ${MIN_POTINHOS} a ${POTINHOS_FAIXA_MAIOR - 1}.`),
   pesoPotinhoGramas: numeroDoCampo(
     z.number("Informe o peso do potinho cheio.").int("Peso em gramas inteiros.").min(1, "Informe o peso.").max(1000, "Peso máximo: 1000 g."),
   ),

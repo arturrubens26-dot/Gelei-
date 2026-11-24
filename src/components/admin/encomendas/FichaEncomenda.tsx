@@ -10,7 +10,7 @@ import { SeloDaEncomenda } from "@/components/lembrancinhas/SeloDaEncomenda";
 import { rotuloDoPrecoAdicional } from "@/lib/adicionais-regras";
 import { formatarBRL, lerValorEmCentavos, valorParaCampo } from "@/lib/dinheiro";
 import type { DevolucaoDaEncomendaDTO, EncomendaAdminDetalheDTO, PagamentoDaEncomendaDTO } from "@/lib/encomendas-admin";
-import { DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, fimDaDesistenciaAposReceber, formatarPrazo, marcadasQueSeguemPendentes, prazoDaEntrada, retemEntradaNaDesistencia, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
+import { DIAS_DESISTENCIA_APOS_ENTRADA, DIAS_DESISTENCIA_APOS_RECEBER, HORAS_PARA_PAGAR_ENTRADA, VERSAO_POLITICA_TRES_DIAS, fimDaDesistenciaAposEntrada, ROTULO_STATUS_ENCOMENDA, TAMANHO_MAX_TEXTO, TAMANHO_MIN_MOTIVO, fimDaDesistenciaAposReceber, formatarPrazo, marcadasQueSeguemPendentes, prazoDaEntrada, retemEntradaNaDesistencia, type AcaoAdmin, type AcaoDaLoja } from "@/lib/encomendas-regras";
 import { enderecoDeRetirada } from "@/lib/entrega-regras";
 import { formatarDataHora } from "@/lib/formatacao";
 import { FORMAS_PAGAMENTO, ROTULO_FORMA_PAGAMENTO, type FormaPagamento } from "@/lib/vendas";
@@ -144,7 +144,9 @@ export function FichaEncomenda({ id }: { id: string }) {
     }
     const perguntas: Partial<Record<AcaoAdmin, string>> = {
       aprovar: `Aprovar a encomenda ${e.codigo}? A cliente terá até ${formatarPrazo(prazoDaEntrada(new Date(), new Date(e.prazos.corteEm)))} para pagar a entrada de ${formatarBRL(e.entrada)}.`,
-      "marcar-entregue": `Confirmar que a encomenda ${e.codigo} foi ${e.modoEntrega === "RETIRADA" ? "retirada" : "entregue"}?\n\nMarque no dia em que a cliente de fato receber: a partir desta data ela tem 7 dias para desistir da compra.`,
+      "marcar-entregue": `Confirmar que a encomenda ${e.codigo} foi ${e.modoEntrega === "RETIRADA" ? "retirada" : "entregue"}?${
+        e.politica.versao === VERSAO_POLITICA_TRES_DIAS ? "" : "\n\nMarque no dia em que a cliente de fato receber: a partir desta data ela tem 7 dias para desistir da compra."
+      }`,
       "iniciar-producao": a.aviso ? `${a.aviso} Iniciar a produção mesmo assim?` : undefined,
     };
     const pergunta = perguntas[a.acao];
@@ -429,7 +431,16 @@ export function FichaEncomenda({ id }: { id: string }) {
           <dd>{prazo(e.prazos.responderAte)}</dd>
           <dt className="font-semibold">Entrada até</dt>
           <dd>{e.prazos.entradaAte ? prazo(e.prazos.entradaAte) : `depois da aprovação (${HORAS_PARA_PAGAR_ENTRADA} horas, ou até o corte de produção, 3 dias antes da entrega, o que vier antes)`}</dd>
-          {retemEntradaNaDesistencia(e.politica.versao) ? (
+          {e.politica.versao === VERSAO_POLITICA_TRES_DIAS ? (
+            <>
+              <dt className="font-semibold">Desistência</dt>
+              <dd>
+                {e.entradaPagaEm
+                  ? `até ${prazo(fimDaDesistenciaAposEntrada(new Date(e.entradaPagaEm)).toISOString())} (${DIAS_DESISTENCIA_APOS_ENTRADA} dias depois da entrada paga), com devolução de tudo o que ela pagou; depois disso, sem devolução`
+                  : `a qualquer momento antes de pagar a entrada; depois, até ${DIAS_DESISTENCIA_APOS_ENTRADA} dias, com devolução de tudo`}
+              </dd>
+            </>
+          ) : retemEntradaNaDesistencia(e.politica.versao) ? (
             <>
               <dt className="font-semibold">Desistência com devolução integral</dt>
               <dd>

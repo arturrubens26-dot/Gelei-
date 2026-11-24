@@ -822,7 +822,7 @@ async function main() {
     const finAntes = (await admin.req("GET", `/api/admin/financial-stats?mes=${mesAgora}`)).json;
     const despAntes = (await admin.req("GET", `/api/admin/expenses?mes=${mesAgora}`)).json;
     // Cria a encomenda direto no banco (o POST do site fica fechado sem CNPJ/CPF e e-mail da loja). `o`:
-    // usuario (padrão: a conta "a"), entradaAte, corteEm, percentualAceito, percentualRetido, restantePagoEm,
+    // usuario (padrão: a conta "a"), entradaAte, entradaPagaEm (CONFIRMADA em diante; padrão agora), corteEm, percentualAceito, percentualRetido, restantePagoEm,
     // politica (padrão "2026-11-v1", a antiga que retém; "2026-11-v2" = art. 49, sem retenção, percentuais 0) e entregueEm.
     // CONFIRMADA em diante já nasce com a entrada paga (a CHECK exige).
     // As colunas de data são TIMESTAMP sem fuso: o pg manda um Date na hora LOCAL deste computador (−03:00) e o banco
@@ -851,7 +851,7 @@ async function main() {
           utc(o.corteEm ?? new Date(Date.now() + 7 * 86_400_000)),
           aceito,
           o.percentualRetido ?? aceito,
-          confirmada ? utc(new Date()) : null,
+          confirmada ? utc(o.entradaPagaEm ?? new Date()) : null,
           utc(o.restantePagoEm),
           o.restantePagoEm ? "PIX" : null,
           politica,
@@ -1041,7 +1041,7 @@ async function main() {
           modoEntrega: "RETIRADA",
           telefone: "(86) 99999-1234",
           aceitePolitica: true,
-          politicaVersao: "2026-11-v2",
+          politicaVersao: "2026-11-v3",
           percentualRetido: 0,
           totalEsperadoCentavos: 20 * cfgAntes.precoPotinhoCentavos,
         };
@@ -1068,8 +1068,16 @@ async function main() {
           "festa com 9 dias de antecedência → 400 (mínimo 10)",
           cedoDemais.json,
         );
-        const poucos = await cria({ itens: [{ productId: produto, quantidade: 19 }] }, {}, `${chave}-p`);
-        confere(poucos.status === 400 && poucos.json?.detalhes?.itens, "19 potinhos → 400 em itens", poucos.json);
+        const poucos = await cria({ itens: [{ productId: produto, quantidade: 9 }] }, {}, `${chave}-p`);
+        confere(poucos.status === 400 && poucos.json?.detalhes?.itens, "9 potinhos → 400 em itens (mínimo 10)", poucos.json);
+        // 10 a 19 potinhos usam o preço da faixa menor: com o total da faixa maior, 409 com o preço certo.
+        const dez = await cria({ itens: [{ productId: produto, quantidade: 10 }], totalEsperadoCentavos: 10 * cfgAntes.precoPotinhoCentavos }, {}, `${chave}-10`);
+        confere(
+          cfgAntes.precoPotinhoPoucosCentavos === cfgAntes.precoPotinhoCentavos ||
+            (dez.status === 409 && dez.json?.detalhes?.precoPotinho === cfgAntes.precoPotinhoPoucosCentavos / 100 && dez.json?.detalhes?.total === (10 * cfgAntes.precoPotinhoPoucosCentavos) / 100),
+          "10 potinhos: o servidor cobra o preço da faixa de 10 a 19",
+          [cfgAntes.precoPotinhoPoucosCentavos, dez.status, dez.json],
+        );
         const criada = await cria({});
         const encCriada = criada.json?.encomenda;
         if (encCriada?.id) encomendas.push(encCriada.id);
@@ -1564,7 +1572,7 @@ async function main() {
       modoEntrega: "RETIRADA",
       telefone: "(86) 99999-1234",
       aceitePolitica: true,
-      politicaVersao: "2026-11-v2",
+      politicaVersao: "2026-11-v3",
       percentualRetido: 0,
       totalEsperadoCentavos: 20 * cfg30.precoPotinhoCentavos,
     });
@@ -1636,7 +1644,7 @@ async function main() {
       }
     }
     // Política v2 (art. 49): o painel não tem mais percentual; um percentualRetido enviado no PATCH é ignorado.
-    const corpoCfg = (p) => ({ ativo: cfg30.ativo, precoPotinhoCentavos: cfg30.precoPotinhoCentavos, pesoPotinhoGramas: cfg30.pesoPotinhoGramas, pesoEmbalagemGramas: cfg30.pesoEmbalagemGramas, percentualRetido: p });
+    const corpoCfg = (p) => ({ ativo: cfg30.ativo, precoPotinhoCentavos: cfg30.precoPotinhoCentavos, precoPotinhoPoucosCentavos: cfg30.precoPotinhoPoucosCentavos, pesoPotinhoGramas: cfg30.pesoPotinhoGramas, pesoEmbalagemGramas: cfg30.pesoEmbalagemGramas, percentualRetido: p });
     const patchPct = await admin.req("PATCH", "/api/admin/lembrancinhas", { corpo: corpoCfg(50) });
     const [{ p: pctBanco }] = await sql("select percentual_retido p from config_lembrancinhas limit 1");
     confere(patchPct.status === 200 && patchPct.json?.config?.percentualRetido === 0 && Number(pctBanco) === 0, "PATCH com percentualRetido=50 é ignorado: a config segue em 0", [patchPct.status, patchPct.json?.config?.percentualRetido, pctBanco]);
@@ -1655,6 +1663,15 @@ async function main() {
     const encPV1 = await novaEncomenda("pv30", "CONFIRMADA", { usuario: uid30, percentualAceito: 100, percentualRetido: 50, corteEm: new Date(Date.now() - 3_600_000) });
     const dtoPV1 = await dtoEnc(conta30, encPV1);
     confere(dtoPV1?.acoes.desistir?.devolucaoCentavos === 2250 && dtoPV1.acoes.desistir.retidoCentavos === 2250, "v1 (antiga), depois do corte: segue retendo o percentual efetivo (50% de 45 = 22,50)", dtoPV1?.acoes.desistir);
+    // Política v3 (atual): até 3 dias depois de pagar a entrada devolve tudo; depois, o site não deixa desistir.
+    const encV3 = await novaEncomenda("v3a", "CONFIRMADA", { usuario: uid30, politica: "2026-11-v3", entradaPagaEm: new Date(Date.now() - 3_600_000) });
+    const dtoV3 = await dtoEnc(conta30, encV3);
+    confere(dtoV3?.acoes.desistir?.devolucaoCentavos === 4500 && dtoV3.acoes.desistir.retidoCentavos === 0 && dtoV3.acoes.desistirAte, "v3, entrada paga há 1 hora: desiste com devolução dos 45 e mostra o prazo", dtoV3?.acoes);
+    const encV3b = await novaEncomenda("v3b", "CONFIRMADA", { usuario: uid30, politica: "2026-11-v3", entradaPagaEm: new Date(Date.now() - 5 * 86_400_000) });
+    const dtoV3b = await dtoEnc(conta30, encV3b);
+    confere(dtoV3b?.acoes.desistir === null && dtoV3b.acoes.desistirAte === null, "v3, entrada paga há 5 dias: não dá mais para desistir pelo site", dtoV3b?.acoes);
+    const desisteV3b = await conta30.req("POST", `/api/encomendas/${encV3b}/desistir`, { corpo: { devolucaoEsperadaCentavos: 0 } });
+    confere(desisteV3b.status === 409 && /prazo para desistir/.test(desisteV3b.json?.erro ?? ""), "v3 fora do prazo: POST desistir → 409", desisteV3b.json);
 
     console.log("31. Segurança do PATCH da ficha: cliente, sem sessão e requisição de outro site");
     const enc31 = await novaEncomenda("s31", "SOLICITADA");
